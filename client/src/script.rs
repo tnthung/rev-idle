@@ -45,6 +45,7 @@ struct ScriptSession {
     // before their context and runtime.
     script: Persistent<Function<'static>>,
     memory: Persistent<Object<'static>>,
+    freeze: Persistent<Function<'static>>,
     context: AsyncContext,
     _runtime: AsyncRuntime,
 }
@@ -55,14 +56,16 @@ impl ScriptSession {
         let context = AsyncContext::full(&runtime).await?;
         let source = source.to_owned();
 
-        let (script, memory) = context
+        let (script, memory, freeze) = context
             .async_with(async move |ctx| {
+                let freeze: Function = ctx.eval("Object.freeze")?;
                 let script: Function = ctx.eval(source)?;
                 let memory = Object::new(ctx.clone())?;
 
                 Ok::<_, rquickjs::Error>((
                     Persistent::save(&ctx, script),
                     Persistent::save(&ctx, memory),
+                    Persistent::save(&ctx, freeze),
                 ))
             })
             .await?;
@@ -70,6 +73,7 @@ impl ScriptSession {
         Ok(Self {
             script,
             memory,
+            freeze,
             context,
             _runtime: runtime,
         })
@@ -82,11 +86,13 @@ impl ScriptSession {
     ) -> rquickjs::Result<()> {
         let script = self.script.clone();
         let memory = self.memory.clone();
+        let freeze = self.freeze.clone();
 
         self.context
             .async_with(async move |ctx| {
                 let script: Function = script.restore(&ctx)?;
                 let memory: Object = memory.restore(&ctx)?;
+                let freeze: Function = freeze.restore(&ctx)?;
 
                 let state_object = Object::new(ctx.clone())?;
                 match state.score {
@@ -110,7 +116,7 @@ impl ScriptSession {
                     "click",
                     Function::new(
                         ctx.clone(),
-                        move |x: f64, y: f64, button: Opt<String>| {
+                        move |x: f64, y: f64, button: Opt<Value>| {
                             if !x.is_finite()
                                 || x.fract() != 0.0
                                 || x < i32::MIN as f64
@@ -127,16 +133,27 @@ impl ScriptSession {
                                 ));
                             }
 
-                            let button = match button.0.as_deref().unwrap_or("left") {
-                                "left" => Button::Left,
-                                "right" => Button::Right,
-                                "middle" => Button::Middle,
-                                value => {
-                                    return Err(Error::new_from_js_message(
-                                        "string",
-                                        "mouse button",
-                                        format!("unsupported button: {value}"),
-                                    ));
+                            let button = match button.0 {
+                                None => Button::Left,
+                                Some(value) if value.is_undefined() => Button::Left,
+                                Some(value) => {
+                                    let type_name = value.type_name();
+                                    let Some(value) = value.as_string() else {
+                                        return Err(Error::new_from_js(type_name, "mouse button"));
+                                    };
+                                    let value = value.to_string()?;
+                                    match value.as_str() {
+                                        "left" => Button::Left,
+                                        "right" => Button::Right,
+                                        "middle" => Button::Middle,
+                                        value => {
+                                            return Err(Error::new_from_js_message(
+                                                "string",
+                                                "mouse button",
+                                                format!("unsupported button: {value}"),
+                                            ));
+                                        }
+                                    }
                                 }
                             };
 
@@ -180,7 +197,6 @@ impl ScriptSession {
                     )?,
                 )?;
 
-                let freeze: Function = ctx.eval("Object.freeze")?;
                 let _: Object = freeze.call((state_object.clone(),))?;
                 let _: Object = freeze.call((rev.clone(),))?;
 
@@ -429,6 +445,62 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn source_replacing_freeze_still_receives_frozen_host_objects() {
+        let session = ScriptSession::new(
+            r#"
+                (() => {
+                    Object.freeze = (value) => value;
+                    return ((rev, memory) => {
+                        if (!Object.isFrozen(rev) || !Object.isFrozen(rev.state)) {
+                            throw new Error("rev and state must be frozen");
+                        }
+                        memory.calls = (memory.calls ?? 0) + 1;
+                    });
+                })()
+            "#,
+        )
+        .await
+        .unwrap();
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: Rc::new(RefCell::new(Vec::new())),
+        }));
+
+        session
+            .invoke(State::default(), mouse.clone())
+            .await
+            .unwrap();
+        session.invoke(State::default(), mouse).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invocation_replacing_freeze_does_not_affect_later_host_objects() {
+        let session = ScriptSession::new(
+            r#"
+                ((rev, memory) => {
+                    if (!Object.isFrozen(rev) || !Object.isFrozen(rev.state)) {
+                        throw new Error("rev and state must be frozen");
+                    }
+                    memory.calls = (memory.calls ?? 0) + 1;
+                    if (memory.calls === 1) {
+                        Object.freeze = (value) => value;
+                    }
+                })
+            "#,
+        )
+        .await
+        .unwrap();
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: Rc::new(RefCell::new(Vec::new())),
+        }));
+
+        session
+            .invoke(State::default(), mouse.clone())
+            .await
+            .unwrap();
+        session.invoke(State::default(), mouse).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn invocation_error_does_not_reset_memory() {
         let session = ScriptSession::new(
             r#"
@@ -520,6 +592,72 @@ mod tests {
         }
 
         assert!(clicks.borrow().is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn click_button_defaults_accepts_valid_and_rejects_invalid_values() {
+        let session = ScriptSession::new(
+            r#"
+                ((rev) => {
+                    for (const button of [null, "side", true, 1, {}, []]) {
+                        let threw = false;
+                        try {
+                            rev.click(100, 200, button);
+                        } catch (_) {
+                            threw = true;
+                        }
+                        if (!threw) {
+                            throw new Error("invalid button must throw");
+                        }
+                    }
+
+                    rev.click(1, 11);
+                    rev.click(2, 12, undefined);
+                    rev.click(3, 13, "left");
+                    rev.click(4, 14, "right");
+                    rev.click(5, 15, "middle");
+                })
+            "#,
+        )
+        .await
+        .unwrap();
+        let clicks = Rc::new(RefCell::new(Vec::new()));
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: clicks.clone(),
+        }));
+
+        session.invoke(State::default(), mouse).await.unwrap();
+
+        assert_eq!(
+            clicks.borrow().as_slice(),
+            &[
+                Click {
+                    x: 1,
+                    y: 11,
+                    button: Button::Left,
+                },
+                Click {
+                    x: 2,
+                    y: 12,
+                    button: Button::Left,
+                },
+                Click {
+                    x: 3,
+                    y: 13,
+                    button: Button::Left,
+                },
+                Click {
+                    x: 4,
+                    y: 14,
+                    button: Button::Right,
+                },
+                Click {
+                    x: 5,
+                    y: 15,
+                    button: Button::Middle,
+                },
+            ]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
