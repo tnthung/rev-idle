@@ -4,7 +4,11 @@ mod script;
 mod udp;
 pub mod hotkey;
 
-use std::{io, path::PathBuf};
+use std::{
+    io,
+    path::PathBuf,
+    sync::{atomic::AtomicBool, Arc},
+};
 use tokio::{
     sync::{mpsc, watch},
     task::LocalSet,
@@ -17,7 +21,10 @@ async fn main() -> io::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("script.js"));
     let (state_tx, state_rx) = watch::channel(udp::State::default());
+    let actions_paused = Arc::new(AtomicBool::new(false));
     let (command_tx, command_rx) = mpsc::channel(32);
+    let hotkey = hotkey::HotkeyWorker::start(actions_paused.clone(), command_tx.clone())
+        .map_err(io::Error::other)?;
     let local = LocalSet::new();
 
     local
@@ -29,6 +36,7 @@ async fn main() -> io::Result<()> {
                 command_rx,
                 state_rx,
                 initial_path,
+                actions_paused,
             ));
 
             let result = tokio::select! {
@@ -51,7 +59,15 @@ async fn main() -> io::Result<()> {
             udp_task.abort();
             console_task.abort();
             script_task.abort();
-            result
+            let shutdown = hotkey.shutdown().map_err(io::Error::other);
+            match (result, shutdown) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), Ok(())) => Err(error),
+                (Ok(()), Err(error)) => Err(error),
+                (Err(error), Err(shutdown_error)) => Err(io::Error::other(
+                    format!("{error}; hotkey shutdown failed: {shutdown_error}"),
+                )),
+            }
         })
         .await
 }

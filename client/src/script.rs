@@ -257,6 +257,7 @@ pub async fn run(
     commands: mpsc::Receiver<ScriptCommand>,
     states: watch::Receiver<State>,
     initial_path: std::path::PathBuf,
+    actions_paused: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mouse: SharedMouse = Rc::new(RefCell::new(
         Enigo::new(&enigo::Settings::default())
@@ -267,7 +268,7 @@ pub async fn run(
         commands,
         states,
         initial_path,
-        HostControls { mouse, window: Rc::new(Win32WindowControl), actions_paused: Arc::new(AtomicBool::new(false)) },
+        HostControls { mouse, window: Rc::new(Win32WindowControl), actions_paused },
         Duration::from_millis(50),
     )
     .await
