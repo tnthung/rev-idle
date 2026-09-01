@@ -46,40 +46,112 @@ function Assert-ArchiveHash {
     }
 }
 
+function Assert-NoReparsePointPath {
+    param([string]$Path)
+
+    $currentPath = [System.IO.Path]::GetFullPath($Path)
+    while (-not (Test-Path -LiteralPath $currentPath)) {
+        $parentPath = Split-Path -Parent $currentPath
+        if ([string]::IsNullOrEmpty($parentPath) -or $parentPath -eq $currentPath) {
+            break
+        }
+        $currentPath = $parentPath
+    }
+
+    while (-not [string]::IsNullOrEmpty($currentPath)) {
+        $item = Get-Item -LiteralPath $currentPath -Force
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Refusing to write through a reparse point: $($item.FullName)"
+        }
+        $parentPath = Split-Path -Parent $currentPath
+        if ([string]::IsNullOrEmpty($parentPath) -or $parentPath -eq $currentPath) {
+            break
+        }
+        $currentPath = $parentPath
+    }
+}
+
 function Expand-SafeZipArchive {
     param([string]$ArchivePath, [string]$DestinationPath)
 
     Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
+    $destinationRoot = [System.IO.Path]::GetFullPath($DestinationPath).TrimEnd('\')
+    $destinationPrefix = $destinationRoot + '\'
+    Assert-NoReparsePointPath $destinationRoot
+    $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("rev-idle-zip-stage-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stagingRoot | Out-Null
 
-    $destinationRoot = [System.IO.Path]::GetFullPath($DestinationPath).TrimEnd('\') + '\'
-    $archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
     try {
-        $targets = @()
-        foreach ($entry in $archive.Entries) {
-            $relativePath = $entry.FullName.Replace('/', '\')
-            $targetPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($destinationRoot, $relativePath))
-            if (-not $targetPath.StartsWith($destinationRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-                throw "Unsafe ZIP entry: $($entry.FullName)"
+        $stagingPrefix = [System.IO.Path]::GetFullPath($stagingRoot).TrimEnd('\') + '\'
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($ArchivePath)
+        try {
+            foreach ($entry in $archive.Entries) {
+                $relativePath = $entry.FullName.Replace('/', '\')
+                $stagedPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($stagingPrefix, $relativePath))
+                if (-not $stagedPath.StartsWith($stagingPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    throw "Unsafe ZIP entry: $($entry.FullName)"
+                }
+                if ($entry.FullName.EndsWith('/')) {
+                    New-Item -ItemType Directory -Path $stagedPath -Force | Out-Null
+                    continue
+                }
+                $stagedParent = Split-Path -Parent $stagedPath
+                New-Item -ItemType Directory -Path $stagedParent -Force | Out-Null
+                [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $stagedPath, $false)
             }
-            if (-not $entry.FullName.EndsWith('/') -and (Test-Path -LiteralPath $targetPath)) {
+        } finally {
+            $archive.Dispose()
+        }
+
+        $targets = @()
+        foreach ($stagedFile in Get-ChildItem -LiteralPath $stagingRoot -File -Recurse) {
+            $relativePath = $stagedFile.FullName.Substring($stagingPrefix.Length)
+            $targetPath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($destinationPrefix, $relativePath))
+            if (-not $targetPath.StartsWith($destinationPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Unsafe staged path: $relativePath"
+            }
+            Assert-NoReparsePointPath $targetPath
+            if (Test-Path -LiteralPath $targetPath) {
                 throw "Refusing to overwrite an existing file while installing BepInEx: $targetPath"
             }
-            $targets += [pscustomobject]@{ Entry = $entry; Path = $targetPath }
+            $targets += [pscustomobject]@{ Source = $stagedFile.FullName; Path = $targetPath }
         }
 
-        foreach ($target in $targets) {
-            if ($target.Entry.FullName.EndsWith('/')) {
-                New-Item -ItemType Directory -Path $target.Path -Force | Out-Null
-                continue
+        $createdFiles = [System.Collections.Generic.List[string]]::new()
+        $createdDirectories = [System.Collections.Generic.List[string]]::new()
+        try {
+            foreach ($target in $targets) {
+                Assert-NoReparsePointPath $target.Path
+                $parent = Split-Path -Parent $target.Path
+                $missingDirectories = @()
+                $currentDirectory = $parent
+                while (-not (Test-Path -LiteralPath $currentDirectory)) {
+                    $missingDirectories += $currentDirectory
+                    $currentDirectory = Split-Path -Parent $currentDirectory
+                }
+                [array]::Reverse($missingDirectories)
+                foreach ($directory in $missingDirectories) {
+                    New-Item -ItemType Directory -Path $directory | Out-Null
+                    $createdDirectories.Add($directory)
+                }
+
+                [System.IO.File]::Copy($target.Source, $target.Path, $false)
+                $createdFiles.Add($target.Path)
             }
-            $parent = Split-Path -Parent $target.Path
-            New-Item -ItemType Directory -Path $parent -Force | Out-Null
-            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($target.Entry, $target.Path, $false)
+        } catch {
+            for ($index = $createdFiles.Count - 1; $index -ge 0; $index--) {
+                Remove-Item -LiteralPath $createdFiles[$index] -Force -ErrorAction SilentlyContinue
+            }
+            for ($index = $createdDirectories.Count - 1; $index -ge 0; $index--) {
+                Remove-Item -LiteralPath $createdDirectories[$index] -Force -ErrorAction SilentlyContinue
+            }
+            throw
         }
     } finally {
-        $archive.Dispose()
+        if (Test-Path -LiteralPath $stagingRoot) {
+            Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+        }
     }
 }
 
@@ -170,6 +242,67 @@ function Invoke-CheckedProcess {
     }
 }
 
+function Install-VerifiedFile {
+    param([string]$SourcePath, [string]$DestinationPath, [string]$ExpectedSha256)
+
+    if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
+        throw "Source file is missing: $SourcePath"
+    }
+
+    $destinationDirectory = Split-Path -Parent $DestinationPath
+    Assert-NoReparsePointPath $destinationDirectory
+    New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+    Assert-NoReparsePointPath $DestinationPath
+
+    $destinationName = [System.IO.Path]::GetFileName($DestinationPath)
+    $operationId = [guid]::NewGuid().ToString("N")
+    $stagedPath = Join-Path $destinationDirectory "$destinationName.$operationId.tmp"
+    $backupPath = Join-Path $destinationDirectory "$destinationName.$operationId.backup"
+    $hadExistingFile = Test-Path -LiteralPath $DestinationPath -PathType Leaf
+    $committed = $false
+
+    try {
+        Copy-Item -LiteralPath $SourcePath -Destination $stagedPath
+        $stagedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $stagedPath).Hash
+        if (-not $stagedHash.Equals($ExpectedSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Staged file SHA-256 mismatch. Expected $ExpectedSha256, got $stagedHash."
+        }
+
+        Assert-NoReparsePointPath $DestinationPath
+        if ($hadExistingFile) {
+            [System.IO.File]::Replace($stagedPath, $DestinationPath, $backupPath, $true)
+        } else {
+            [System.IO.File]::Move($stagedPath, $DestinationPath)
+        }
+        $committed = $true
+
+        $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $DestinationPath).Hash
+        if (-not $installedHash.Equals($ExpectedSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Installed file SHA-256 mismatch. Expected $ExpectedSha256, got $installedHash."
+        }
+
+        if (Test-Path -LiteralPath $backupPath) {
+            Remove-Item -LiteralPath $backupPath -Force
+        }
+    } catch {
+        if ($committed) {
+            if ($hadExistingFile -and (Test-Path -LiteralPath $backupPath -PathType Leaf)) {
+                [System.IO.File]::Replace($backupPath, $DestinationPath, $null, $true)
+            } elseif (-not $hadExistingFile -and (Test-Path -LiteralPath $DestinationPath -PathType Leaf)) {
+                Remove-Item -LiteralPath $DestinationPath -Force
+            }
+        }
+        throw
+    } finally {
+        if (Test-Path -LiteralPath $stagedPath) {
+            Remove-Item -LiteralPath $stagedPath -Force
+        }
+        if (Test-Path -LiteralPath $backupPath) {
+            Remove-Item -LiteralPath $backupPath -Force
+        }
+    }
+}
+
 function Install-PluginDll {
     param([string]$SourceDll, [string]$GameDirectory)
 
@@ -179,14 +312,8 @@ function Install-PluginDll {
 
     $pluginDirectory = Join-Path $GameDirectory "BepInEx\plugins\RevIdle.ScoreTelemetry"
     $installedDll = Join-Path $pluginDirectory "RevIdle.ScoreTelemetry.dll"
-    New-Item -ItemType Directory -Path $pluginDirectory -Force | Out-Null
-    Copy-Item -LiteralPath $SourceDll -Destination $installedDll -Force
-
     $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SourceDll).Hash
-    $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installedDll).Hash
-    if ($sourceHash -ne $installedHash) {
-        throw "Installed plugin DLL hash does not match the built artifact."
-    }
+    Install-VerifiedFile $SourceDll $installedDll $sourceHash
 
     return $installedDll
 }
@@ -199,6 +326,10 @@ function Invoke-ScoreTelemetryInstall {
     }
     $gameDirectory = Resolve-GameDirectory $RequestedInstallationFolder
 
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+        throw "The .NET SDK is required. Install .NET SDK 9 and retry."
+    }
+
     switch (Get-BepInExState $gameDirectory) {
         "Missing" { Install-BepInEx $gameDirectory }
         "Partial" { throw "A partial BepInEx installation was found. Repair or remove it before retrying." }
@@ -209,16 +340,12 @@ function Invoke-ScoreTelemetryInstall {
         Initialize-Interop $gameDirectory
     }
 
-    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-        throw "The .NET SDK is required. Install .NET SDK 9 and retry."
-    }
-
     $repositoryRoot = Split-Path -Parent $PSScriptRoot
     $testProject = Join-Path $repositoryRoot "plugin\tests\RevIdle.ScoreTelemetry.Tests.csproj"
     $pluginProject = Join-Path $repositoryRoot "plugin\src\RevolutionIdle.ScoreTelemetry.csproj"
     $builtDll = Join-Path $repositoryRoot "plugin\src\bin\Release\RevIdle.ScoreTelemetry.dll"
     Invoke-CheckedProcess "dotnet" @("run", "--project", $testProject, "-p:GameDir=$gameDirectory") "Plugin tests failed."
-    Invoke-CheckedProcess "dotnet" @("build", $pluginProject, "-c", "Release", "-p:GameDir=$gameDirectory") "Plugin build failed."
+    Invoke-CheckedProcess "dotnet" @("build", $pluginProject, "-c", "Release", "-warnaserror", "-p:GameDir=$gameDirectory") "Plugin build failed."
 
     $installedDll = Install-PluginDll $builtDll $gameDirectory
     Write-Host "Installed Revolution Idle Score Telemetry to: $installedDll"

@@ -24,6 +24,19 @@ function Assert-Throws {
     }
 }
 
+function Assert-ThrowsLike {
+    param([scriptblock]$Action, [string]$Pattern, [string]$Name)
+    try {
+        & $Action
+    } catch {
+        if ($_.Exception.Message -like $Pattern) {
+            return
+        }
+        throw "$Name failed with an unexpected exception: $($_.Exception.Message)"
+    }
+    throw "$Name failed: expected an exception matching '$Pattern'."
+}
+
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
@@ -36,6 +49,18 @@ try {
     New-Item -ItemType File -Path (Join-Path $gameDir "Revolution Idle.exe") | Out-Null
     Assert-Equal ([System.IO.Path]::GetFullPath($gameDir)) (Resolve-GameDirectory $gameDir) "Resolve-GameDirectory accepts the game root"
     Assert-Throws { Resolve-GameDirectory (Join-Path $testRoot "missing") } "Resolve-GameDirectory rejects a missing folder"
+
+    $stateGame = Join-Path $testRoot "state-game"
+    New-Item -ItemType Directory -Path $stateGame | Out-Null
+    Assert-Equal "Missing" (Get-BepInExState $stateGame) "Get-BepInExState detects a missing runtime"
+    New-Item -ItemType File -Path (Join-Path $stateGame "winhttp.dll") | Out-Null
+    Assert-Equal "Partial" (Get-BepInExState $stateGame) "Get-BepInExState detects a partial runtime"
+    foreach ($marker in @("doorstop_config.ini", "BepInEx\core\BepInEx.Core.dll", "BepInEx\core\BepInEx.Unity.IL2CPP.dll")) {
+        $markerPath = Join-Path $stateGame $marker
+        New-Item -ItemType Directory -Path (Split-Path -Parent $markerPath) -Force | Out-Null
+        New-Item -ItemType File -Path $markerPath -Force | Out-Null
+    }
+    Assert-Equal "Complete" (Get-BepInExState $stateGame) "Get-BepInExState detects a complete runtime"
 
     $fixture = Join-Path $testRoot "fixture"
     $fixtureCore = Join-Path $fixture "BepInEx\core"
@@ -69,14 +94,81 @@ try {
     Assert-Throws { Expand-SafeZipArchive $unsafeZip (Join-Path $testRoot "unsafe-destination") } "Expand-SafeZipArchive rejects traversal"
     Assert-Equal $false (Test-Path -LiteralPath (Join-Path $testRoot "escape.txt")) "Unsafe entry stays unextracted"
 
+    $duplicateZip = Join-Path $testRoot "duplicate.zip"
+    $duplicateStream = [System.IO.File]::Open($duplicateZip, [System.IO.FileMode]::CreateNew)
+    $duplicateArchive = [System.IO.Compression.ZipArchive]::new($duplicateStream, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($content in @("first", "second")) {
+            $entry = $duplicateArchive.CreateEntry("BepInEx/core/BepInEx.Core.dll")
+            $writer = [System.IO.StreamWriter]::new($entry.Open())
+            try {
+                $writer.Write($content)
+            } finally {
+                $writer.Dispose()
+            }
+        }
+    } finally {
+        $duplicateArchive.Dispose()
+        $duplicateStream.Dispose()
+    }
+    $rollbackDestination = Join-Path $testRoot "rollback-destination"
+    Assert-Throws { Expand-SafeZipArchive $duplicateZip $rollbackDestination } "Expand-SafeZipArchive rejects duplicate entries"
+    Assert-Equal $false (Test-Path -LiteralPath (Join-Path $rollbackDestination "BepInEx\core\BepInEx.Core.dll")) "Failed extraction leaves no partial file"
+
+    $junctionExtractionDestination = Join-Path $testRoot "junction-extraction"
+    $outsideExtractionDirectory = Join-Path $testRoot "outside-extraction"
+    New-Item -ItemType Directory -Path $junctionExtractionDestination | Out-Null
+    New-Item -ItemType Directory -Path $outsideExtractionDirectory | Out-Null
+    $extractionJunction = Join-Path $junctionExtractionDestination "BepInEx"
+    New-Item -ItemType Junction -Path $extractionJunction -Target $outsideExtractionDirectory | Out-Null
+    try {
+        Assert-Throws { Expand-SafeZipArchive $safeZip $junctionExtractionDestination } "Expand-SafeZipArchive rejects a junction destination"
+        Assert-Equal $false (Test-Path -LiteralPath (Join-Path $outsideExtractionDirectory "core\sample.txt")) "Extraction junction target stays unchanged"
+    } finally {
+        if (Test-Path -LiteralPath $extractionJunction) {
+            [System.IO.Directory]::Delete($extractionJunction)
+        }
+    }
+
     $sourceDll = Join-Path $testRoot "RevIdle.ScoreTelemetry.dll"
     [System.IO.File]::WriteAllBytes($sourceDll, [byte[]](1, 2, 3, 4))
+
+    $junctionGame = Join-Path $testRoot "junction-game"
+    $junctionPlugins = Join-Path $junctionGame "BepInEx\plugins"
+    $outsidePluginDirectory = Join-Path $testRoot "outside-plugin"
+    New-Item -ItemType Directory -Path $junctionPlugins -Force | Out-Null
+    New-Item -ItemType Directory -Path $outsidePluginDirectory | Out-Null
+    $pluginJunction = Join-Path $junctionPlugins "RevIdle.ScoreTelemetry"
+    New-Item -ItemType Junction -Path $pluginJunction -Target $outsidePluginDirectory | Out-Null
+    try {
+        Assert-Throws { Install-PluginDll $sourceDll $junctionGame } "Install-PluginDll rejects a junction destination"
+        Assert-Equal $false (Test-Path -LiteralPath (Join-Path $outsidePluginDirectory "RevIdle.ScoreTelemetry.dll")) "Junction target stays unchanged"
+    } finally {
+        if (Test-Path -LiteralPath $pluginJunction) {
+            [System.IO.Directory]::Delete($pluginJunction)
+        }
+    }
+
+    $atomicDirectory = Join-Path $testRoot "atomic-plugin"
+    $atomicDestination = Join-Path $atomicDirectory "RevIdle.ScoreTelemetry.dll"
+    New-Item -ItemType Directory -Path $atomicDirectory | Out-Null
+    [System.IO.File]::WriteAllBytes($atomicDestination, [byte[]](9, 9, 9))
+    Assert-ThrowsLike { Install-VerifiedFile $sourceDll $atomicDestination ("0" * 64) } "Staged file SHA-256 mismatch*" "Install-VerifiedFile rejects a bad staged hash"
+    Assert-Equal "9,9,9" (([System.IO.File]::ReadAllBytes($atomicDestination)) -join ',') "Failed staged verification preserves the installed DLL"
+    $sourceDllHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceDll).Hash
+    Install-VerifiedFile $sourceDll $atomicDestination $sourceDllHash
+    Assert-Equal "1,2,3,4" (([System.IO.File]::ReadAllBytes($atomicDestination)) -join ',') "Install-VerifiedFile atomically replaces the installed DLL"
+    $stagingFiles = @(Get-ChildItem -LiteralPath $atomicDirectory | Where-Object {
+        $_.Name.EndsWith('.tmp') -or $_.Name.EndsWith('.backup')
+    })
+    Assert-Equal 0 $stagingFiles.Count "Install-VerifiedFile removes staging files"
+
     $installedDll = Install-PluginDll $sourceDll $gameDir
     $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceDll).Hash
     $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installedDll).Hash
     Assert-Equal $sourceHash $installedHash "Install-PluginDll preserves bytes"
 
-    Write-Output "4 installer tests passed."
+    Write-Output "10 installer tests passed."
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
