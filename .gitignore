@@ -1,0 +1,5 @@
+.worktrees/
+.superpowers/
+plugin/**/bin/
+plugin/**/obj/
+plugin/.vs/
