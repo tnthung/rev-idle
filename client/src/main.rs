@@ -1,4 +1,4 @@
-pub mod window;
+mod window;
 mod console;
 mod script;
 mod udp;
