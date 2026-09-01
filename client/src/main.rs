@@ -1,4 +1,5 @@
 mod console;
+mod script;
 mod udp;
 
 use std::io;
