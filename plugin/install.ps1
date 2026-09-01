@@ -71,6 +71,31 @@ function Assert-NoReparsePointPath {
     }
 }
 
+function Copy-NewFileAtomically {
+    param([string]$SourcePath, [string]$DestinationPath)
+
+    if (Test-Path -LiteralPath $DestinationPath) {
+        throw "Refusing to overwrite an existing file: $DestinationPath"
+    }
+
+    $destinationDirectory = Split-Path -Parent $DestinationPath
+    Assert-NoReparsePointPath $destinationDirectory
+    New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+    Assert-NoReparsePointPath $DestinationPath
+
+    $destinationName = [System.IO.Path]::GetFileName($DestinationPath)
+    $stagedPath = Join-Path $destinationDirectory ("$destinationName." + [guid]::NewGuid().ToString("N") + ".tmp")
+    try {
+        [System.IO.File]::Copy($SourcePath, $stagedPath, $false)
+        Assert-NoReparsePointPath $DestinationPath
+        [System.IO.File]::Move($stagedPath, $DestinationPath)
+    } finally {
+        if (Test-Path -LiteralPath $stagedPath) {
+            Remove-Item -LiteralPath $stagedPath -Force
+        }
+    }
+}
+
 function Expand-SafeZipArchive {
     param([string]$ArchivePath, [string]$DestinationPath)
 
@@ -136,8 +161,8 @@ function Expand-SafeZipArchive {
                     $createdDirectories.Add($directory)
                 }
 
-                [System.IO.File]::Copy($target.Source, $target.Path, $false)
                 $createdFiles.Add($target.Path)
+                Copy-NewFileAtomically $target.Source $target.Path
             }
         } catch {
             for ($index = $createdFiles.Count - 1; $index -ge 0; $index--) {

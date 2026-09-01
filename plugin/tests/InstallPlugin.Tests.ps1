@@ -123,12 +123,34 @@ try {
     New-Item -ItemType Junction -Path $extractionJunction -Target $outsideExtractionDirectory | Out-Null
     try {
         Assert-Throws { Expand-SafeZipArchive $safeZip $junctionExtractionDestination } "Expand-SafeZipArchive rejects a junction destination"
-        Assert-Equal $false (Test-Path -LiteralPath (Join-Path $outsideExtractionDirectory "core\sample.txt")) "Extraction junction target stays unchanged"
+    Assert-Equal $false (Test-Path -LiteralPath (Join-Path $outsideExtractionDirectory "core\sample.txt")) "Extraction junction target stays unchanged"
     } finally {
         if (Test-Path -LiteralPath $extractionJunction) {
             [System.IO.Directory]::Delete($extractionJunction)
         }
     }
+
+    $newFileSource = Join-Path $testRoot "new-file-source.bin"
+    $newFileDestination = Join-Path $testRoot "new-file-destination\installed.bin"
+    [System.IO.File]::WriteAllBytes($newFileSource, [byte[]](5, 6, 7))
+    Copy-NewFileAtomically $newFileSource $newFileDestination
+    Assert-Equal "5,6,7" (([System.IO.File]::ReadAllBytes($newFileDestination)) -join ',') "Copy-NewFileAtomically commits a complete file"
+
+    $lockedSource = Join-Path $testRoot "locked-source.bin"
+    $failedCopyDestination = Join-Path $testRoot "failed-copy\installed.bin"
+    [System.IO.File]::WriteAllBytes($lockedSource, [byte[]](8, 8, 8))
+    $lockedStream = [System.IO.File]::Open($lockedSource, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+    try {
+        Assert-Throws { Copy-NewFileAtomically $lockedSource $failedCopyDestination } "Copy-NewFileAtomically surfaces copy failure"
+    } finally {
+        $lockedStream.Dispose()
+    }
+    Assert-Equal $false (Test-Path -LiteralPath $failedCopyDestination) "Failed new-file copy leaves no destination"
+    $failedCopyDirectory = Split-Path -Parent $failedCopyDestination
+    $failedCopyStagingFiles = @(if (Test-Path -LiteralPath $failedCopyDirectory) {
+        Get-ChildItem -LiteralPath $failedCopyDirectory | Where-Object { $_.Name.EndsWith('.tmp') }
+    })
+    Assert-Equal 0 $failedCopyStagingFiles.Count "Failed new-file copy removes staging files"
 
     $sourceDll = Join-Path $testRoot "RevIdle.ScoreTelemetry.dll"
     [System.IO.File]::WriteAllBytes($sourceDll, [byte[]](1, 2, 3, 4))
@@ -168,7 +190,7 @@ try {
     $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installedDll).Hash
     Assert-Equal $sourceHash $installedHash "Install-PluginDll preserves bytes"
 
-    Write-Output "10 installer tests passed."
+    Write-Output "11 installer tests passed."
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
