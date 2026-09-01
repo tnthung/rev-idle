@@ -1,3 +1,4 @@
+mod console;
 mod udp;
 
 use std::io;
