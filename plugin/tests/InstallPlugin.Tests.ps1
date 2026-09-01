@@ -50,6 +50,18 @@ try {
     Assert-Equal ([System.IO.Path]::GetFullPath($gameDir)) (Resolve-GameDirectory $gameDir) "Resolve-GameDirectory accepts the game root"
     Assert-Throws { Resolve-GameDirectory (Join-Path $testRoot "missing") } "Resolve-GameDirectory rejects a missing folder"
 
+    $launcherPath = Join-Path (Split-Path -Parent $PSScriptRoot) "install.cmd"
+    $savedErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $launcherOutput = & $env:ComSpec /d /c "`"$launcherPath`" -InstallationFolder `"$testRoot`"" 2>&1
+        $launcherExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
+    Assert-Equal 1 $launcherExitCode "install.cmd forwards the installer failure exit code"
+    Assert-Equal $true (($launcherOutput -join [Environment]::NewLine) -like "*does not contain Revolution Idle.exe*") "install.cmd reaches install.ps1 with execution-policy bypass"
+
     $stateGame = Join-Path $testRoot "state-game"
     New-Item -ItemType Directory -Path $stateGame | Out-Null
     Assert-Equal "Missing" (Get-BepInExState $stateGame) "Get-BepInExState detects a missing runtime"
@@ -196,7 +208,7 @@ try {
     $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installedDll).Hash
     Assert-Equal $sourceHash $installedHash "Install-PluginDll preserves bytes"
 
-    Write-Output "11 installer tests passed."
+    Write-Output "12 installer tests passed."
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
