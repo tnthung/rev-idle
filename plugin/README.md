@@ -16,6 +16,24 @@ Payload:
 
 The plugin itself targets .NET 6 because that is the runtime embedded by BepInEx IL2CPP.
 
+## Automated install
+
+From the repository root, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\plugin\install.ps1
+```
+
+The installer asks for the Revolution Idle installation folder. If BepInEx is missing, it downloads and verifies the pinned Windows x64 IL2CPP build, launches the game once to generate interop assemblies, runs the plugin tests and Release build, and installs the verified DLL.
+
+If only part of a BepInEx installation is present, the installer stops without overwriting it. Repair or remove that partial installation before retrying.
+
+For non-interactive use:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\plugin\install.ps1 -InstallationFolder "D:\SteamLibrary\steamapps\common\Revolution Idle"
+```
+
 ## Build
 
 From the repository root:
