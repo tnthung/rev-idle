@@ -11,7 +11,7 @@ use windows::{
         },
         UI::WindowsAndMessaging::{
             EnumWindows, GetClientRect, GetForegroundWindow, GetWindowRect,
-            GetWindowThreadProcessId, IsWindowVisible, SetForegroundWindow,
+            GetWindowThreadProcessId, IsWindowVisible, SetCursorPos, SetForegroundWindow,
             SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
             SW_RESTORE,
         },
@@ -19,6 +19,18 @@ use windows::{
 };
 
 const GAME_EXECUTABLE: &str = "Revolution Idle.exe";
+
+fn move_cursor_with<F>(x: i32, y: i32, set_cursor_pos: F) -> Result<(), String>
+where
+    F: FnOnce(i32, i32) -> windows::core::Result<()>,
+{
+    set_cursor_pos(x, y)
+        .map_err(|error| format!("SetCursorPos({x}, {y}) failed: {error}"))
+}
+
+pub(crate) fn move_cursor_to_screen(x: i32, y: i32) -> Result<(), String> {
+    move_cursor_with(x, y, |x, y| unsafe { SetCursorPos(x, y) })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ClientGeometry {
@@ -340,5 +352,17 @@ mod tests {
     #[test]
     fn win32_controller_implements_window_control() {
         assert_window_control::<Win32WindowControl>();
+    }
+
+    #[test]
+    fn cursor_movement_seam_preserves_signed_virtual_screen_coordinates() {
+        let mut received = None;
+        move_cursor_with(-1920, 1080, |x, y| {
+            received = Some((x, y));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(received, Some((-1920, 1080)));
     }
 }

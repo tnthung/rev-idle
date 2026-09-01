@@ -13,6 +13,7 @@ pub enum ScriptCommand {
     Pause,
     Resume,
     Stop,
+    #[allow(dead_code)]
     SetPaused(bool),
 }
 

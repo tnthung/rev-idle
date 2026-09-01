@@ -1,10 +1,11 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicU64, Ordering},
     mpsc as std_mpsc,
     Arc,
 };
 use std::thread::{self, JoinHandle};
-use tokio::sync::mpsc;
+use std::time::Duration;
+use tokio::sync::watch;
 use windows::Win32::{
     Foundation::{LPARAM, WPARAM},
     System::Threading::GetCurrentThreadId,
@@ -13,9 +14,84 @@ use windows::Win32::{
     }},
 };
 
-use crate::console::ScriptCommand;
-
 const HOTKEY_ID: i32 = 1;
+const PAUSED_BIT: u64 = 1;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PauseUpdate {
+    state: u64,
+}
+
+impl PauseUpdate {
+    pub(crate) fn initial() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn paused(self) -> bool {
+        self.state & PAUSED_BIT != 0
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ActionGate {
+    state: Arc<AtomicU64>,
+}
+
+impl ActionGate {
+    pub(crate) fn is_paused(&self) -> bool {
+        self.state.load(Ordering::Acquire) & PAUSED_BIT != 0
+    }
+
+    pub(crate) fn set_paused(&self, paused: bool) -> PauseUpdate {
+        self.update(|_| paused)
+    }
+
+    fn toggle(&self) -> PauseUpdate {
+        self.update(|paused| !paused)
+    }
+
+    pub(crate) fn is_current(&self, update: PauseUpdate) -> bool {
+        self.state.load(Ordering::Acquire) == update.state
+    }
+
+    pub(crate) fn current_update(&self) -> PauseUpdate {
+        PauseUpdate {
+            state: self.state.load(Ordering::Acquire),
+        }
+    }
+
+    pub(crate) fn reset_if_current(&self, update: PauseUpdate) -> bool {
+        if !update.paused() {
+            return self.is_current(update);
+        }
+        let next = update.state.wrapping_add(1) & !PAUSED_BIT;
+        self.state
+            .compare_exchange(
+                update.state,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+    }
+
+    fn update(&self, requested: impl Fn(bool) -> bool) -> PauseUpdate {
+        let mut current = self.state.load(Ordering::Acquire);
+        loop {
+            let paused = requested(current & PAUSED_BIT != 0);
+            let next = (current.wrapping_add(2) & !PAUSED_BIT) | u64::from(paused);
+            match self.state.compare_exchange_weak(
+                current,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return PauseUpdate { state: next },
+                Err(observed) => current = observed,
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HotkeyEvent {
@@ -33,27 +109,23 @@ trait HotkeyPlatform {
 #[cfg(test)]
 fn run_hotkey_loop<P: HotkeyPlatform>(
     mut platform: P,
-    gate: Arc<AtomicBool>,
-    command_tx: mpsc::Sender<ScriptCommand>,
+    gate: ActionGate,
+    pause_tx: watch::Sender<PauseUpdate>,
 ) -> Result<(), String> {
     platform.register()?;
-    run_registered_hotkey_loop(platform, gate, command_tx)
+    run_registered_hotkey_loop(platform, gate, pause_tx)
 }
 
 fn run_registered_hotkey_loop<P: HotkeyPlatform>(
     mut platform: P,
-    gate: Arc<AtomicBool>,
-    command_tx: mpsc::Sender<ScriptCommand>,
+    gate: ActionGate,
+    pause_tx: watch::Sender<PauseUpdate>,
 ) -> Result<(), String> {
     let mut result = Ok(());
     loop {
         match platform.next_event() {
             Ok(HotkeyEvent::Pressed) => {
-                let paused = !gate.fetch_xor(true, Ordering::AcqRel);
-                if let Err(error) = command_tx.blocking_send(ScriptCommand::SetPaused(paused)) {
-                    result = Err(format!("failed to deliver hotkey command: {error}"));
-                    break;
-                }
+                pause_tx.send_replace(gate.toggle());
             }
             Ok(HotkeyEvent::Continue) => {}
             Ok(HotkeyEvent::Quit) => break,
@@ -72,8 +144,54 @@ fn run_registered_hotkey_loop<P: HotkeyPlatform>(
     result
 }
 
-fn should_join_after_quit_post(post_succeeded: bool, worker_finished: bool) -> bool {
-    post_succeeded || worker_finished
+fn post_quit(thread_id: u32) -> Result<(), String> {
+    unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) }
+        .map_err(|error| format!("PostThreadMessageW failed: {error}"))
+}
+
+fn join_worker(handle: JoinHandle<Result<(), String>>) -> Result<(), String> {
+    handle
+        .join()
+        .map_err(|_| "hotkey worker thread panicked".to_string())?
+}
+
+fn defer_worker_cleanup<F>(
+    handle: JoinHandle<Result<(), String>>,
+    mut retry_quit: F,
+    retry_delay: Duration,
+) -> JoinHandle<()>
+where
+    F: FnMut() -> Result<(), String> + Send + 'static,
+{
+    thread::spawn(move || {
+        while !handle.is_finished() {
+            let _ = retry_quit();
+            thread::sleep(retry_delay);
+        }
+        let _ = handle.join();
+    })
+}
+
+fn complete_worker_shutdown<F>(
+    handle: JoinHandle<Result<(), String>>,
+    initial_post: Result<(), String>,
+    retry_quit: F,
+    retry_delay: Duration,
+) -> (Result<(), String>, Option<JoinHandle<()>>)
+where
+    F: FnMut() -> Result<(), String> + Send + 'static,
+{
+    match initial_post {
+        Ok(()) => (join_worker(handle), None),
+        Err(error) if handle.is_finished() => {
+            let _ = join_worker(handle);
+            (Err(error), None)
+        }
+        Err(error) => (
+            Err(error),
+            Some(defer_worker_cleanup(handle, retry_quit, retry_delay)),
+        ),
+    }
 }
 
 struct Win32HotkeyPlatform;
@@ -113,8 +231,8 @@ pub struct HotkeyWorker {
 
 impl HotkeyWorker {
     pub fn start(
-        gate: Arc<AtomicBool>,
-        command_tx: mpsc::Sender<ScriptCommand>,
+        gate: ActionGate,
+        pause_tx: watch::Sender<PauseUpdate>,
     ) -> Result<Self, String> {
         let (startup_tx, startup_rx) = std_mpsc::channel();
         let handle = thread::spawn(move || {
@@ -125,7 +243,7 @@ impl HotkeyWorker {
             let registration = platform.register();
             startup_tx.send((thread_id, registration.clone())).ok();
             registration?;
-            run_registered_hotkey_loop(platform, gate, command_tx)
+            run_registered_hotkey_loop(platform, gate, pause_tx)
         });
         let (thread_id, registration) = startup_rx
             .recv()
@@ -138,25 +256,33 @@ impl HotkeyWorker {
     }
 
     pub fn shutdown(mut self) -> Result<(), String> {
-        let post_result = unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) }
-            .map_err(|error| format!("PostThreadMessageW failed: {error}"));
+        let post_result = post_quit(self.thread_id);
         let handle = self.handle.take().unwrap();
-        if !should_join_after_quit_post(post_result.is_ok(), handle.is_finished()) {
-            return Err(post_result.unwrap_err());
-        }
-        let join_result = handle.join()
-            .map_err(|_| "hotkey worker thread panicked".to_string())?;
-        post_result?;
-        join_result
+        let thread_id = self.thread_id;
+        let (result, cleanup) = complete_worker_shutdown(
+            handle,
+            post_result,
+            move || post_quit(thread_id),
+            Duration::from_millis(10),
+        );
+        drop(cleanup);
+        result
     }
 }
 
 impl Drop for HotkeyWorker {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            let post_succeeded = unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) }.is_ok();
-            if should_join_after_quit_post(post_succeeded, handle.is_finished()) {
+            let thread_id = self.thread_id;
+            let _ = post_quit(thread_id);
+            if handle.is_finished() {
                 let _ = handle.join();
+            } else {
+                drop(defer_worker_cleanup(
+                    handle,
+                    move || post_quit(thread_id),
+                    Duration::from_millis(10),
+                ));
             }
         }
     }
@@ -165,8 +291,8 @@ impl Drop for HotkeyWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
-    use tokio::sync::mpsc;
+    use std::sync::{Arc, atomic::Ordering};
+    use tokio::sync::watch;
 
     struct FakeHotkeyPlatform {
         events: Vec<HotkeyEvent>,
@@ -198,50 +324,91 @@ mod tests {
 
     #[test]
     fn f8_closes_the_gate_before_delivering_paused_state() {
-        let gate = Arc::new(AtomicBool::new(false));
-        let (command_tx, mut command_rx) = mpsc::channel(4);
+        let gate = ActionGate::default();
+        let (pause_tx, mut pause_rx) = watch::channel(PauseUpdate::initial());
         let platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed]);
-        run_hotkey_loop(platform, gate.clone(), command_tx).unwrap();
-        assert!(gate.load(Ordering::Acquire));
-        assert_eq!(command_rx.blocking_recv(), Some(ScriptCommand::SetPaused(true)));
+        run_hotkey_loop(platform, gate.clone(), pause_tx).unwrap();
+        assert!(gate.is_paused());
+        assert!(pause_rx.borrow_and_update().paused());
     }
 
     #[test]
-    fn second_f8_opens_the_gate_and_delivers_resume() {
-        let gate = Arc::new(AtomicBool::new(false));
-        let (command_tx, mut command_rx) = mpsc::channel(4);
-        let platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed, HotkeyEvent::Pressed]);
-        run_hotkey_loop(platform, gate.clone(), command_tx).unwrap();
-        assert!(!gate.load(Ordering::Acquire));
-        assert_eq!(command_rx.blocking_recv(), Some(ScriptCommand::SetPaused(true)));
-        assert_eq!(command_rx.blocking_recv(), Some(ScriptCommand::SetPaused(false)));
+    fn unread_f8_events_coalesce_without_blocking_the_message_loop() {
+        let gate = ActionGate::default();
+        let (pause_tx, mut pause_rx) = watch::channel(PauseUpdate::initial());
+        let mut events = vec![HotkeyEvent::Quit];
+        events.extend(std::iter::repeat_n(HotkeyEvent::Pressed, 10_001));
+        let platform = FakeHotkeyPlatform::events(events);
+
+        run_hotkey_loop(platform, gate.clone(), pause_tx).unwrap();
+
+        assert!(gate.is_paused());
+        assert!(pause_rx.borrow_and_update().paused());
+    }
+
+    #[test]
+    fn closed_pause_receiver_does_not_stop_hotkey_cleanup() {
+        let gate = ActionGate::default();
+        let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+        drop(pause_rx);
+        let platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed]);
+        let unregister_count = platform.unregister_count.clone();
+
+        assert_eq!(run_hotkey_loop(platform, gate.clone(), pause_tx), Ok(()));
+        assert!(gate.is_paused());
+        assert_eq!(unregister_count.load(Ordering::Relaxed), 1);
     }
 
     #[test]
     fn registration_failure_returns_error() {
         let mut platform = FakeHotkeyPlatform::events([]);
         platform.fail_register = true;
-        let (command_tx, _) = mpsc::channel(1);
-        assert_eq!(run_hotkey_loop(platform, Arc::new(AtomicBool::new(false)), command_tx), Err("registration failed".to_string()));
+        let (pause_tx, _) = watch::channel(PauseUpdate::initial());
+        assert_eq!(run_hotkey_loop(platform, ActionGate::default(), pause_tx), Err("registration failed".to_string()));
     }
 
     #[test]
     fn successful_loop_unregisters_once() {
         let platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Continue]);
         let unregister_count = platform.unregister_count.clone();
-        let (command_tx, _) = mpsc::channel(1);
-        let result = run_hotkey_loop(platform, Arc::new(AtomicBool::new(false)), command_tx);
+        let (pause_tx, _) = watch::channel(PauseUpdate::initial());
+        let result = run_hotkey_loop(platform, ActionGate::default(), pause_tx);
         assert_eq!(result, Ok(()));
         assert_eq!(unregister_count.load(Ordering::Relaxed), 1);
     }
 
     #[test]
-    fn failed_quit_post_does_not_join_running_worker() {
-        assert!(!should_join_after_quit_post(false, false));
-    }
+    fn failed_quit_post_transfers_running_worker_to_retrying_cleanup() {
+        let (quit_tx, quit_rx) = std_mpsc::channel();
+        let (joined_tx, joined_rx) = std_mpsc::channel();
+        let worker = thread::spawn(move || {
+            quit_rx.recv().unwrap();
+            joined_tx.send(()).unwrap();
+            Ok(())
+        });
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let retry_attempts = attempts.clone();
 
-    #[test]
-    fn failed_quit_post_joins_finished_worker() {
-        assert!(should_join_after_quit_post(false, true));
+        let (result, cleanup) = complete_worker_shutdown(
+            worker,
+            Err("initial post failed".to_string()),
+            move || {
+                let attempt = retry_attempts.fetch_add(1, Ordering::Relaxed);
+                if attempt == 0 {
+                    Err("retry post failed".to_string())
+                } else {
+                    if attempt == 1 {
+                        let _ = quit_tx.send(());
+                    }
+                    Ok(())
+                }
+            },
+            std::time::Duration::ZERO,
+        );
+
+        assert_eq!(result, Err("initial post failed".to_string()));
+        cleanup.unwrap().join().unwrap();
+        joined_rx.recv().unwrap();
+        assert!(attempts.load(Ordering::Relaxed) >= 2);
     }
 }

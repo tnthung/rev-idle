@@ -1,5 +1,10 @@
-use crate::{console::ScriptCommand, udp::State, window::{Win32WindowControl, WindowControl}};
-use enigo::{Button, Coordinate, Direction, Enigo, Mouse};
+use crate::{
+    console::ScriptCommand,
+    hotkey::{ActionGate, PauseUpdate},
+    udp::State,
+    window::{move_cursor_to_screen, Win32WindowControl, WindowControl},
+};
+use enigo::{Button, Direction, Enigo, Mouse};
 use rquickjs::{
     function::Async,
     function::Opt,
@@ -12,7 +17,7 @@ use rquickjs::{
     Persistent,
     Value,
 };
-use std::{cell::RefCell, path::Path, rc::Rc, sync::{atomic::{AtomicBool, Ordering}, Arc}, time::Duration};
+use std::{cell::RefCell, path::Path, rc::Rc, time::Duration};
 use tokio::sync::{mpsc, watch};
 
 trait MouseInput {
@@ -24,6 +29,21 @@ trait MouseInput {
     ) -> Result<(), String>;
 }
 
+fn click_at_with<M, C>(
+    x: i32,
+    y: i32,
+    button: Button,
+    move_cursor: M,
+    click_button: C,
+) -> Result<(), String>
+where
+    M: FnOnce(i32, i32) -> Result<(), String>,
+    C: FnOnce(Button) -> Result<(), String>,
+{
+    move_cursor(x, y)?;
+    click_button(button)
+}
+
 impl MouseInput for Enigo {
     fn click_at(
         &mut self,
@@ -31,10 +51,16 @@ impl MouseInput for Enigo {
         y: i32,
         button: Button,
     ) -> Result<(), String> {
-        self.move_mouse(x, y, Coordinate::Abs)
-            .map_err(|error| error.to_string())?;
-        self.button(button, Direction::Click)
-            .map_err(|error| error.to_string())
+        click_at_with(
+            x,
+            y,
+            button,
+            move_cursor_to_screen,
+            |button| {
+                self.button(button, Direction::Click)
+                    .map_err(|error| error.to_string())
+            },
+        )
     }
 }
 
@@ -45,15 +71,15 @@ type SharedWindow = Rc<dyn WindowControl>;
 struct HostControls {
     mouse: SharedMouse,
     window: SharedWindow,
-    actions_paused: Arc<AtomicBool>,
+    actions_paused: ActionGate,
 }
 
 fn host_error(message: String) -> Error {
     Error::new_from_js_message("host control", "JavaScript", message)
 }
 
-fn ensure_actions_running(paused: &AtomicBool) -> Result<(), Error> {
-    if paused.load(Ordering::Acquire) {
+fn ensure_actions_running(paused: &ActionGate) -> Result<(), Error> {
+    if paused.is_paused() {
         Err(Error::new_from_js_message("actions", "JavaScript", "actions are paused"))
     } else { Ok(()) }
 }
@@ -256,8 +282,9 @@ async fn load_path(path: &Path) -> Result<ScriptSession, String> {
 pub async fn run(
     commands: mpsc::Receiver<ScriptCommand>,
     states: watch::Receiver<State>,
+    hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: std::path::PathBuf,
-    actions_paused: Arc<AtomicBool>,
+    actions_paused: ActionGate,
 ) -> Result<(), String> {
     let mouse: SharedMouse = Rc::new(RefCell::new(
         Enigo::new(&enigo::Settings::default())
@@ -267,6 +294,7 @@ pub async fn run(
     run_with_controls(
         commands,
         states,
+        hotkey_pauses,
         initial_path,
         HostControls { mouse, window: Rc::new(Win32WindowControl), actions_paused },
         Duration::from_millis(50),
@@ -277,6 +305,7 @@ pub async fn run(
 async fn run_with_controls(
     mut commands: mpsc::Receiver<ScriptCommand>,
     mut states: watch::Receiver<State>,
+    mut hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: std::path::PathBuf,
     controls: HostControls,
     loop_delay: Duration,
@@ -292,10 +321,34 @@ async fn run_with_controls(
             None
         }
     };
-    controls.actions_paused.store(false, Ordering::Release);
+    let initial_hotkey_update = *hotkey_pauses.borrow_and_update();
     let mut paused = false;
+    apply_hotkey_update(
+        initial_hotkey_update,
+        &controls.actions_paused,
+        session.is_some(),
+        &mut paused,
+    );
+    let mut hotkey_channel_open = true;
 
     loop {
+        if hotkey_channel_open {
+            match hotkey_pauses.has_changed() {
+                Ok(true) => {
+                    let update = *hotkey_pauses.borrow_and_update();
+                    apply_hotkey_update_and_report(
+                        update,
+                        &controls.actions_paused,
+                        session.is_some(),
+                        &mut paused,
+                    );
+                    continue;
+                }
+                Ok(false) => {}
+                Err(_) => hotkey_channel_open = false,
+            }
+        }
+
         let command = if session.is_some() && !paused {
             match commands.try_recv() {
                 Ok(command) => Some(command),
@@ -305,16 +358,34 @@ async fn run_with_controls(
                 }
             }
         } else {
-            match commands.recv().await {
-                Some(command) => Some(command),
-                None => return Ok(()),
+            tokio::select! {
+                biased;
+                changed = hotkey_pauses.changed(), if hotkey_channel_open => {
+                    match changed {
+                        Ok(()) => {
+                            let update = *hotkey_pauses.borrow_and_update();
+                            apply_hotkey_update_and_report(
+                                update,
+                                &controls.actions_paused,
+                                session.is_some(),
+                                &mut paused,
+                            );
+                        }
+                        Err(_) => hotkey_channel_open = false,
+                    }
+                    continue;
+                }
+                command = commands.recv() => match command {
+                    Some(command) => Some(command),
+                    None => return Ok(()),
+                },
             }
         };
 
         if let Some(command) = command {
             match command {
                 ScriptCommand::Load(path) => {
-                    controls.actions_paused.store(false, Ordering::Release);
+                    controls.actions_paused.set_paused(false);
                     session = None;
                     paused = false;
                     current_path = path;
@@ -327,7 +398,7 @@ async fn run_with_controls(
                     }
                 }
                 ScriptCommand::Reload => {
-                    controls.actions_paused.store(false, Ordering::Release);
+                    controls.actions_paused.set_paused(false);
                     session = None;
                     paused = false;
                     match load_path(&current_path).await {
@@ -340,32 +411,32 @@ async fn run_with_controls(
                 }
                 ScriptCommand::Pause => {
                     if session.is_none() {
-                        controls.actions_paused.store(false, Ordering::Release);
+                        controls.actions_paused.set_paused(false);
                         println!("no script is running");
                     } else if paused {
-                        controls.actions_paused.store(true, Ordering::Release);
+                        controls.actions_paused.set_paused(true);
                         println!("script is already paused");
                     } else {
-                        controls.actions_paused.store(true, Ordering::Release);
+                        controls.actions_paused.set_paused(true);
                         paused = true;
                         println!("script paused");
                     }
                 }
                 ScriptCommand::Resume => {
                     if session.is_none() {
-                        controls.actions_paused.store(false, Ordering::Release);
+                        controls.actions_paused.set_paused(false);
                         println!("script is stopped; use reload or load");
                     } else if paused {
-                        controls.actions_paused.store(false, Ordering::Release);
+                        controls.actions_paused.set_paused(false);
                         paused = false;
                         println!("script resumed");
                     } else {
-                        controls.actions_paused.store(false, Ordering::Release);
+                        controls.actions_paused.set_paused(false);
                         println!("script is already running");
                     }
                 }
                 ScriptCommand::Stop => {
-                    controls.actions_paused.store(false, Ordering::Release);
+                    controls.actions_paused.set_paused(false);
                     if session.take().is_some() {
                         paused = false;
                         println!("script stopped");
@@ -374,25 +445,14 @@ async fn run_with_controls(
                     }
                 }
                 ScriptCommand::SetPaused(requested_paused) => {
-                    if session.is_none() {
-                        controls.actions_paused.store(false, Ordering::Release);
-                        println!("no script is running");
-                    } else if requested_paused {
-                        controls.actions_paused.store(true, Ordering::Release);
-                        if paused {
-                            println!("script is already paused");
-                        } else {
-                            paused = true;
-                            println!("script paused");
-                        }
-                    } else {
-                        controls.actions_paused.store(false, Ordering::Release);
-                        if paused {
-                            paused = false;
-                            println!("script resumed");
-                        } else {
-                            println!("script is already running");
-                        }
+                    let update = controls.actions_paused.current_update();
+                    if update.paused() == requested_paused {
+                        apply_hotkey_update_and_report(
+                            update,
+                            &controls.actions_paused,
+                            session.is_some(),
+                            &mut paused,
+                        );
                     }
                 }
             }
@@ -413,9 +473,61 @@ async fn run_with_controls(
     }
 }
 
+fn apply_hotkey_update(
+    update: PauseUpdate,
+    gate: &ActionGate,
+    session_running: bool,
+    lifecycle_paused: &mut bool,
+) -> bool {
+    if session_running {
+        if !gate.is_current(update) {
+            return false;
+        }
+        *lifecycle_paused = update.paused();
+        true
+    } else if gate.reset_if_current(update) {
+        *lifecycle_paused = false;
+        true
+    } else {
+        false
+    }
+}
+
+fn apply_hotkey_update_and_report(
+    update: PauseUpdate,
+    gate: &ActionGate,
+    session_running: bool,
+    lifecycle_paused: &mut bool,
+) {
+    let was_paused = *lifecycle_paused;
+    if !apply_hotkey_update(
+        update,
+        gate,
+        session_running,
+        lifecycle_paused,
+    ) {
+        return;
+    }
+
+    if !session_running {
+        println!("no script is running");
+    } else if *lifecycle_paused == was_paused {
+        if *lifecycle_paused {
+            println!("script is already paused");
+        } else {
+            println!("script is already running");
+        }
+    } else if *lifecycle_paused {
+        println!("script paused");
+    } else {
+        println!("script resumed");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hotkey::ActionGate;
     use crate::udp::State;
     use enigo::Button;
     use std::{
@@ -437,6 +549,59 @@ mod tests {
 
     struct FakeWindow;
 
+    #[test]
+    fn stale_hotkey_delivery_cannot_reopen_or_resume_a_newer_pause() {
+        let gate = ActionGate::default();
+        let stale_resume = gate.set_paused(false);
+        let current_pause = gate.set_paused(true);
+        let mut lifecycle_paused = true;
+
+        assert!(!apply_hotkey_update(
+            stale_resume,
+            &gate,
+            true,
+            &mut lifecycle_paused,
+        ));
+        assert!(gate.is_paused());
+        assert!(lifecycle_paused);
+
+        assert!(apply_hotkey_update(
+            current_pause,
+            &gate,
+            true,
+            &mut lifecycle_paused,
+        ));
+        assert!(gate.is_paused());
+        assert!(lifecycle_paused);
+    }
+
+    #[test]
+    fn production_mouse_adapter_routes_win32_movement_before_button_input() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let movement_events = events.clone();
+        let button_events = events.clone();
+
+        click_at_with(
+            -1920,
+            1080,
+            Button::Right,
+            move |x, y| {
+                movement_events.borrow_mut().push(format!("move {x} {y}"));
+                Ok(())
+            },
+            move |button| {
+                button_events.borrow_mut().push(format!("button {button:?}"));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            events.borrow().as_slice(),
+            ["move -1920 1080", "button Right"]
+        );
+    }
+
     impl WindowControl for FakeWindow {
         fn resize_client(&self, _width: i32, _height: i32) -> Result<(), String> { Ok(()) }
         fn focus_and_translate(&self, x: i32, y: i32) -> Result<(i32, i32), String> { Ok((x, y)) }
@@ -444,7 +609,7 @@ mod tests {
 
     impl From<SharedMouse> for HostControls {
         fn from(mouse: SharedMouse) -> Self {
-            Self { mouse, window: Rc::new(FakeWindow), actions_paused: Arc::new(AtomicBool::new(false)) }
+            Self { mouse, window: Rc::new(FakeWindow), actions_paused: ActionGate::default() }
         }
     }
 
@@ -469,7 +634,7 @@ mod tests {
     }
     fn recording_controls(translated: (i32, i32)) -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
         let events = Rc::new(RefCell::new(Vec::new()));
-        (HostControls { mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })), window: Rc::new(RecordingWindow { events: events.clone(), translated, error: false }), actions_paused: Arc::new(AtomicBool::new(false)) }, events)
+        (HostControls { mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })), window: Rc::new(RecordingWindow { events: events.clone(), translated, error: false }), actions_paused: ActionGate::default() }, events)
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -500,7 +665,7 @@ mod tests {
         let controls = HostControls {
             mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })),
             window: Rc::new(RecordingWindow { events: events.clone(), translated: (0, 0), error: true }),
-            actions_paused: Arc::new(AtomicBool::new(false)),
+            actions_paused: ActionGate::default(),
         };
         let session = ScriptSession::new(r#"((rev) => rev.click(10, 20))"#).await.unwrap();
         assert!(session.invoke(State::default(), controls).await.is_err());
@@ -511,7 +676,8 @@ mod tests {
         commands: mpsc::Receiver<ScriptCommand>, states: watch::Receiver<State>,
         initial_path: std::path::PathBuf, mouse: SharedMouse, loop_delay: Duration,
     ) -> Result<(), String> {
-        run_with_controls(commands, states, initial_path, mouse.into(), loop_delay).await
+        let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+        run_with_controls(commands, states, pause_rx, initial_path, mouse.into(), loop_delay).await
     }
 
     impl MouseInput for FakeMouse {
@@ -968,7 +1134,6 @@ mod tests {
     async fn requested_pause_gates_the_active_turn_then_pauses_the_loop() {
         use crate::console::ScriptCommand;
         use std::fs;
-        use std::sync::atomic::Ordering;
         use tokio::sync::{mpsc, watch};
 
         let path = std::env::temp_dir().join(format!(
@@ -997,11 +1162,12 @@ mod tests {
         let controls = HostControls {
             mouse: Rc::new(RefCell::new(GateMouse(event_tx))),
             window: Rc::new(FakeWindow),
-            actions_paused: Arc::new(AtomicBool::new(false)),
+            actions_paused: ActionGate::default(),
         };
         let gate = controls.actions_paused.clone();
         let (command_tx, command_rx) = mpsc::channel(8);
         let (_state_tx, state_rx) = watch::channel(State::default());
+        let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
         let runner_path = path.clone();
         let local = tokio::task::LocalSet::new();
 
@@ -1010,13 +1176,14 @@ mod tests {
                 let runner = tokio::task::spawn_local(run_with_controls(
                     command_rx,
                     state_rx,
+                    pause_rx,
                     runner_path,
                     controls,
                     Duration::from_millis(1),
                 ));
 
                 tokio::time::sleep(Duration::from_millis(5)).await;
-                gate.store(true, Ordering::Release);
+                gate.set_paused(true);
                 command_tx
                     .send(ScriptCommand::SetPaused(true))
                     .await
@@ -1029,7 +1196,7 @@ mod tests {
                 .await
                 .is_err());
 
-                gate.store(false, Ordering::Release);
+                gate.set_paused(false);
                 command_tx
                     .send(ScriptCommand::SetPaused(false))
                     .await
@@ -1051,7 +1218,6 @@ mod tests {
     async fn lifecycle_commands_keep_requested_pause_gate_in_sync() {
         use crate::console::ScriptCommand;
         use std::fs;
-        use std::sync::atomic::Ordering;
         use tokio::sync::{mpsc, watch};
 
         let root = std::env::temp_dir().join(format!(
@@ -1080,11 +1246,12 @@ mod tests {
         let controls = HostControls {
             mouse: Rc::new(RefCell::new(LifecycleMouse(event_tx))),
             window: Rc::new(FakeWindow),
-            actions_paused: Arc::new(AtomicBool::new(false)),
+            actions_paused: ActionGate::default(),
         };
         let gate = controls.actions_paused.clone();
         let (command_tx, command_rx) = mpsc::channel(16);
         let (_state_tx, state_rx) = watch::channel(State::default());
+        let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
         let runner_path = first.clone();
         let local = tokio::task::LocalSet::new();
 
@@ -1093,6 +1260,7 @@ mod tests {
                 let runner = tokio::task::spawn_local(run_with_controls(
                     command_rx,
                     state_rx,
+                    pause_rx,
                     runner_path,
                     controls,
                     Duration::from_millis(2),
@@ -1106,7 +1274,7 @@ mod tests {
                 command_tx.send(ScriptCommand::Pause).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
-                        if gate.load(Ordering::Acquire) {
+                        if gate.is_paused() {
                             break;
                         }
                         tokio::task::yield_now().await;
@@ -1114,15 +1282,16 @@ mod tests {
                 })
                 .await
                 .unwrap();
-                assert!(gate.load(Ordering::Acquire));
+                assert!(gate.is_paused());
 
+                gate.set_paused(false);
                 command_tx
                     .send(ScriptCommand::SetPaused(false))
                     .await
                     .unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
-                        if !gate.load(Ordering::Acquire) {
+                        if !gate.is_paused() {
                             break;
                         }
                         tokio::task::yield_now().await;
@@ -1130,19 +1299,19 @@ mod tests {
                 })
                 .await
                 .unwrap();
-                assert!(!gate.load(Ordering::Acquire));
+                assert!(!gate.is_paused());
 
                 command_tx.send(ScriptCommand::Resume).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
                     .await
                     .unwrap()
                     .unwrap();
-                assert!(!gate.load(Ordering::Acquire));
+                assert!(!gate.is_paused());
 
                 command_tx.send(ScriptCommand::Pause).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
-                        if gate.load(Ordering::Acquire) {
+                        if gate.is_paused() {
                             break;
                         }
                         tokio::task::yield_now().await;
@@ -1150,7 +1319,7 @@ mod tests {
                 })
                 .await
                 .unwrap();
-                assert!(gate.load(Ordering::Acquire));
+                assert!(gate.is_paused());
 
                 command_tx
                     .send(ScriptCommand::Load(second.clone()))
@@ -1160,12 +1329,12 @@ mod tests {
                     .await
                     .unwrap()
                     .unwrap();
-                assert!(!gate.load(Ordering::Acquire));
+                assert!(!gate.is_paused());
 
                 command_tx.send(ScriptCommand::Pause).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
-                        if gate.load(Ordering::Acquire) {
+                        if gate.is_paused() {
                             break;
                         }
                         tokio::task::yield_now().await;
@@ -1173,19 +1342,19 @@ mod tests {
                 })
                 .await
                 .unwrap();
-                assert!(gate.load(Ordering::Acquire));
+                assert!(gate.is_paused());
 
                 command_tx.send(ScriptCommand::Reload).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
                     .await
                     .unwrap()
                     .unwrap();
-                assert!(!gate.load(Ordering::Acquire));
+                assert!(!gate.is_paused());
 
                 command_tx.send(ScriptCommand::Pause).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
-                        if gate.load(Ordering::Acquire) {
+                        if gate.is_paused() {
                             break;
                         }
                         tokio::task::yield_now().await;
@@ -1198,7 +1367,7 @@ mod tests {
                 command_tx.send(ScriptCommand::Stop).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
-                        if !gate.load(Ordering::Acquire) {
+                        if !gate.is_paused() {
                             break;
                         }
                         tokio::task::yield_now().await;
@@ -1206,7 +1375,7 @@ mod tests {
                 })
                 .await
                 .unwrap();
-                assert!(!gate.load(Ordering::Acquire));
+                assert!(!gate.is_paused());
                 assert!(tokio::time::timeout(
                     Duration::from_millis(15),
                     event_rx.recv(),
@@ -1222,12 +1391,12 @@ mod tests {
                     .await
                     .unwrap()
                     .unwrap();
-                assert!(!gate.load(Ordering::Acquire));
+                assert!(!gate.is_paused());
 
                 command_tx.send(ScriptCommand::Pause).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
-                        if gate.load(Ordering::Acquire) {
+                        if gate.is_paused() {
                             break;
                         }
                         tokio::task::yield_now().await;
@@ -1241,7 +1410,7 @@ mod tests {
                 command_tx.send(ScriptCommand::Reload).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
-                        if !gate.load(Ordering::Acquire) {
+                        if !gate.is_paused() {
                             break;
                         }
                         tokio::task::yield_now().await;
@@ -1249,7 +1418,7 @@ mod tests {
                 })
                 .await
                 .unwrap();
-                assert!(!gate.load(Ordering::Acquire));
+                assert!(!gate.is_paused());
                 assert!(tokio::time::timeout(
                     Duration::from_millis(15),
                     event_rx.recv(),
@@ -1257,14 +1426,14 @@ mod tests {
                 .await
                 .is_err());
 
-                gate.store(true, Ordering::Release);
+                gate.set_paused(true);
                 command_tx
                     .send(ScriptCommand::SetPaused(true))
                     .await
                     .unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
-                        if !gate.load(Ordering::Acquire) {
+                        if !gate.is_paused() {
                             break;
                         }
                         tokio::task::yield_now().await;
@@ -1272,16 +1441,16 @@ mod tests {
                 })
                 .await
                 .unwrap();
-                assert!(!gate.load(Ordering::Acquire));
+                assert!(!gate.is_paused());
 
-                gate.store(true, Ordering::Release);
+                gate.set_paused(false);
                 command_tx
                     .send(ScriptCommand::SetPaused(false))
                     .await
                     .unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
-                        if !gate.load(Ordering::Acquire) {
+                        if !gate.is_paused() {
                             break;
                         }
                         tokio::task::yield_now().await;
@@ -1289,7 +1458,7 @@ mod tests {
                 })
                 .await
                 .unwrap();
-                assert!(!gate.load(Ordering::Acquire));
+                assert!(!gate.is_paused());
 
                 runner.abort();
                 let _ = runner.await;

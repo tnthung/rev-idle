@@ -7,7 +7,6 @@ mod hotkey;
 use std::{
     io,
     path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
 };
 use tokio::{
     sync::{mpsc, watch},
@@ -49,9 +48,10 @@ async fn main() -> io::Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("script.js"));
     let (state_tx, state_rx) = watch::channel(udp::State::default());
-    let actions_paused = Arc::new(AtomicBool::new(false));
+    let actions_paused = hotkey::ActionGate::default();
+    let (pause_tx, pause_rx) = watch::channel(hotkey::PauseUpdate::initial());
     let (command_tx, command_rx) = mpsc::channel(32);
-    let hotkey = hotkey::HotkeyWorker::start(actions_paused.clone(), command_tx.clone())
+    let hotkey = hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx)
         .map_err(io::Error::other)?;
     let local = LocalSet::new();
 
@@ -63,6 +63,7 @@ async fn main() -> io::Result<()> {
             let mut script_task = tokio::task::spawn_local(script::run(
                 command_rx,
                 state_rx,
+                pause_rx,
                 initial_path,
                 actions_paused,
             ));
