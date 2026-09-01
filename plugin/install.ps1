@@ -85,10 +85,17 @@ function Copy-NewFileAtomically {
 
     $destinationName = [System.IO.Path]::GetFileName($DestinationPath)
     $stagedPath = Join-Path $destinationDirectory ("$destinationName." + [guid]::NewGuid().ToString("N") + ".tmp")
+    $committed = $false
     try {
         [System.IO.File]::Copy($SourcePath, $stagedPath, $false)
         Assert-NoReparsePointPath $DestinationPath
         [System.IO.File]::Move($stagedPath, $DestinationPath)
+        $committed = $true
+    } catch {
+        if ($committed -and (Test-Path -LiteralPath $DestinationPath -PathType Leaf)) {
+            Remove-Item -LiteralPath $DestinationPath -Force
+        }
+        throw
     } finally {
         if (Test-Path -LiteralPath $stagedPath) {
             Remove-Item -LiteralPath $stagedPath -Force
@@ -161,8 +168,8 @@ function Expand-SafeZipArchive {
                     $createdDirectories.Add($directory)
                 }
 
-                $createdFiles.Add($target.Path)
                 Copy-NewFileAtomically $target.Source $target.Path
+                $createdFiles.Add($target.Path)
             }
         } catch {
             for ($index = $createdFiles.Count - 1; $index -ge 0; $index--) {

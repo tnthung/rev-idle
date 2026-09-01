@@ -152,6 +152,12 @@ try {
     })
     Assert-Equal 0 $failedCopyStagingFiles.Count "Failed new-file copy removes staging files"
 
+    $collisionDestination = Join-Path $testRoot "collision\installed.bin"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $collisionDestination) | Out-Null
+    [System.IO.File]::WriteAllBytes($collisionDestination, [byte[]](4, 4, 4))
+    Assert-Throws { Copy-NewFileAtomically $newFileSource $collisionDestination } "Copy-NewFileAtomically rejects a concurrent destination"
+    Assert-Equal "4,4,4" (([System.IO.File]::ReadAllBytes($collisionDestination)) -join ',') "Rejected destination remains owned by its creator"
+
     $sourceDll = Join-Path $testRoot "RevIdle.ScoreTelemetry.dll"
     [System.IO.File]::WriteAllBytes($sourceDll, [byte[]](1, 2, 3, 4))
 
