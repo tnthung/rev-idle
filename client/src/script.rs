@@ -1,4 +1,4 @@
-use crate::{console::ScriptCommand, udp::State};
+use crate::{console::ScriptCommand, udp::State, window::{Win32WindowControl, WindowControl}};
 use enigo::{Button, Coordinate, Direction, Enigo, Mouse};
 use rquickjs::{
     function::Async,
@@ -12,7 +12,7 @@ use rquickjs::{
     Persistent,
     Value,
 };
-use std::{cell::RefCell, path::Path, rc::Rc, time::Duration};
+use std::{cell::RefCell, path::Path, rc::Rc, sync::{atomic::{AtomicBool, Ordering}, Arc}, time::Duration};
 use tokio::sync::{mpsc, watch};
 
 trait MouseInput {
@@ -39,6 +39,24 @@ impl MouseInput for Enigo {
 }
 
 type SharedMouse = Rc<RefCell<dyn MouseInput>>;
+type SharedWindow = Rc<dyn WindowControl>;
+
+#[derive(Clone)]
+struct HostControls {
+    mouse: SharedMouse,
+    window: SharedWindow,
+    actions_paused: Arc<AtomicBool>,
+}
+
+fn host_error(message: String) -> Error {
+    Error::new_from_js_message("host control", "JavaScript", message)
+}
+
+fn ensure_actions_running(paused: &AtomicBool) -> Result<(), Error> {
+    if paused.load(Ordering::Acquire) {
+        Err(Error::new_from_js_message("actions", "JavaScript", "actions are paused"))
+    } else { Ok(()) }
+}
 
 struct ScriptSession {
     // Rust drops fields in declaration order. Persistent roots must be gone
@@ -79,11 +97,12 @@ impl ScriptSession {
         })
     }
 
-    async fn invoke(
+    async fn invoke<C: Into<HostControls>>(
         &self,
         state: State,
-        mouse: SharedMouse,
+        controls: C,
     ) -> rquickjs::Result<()> {
+        let controls = controls.into();
         let script = self.script.clone();
         let memory = self.memory.clone();
         let freeze = self.freeze.clone();
@@ -111,7 +130,7 @@ impl ScriptSession {
                 let rev = Object::new(ctx.clone())?;
                 rev.set("state", state_object.clone())?;
 
-                let click_mouse = mouse.clone();
+                let click_controls = controls.clone();
                 rev.set(
                     "click",
                     Function::new(
@@ -157,9 +176,14 @@ impl ScriptSession {
                                 }
                             };
 
-                            click_mouse
+                            ensure_actions_running(&click_controls.actions_paused)?;
+                            let (screen_x, screen_y) = click_controls.window
+                                .focus_and_translate(x as i32, y as i32)
+                                .map_err(host_error)?;
+                            ensure_actions_running(&click_controls.actions_paused)?;
+                            click_controls.mouse
                                 .borrow_mut()
-                                .click_at(x as i32, y as i32, button)
+                                .click_at(screen_x, screen_y, button)
                                 .map_err(|message| {
                                     Error::new_from_js_message(
                                         "mouse input",
@@ -170,6 +194,17 @@ impl ScriptSession {
                         },
                     )?,
                 )?;
+
+                let resize_window = controls.window.clone();
+                let resize_paused = controls.actions_paused.clone();
+                rev.set("resize", Function::new(ctx.clone(), move |width: f64, height: f64| {
+                    ensure_actions_running(&resize_paused)?;
+                    if !width.is_finite() || width.fract() != 0.0 || width <= 0.0 || width > i32::MAX as f64
+                        || !height.is_finite() || height.fract() != 0.0 || height <= 0.0 || height > i32::MAX as f64 {
+                        return Err(Error::new_from_js_message("number", "positive finite 32-bit integer dimensions", "invalid window dimensions"));
+                    }
+                    resize_window.resize_client(width as i32, height as i32).map_err(host_error)
+                })?)?;
 
                 rev.set(
                     "sleep",
@@ -228,21 +263,21 @@ pub async fn run(
             .map_err(|error| format!("failed to initialize mouse input: {error}"))?,
     ));
 
-    run_with_mouse(
+    run_with_controls(
         commands,
         states,
         initial_path,
-        mouse,
+        HostControls { mouse, window: Rc::new(Win32WindowControl), actions_paused: Arc::new(AtomicBool::new(false)) },
         Duration::from_millis(50),
     )
     .await
 }
 
-async fn run_with_mouse(
+async fn run_with_controls(
     mut commands: mpsc::Receiver<ScriptCommand>,
     mut states: watch::Receiver<State>,
     initial_path: std::path::PathBuf,
-    mouse: SharedMouse,
+    controls: HostControls,
     loop_delay: Duration,
 ) -> Result<(), String> {
     let mut current_path = initial_path;
@@ -337,7 +372,7 @@ async fn run_with_mouse(
         };
         let snapshot = states.borrow_and_update().clone();
 
-        if let Err(error) = active.invoke(snapshot, mouse.clone()).await {
+        if let Err(error) = active.invoke(snapshot, controls.clone()).await {
             eprintln!("script invocation failed: {error}");
         }
 
@@ -365,6 +400,85 @@ mod tests {
 
     struct FakeMouse {
         clicks: Rc<RefCell<Vec<Click>>>,
+    }
+
+    struct FakeWindow;
+
+    impl WindowControl for FakeWindow {
+        fn resize_client(&self, _width: i32, _height: i32) -> Result<(), String> { Ok(()) }
+        fn focus_and_translate(&self, x: i32, y: i32) -> Result<(i32, i32), String> { Ok((x, y)) }
+    }
+
+    impl From<SharedMouse> for HostControls {
+        fn from(mouse: SharedMouse) -> Self {
+            Self { mouse, window: Rc::new(FakeWindow), actions_paused: Arc::new(AtomicBool::new(false)) }
+        }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum HostEvent { Resize(i32, i32), FocusAndTranslate(i32, i32), Click(i32, i32, Button) }
+
+    struct RecordingWindow { events: Rc<RefCell<Vec<HostEvent>>>, translated: (i32, i32), error: bool }
+    impl WindowControl for RecordingWindow {
+        fn resize_client(&self, width: i32, height: i32) -> Result<(), String> {
+            self.events.borrow_mut().push(HostEvent::Resize(width, height)); Ok(())
+        }
+        fn focus_and_translate(&self, x: i32, y: i32) -> Result<(i32, i32), String> {
+            self.events.borrow_mut().push(HostEvent::FocusAndTranslate(x, y));
+            if self.error { Err("coordinates outside client area".into()) } else { Ok(self.translated) }
+        }
+    }
+    struct RecordingMouse { events: Rc<RefCell<Vec<HostEvent>>> }
+    impl MouseInput for RecordingMouse {
+        fn click_at(&mut self, x: i32, y: i32, button: Button) -> Result<(), String> {
+            self.events.borrow_mut().push(HostEvent::Click(x, y, button)); Ok(())
+        }
+    }
+    fn recording_controls(translated: (i32, i32)) -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        (HostControls { mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })), window: Rc::new(RecordingWindow { events: events.clone(), translated, error: false }), actions_paused: Arc::new(AtomicBool::new(false)) }, events)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resize_and_relative_click_use_the_window_controller_in_order() {
+        let session = ScriptSession::new(r#"((rev) => { rev.resize(1280, 720); rev.click(10, 20, "right"); })"#).await.unwrap();
+        let (controls, events) = recording_controls((1010, 2020));
+        session.invoke(State::default(), controls).await.unwrap();
+        assert_eq!(*events.borrow(), vec![HostEvent::Resize(1280, 720), HostEvent::FocusAndTranslate(10, 20), HostEvent::Click(1010, 2020, Button::Right)]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn resize_rejects_invalid_dimensions_without_window_work() {
+        for source in [r#"((rev) => rev.resize(0, 720))"#, r#"((rev) => rev.resize(-1, 720))"#, r#"((rev) => rev.resize(1.5, 720))"#, r#"((rev) => rev.resize(Infinity, 720))"#] {
+            let (controls, events) = recording_controls((0, 0));
+            let session = ScriptSession::new(source).await.unwrap();
+            assert!(session.invoke(State::default(), controls).await.is_err());
+            assert!(events.borrow().is_empty());
+        }
+        let (controls, events) = recording_controls((0, 0));
+        let session = ScriptSession::new(r#"((rev) => rev.resize(1280, 720))"#).await.unwrap();
+        session.invoke(State::default(), controls).await.unwrap();
+        assert_eq!(*events.borrow(), vec![HostEvent::Resize(1280, 720)]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn translation_error_prevents_click() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let controls = HostControls {
+            mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })),
+            window: Rc::new(RecordingWindow { events: events.clone(), translated: (0, 0), error: true }),
+            actions_paused: Arc::new(AtomicBool::new(false)),
+        };
+        let session = ScriptSession::new(r#"((rev) => rev.click(10, 20))"#).await.unwrap();
+        assert!(session.invoke(State::default(), controls).await.is_err());
+        assert_eq!(*events.borrow(), vec![HostEvent::FocusAndTranslate(10, 20)]);
+    }
+
+    async fn run_with_mouse(
+        commands: mpsc::Receiver<ScriptCommand>, states: watch::Receiver<State>,
+        initial_path: std::path::PathBuf, mouse: SharedMouse, loop_delay: Duration,
+    ) -> Result<(), String> {
+        run_with_controls(commands, states, initial_path, mouse.into(), loop_delay).await
     }
 
     impl MouseInput for FakeMouse {
