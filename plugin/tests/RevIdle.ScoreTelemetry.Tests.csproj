@@ -16,10 +16,25 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Reference Include="$([System.IO.Directory]::GetFiles('$(GameDir)\BepInEx\core', '*.dll'))">
+    <Reference Include="$(GameDir)\BepInEx\core\BepInEx.Core.dll">
       <Private>true</Private>
     </Reference>
-    <Reference Include="$([System.IO.Directory]::GetFiles('$(GameDir)\BepInEx\interop', '*.dll'))">
+    <Reference Include="$(GameDir)\BepInEx\core\BepInEx.Unity.IL2CPP.dll">
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\core\Il2CppInterop.Runtime.dll">
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\Assembly-CSharp.dll">
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\Il2Cppmscorlib.dll">
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.CoreModule.dll">
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.dll">
       <Private>true</Private>
     </Reference>
   </ItemGroup>
