@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Match visible top-level windows by the case-insensitive executable filename `Revolution Idle.exe`; never depend on the window title.
+- The client targets Windows only. Do not add `cfg(windows)` guards or target-specific Cargo dependency sections.
 - Require exactly one matching window. Zero or multiple matches must block window and mouse actions.
 - `rev.resize(width, height)` targets the drawable client area and accepts only finite, positive, signed 32-bit integer dimensions.
 - `rev.click(x, y, button)` uses client-relative coordinates and permits only `0 <= x < clientWidth` and `0 <= y < clientHeight`.
@@ -30,7 +31,7 @@
 - Modify `client/src/script.rs`: shared host controls, `rev.resize`, relative `rev.click`, gate checks, and requested-pause lifecycle handling.
 - Modify `client/src/console.rs`: add the internal `ScriptCommand::SetPaused(bool)` variant without changing textual console syntax.
 - Modify `client/src/main.rs`: create the shared gate, start the hotkey worker, pass the gate to the script runner, and shut down the worker.
-- Modify `client/Cargo.toml` and `client/Cargo.lock`: add the direct Windows-only `windows` 0.61.3 feature set.
+- Modify `client/Cargo.toml` and `client/Cargo.lock`: add the direct `windows` 0.61.3 feature set.
 
 ---
 
@@ -115,12 +116,11 @@ cargo test --manifest-path client/Cargo.toml window::tests
 
 Expected: compilation fails because `is_game_executable`, `require_exactly_one`, `ClientGeometry`, and `outer_size_for_client` do not exist.
 
-- [ ] **Step 3: Add the direct Windows dependency and minimal pure helpers**
+- [ ] **Step 3: Add the direct dependency and minimal pure helpers**
 
-Add this target dependency so non-Windows dependency resolution remains isolated:
+Add this line to the existing `[dependencies]` section:
 
 ```toml
-[target.'cfg(windows)'.dependencies]
 windows = { version = "0.61.3", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

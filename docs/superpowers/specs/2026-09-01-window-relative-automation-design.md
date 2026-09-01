@@ -82,10 +82,10 @@ The hotkey thread unregisters F8 during shutdown. The main task requests message
 
 - `client/src/window.rs`: game-window discovery, exact client sizing, focus verification, bounds checking, and relative-to-screen translation.
 - `client/src/hotkey.rs`: F8 registration, immediate atomic gate update, `SetPaused(bool)` delivery, message-loop shutdown, and thread joining.
-- `client/src/script.rs`: `rev.resize`, relative `rev.click`, injected window-control test seam, action-gate errors, and lifecycle toggle handling.
-- `client/src/console.rs`: add the internal `TogglePause` command variant. Text console syntax remains unchanged.
+- `client/src/script.rs`: `rev.resize`, relative `rev.click`, injected window-control test seam, action-gate errors, and requested-pause lifecycle handling.
+- `client/src/console.rs`: add the internal `SetPaused(bool)` command variant. Text console syntax remains unchanged.
 - `client/src/main.rs`: create the shared gate, start the hotkey worker, pass dependencies to the script runner, and shut the worker down deterministically.
-- `client/Cargo.toml`: add a direct Windows-only `windows` 0.61.3 dependency with only the required Win32 feature sets.
+- `client/Cargo.toml`: add a direct `windows` 0.61.3 dependency with only the required Win32 feature sets. The client targets Windows only, so no target-specific dependency section or platform guard is needed.
 
 The current-thread Tokio runtime continues to own QuickJS and Enigo. Synchronous window operations run only while servicing JavaScript host calls. The blocking Win32 hotkey message loop runs on its dedicated OS thread and communicates through the command channel and atomic gate.
 
