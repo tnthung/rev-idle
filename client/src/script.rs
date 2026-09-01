@@ -87,9 +87,18 @@ impl ScriptSession {
                 let memory: Object = memory.restore(&ctx)?;
 
                 let state_object = Object::new(ctx.clone())?;
-                state_object.set("score", state.score)?;
+                match state.score {
+                    Some(score) => state_object.set("score", score)?,
+                    None => state_object.set("score", Value::new_null(ctx.clone()))?,
+                }
                 state_object.set("sequence", state.sequence)?;
-                state_object.set("receivedAtMs", state.received_at_ms)?;
+                match state.received_at_ms {
+                    Some(received_at_ms) => {
+                        state_object.set("receivedAtMs", received_at_ms)?
+                    }
+                    None => state_object
+                        .set("receivedAtMs", Value::new_null(ctx.clone()))?,
+                }
 
                 let rev = Object::new(ctx.clone())?;
                 rev.set("state", state_object.clone())?;
@@ -307,6 +316,24 @@ mod tests {
                 .await
                 .is_err()
         );
+        session.invoke(State::default(), mouse).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn missing_state_fields_are_null() {
+        let session = ScriptSession::new(
+            r#"((rev) => {
+                if (rev.state.score !== null || rev.state.receivedAtMs !== null) {
+                    throw new Error("missing state fields must be null");
+                }
+            })"#,
+        )
+        .await
+        .unwrap();
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: Rc::new(RefCell::new(Vec::new())),
+        }));
+
         session.invoke(State::default(), mouse).await.unwrap();
     }
 
