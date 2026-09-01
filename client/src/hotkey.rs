@@ -9,7 +9,7 @@ use windows::Win32::{
     Foundation::{LPARAM, WPARAM},
     System::Threading::GetCurrentThreadId,
     UI::{Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_F8}, WindowsAndMessaging::{
-        GetMessageW, PostThreadMessageW, MSG, WM_HOTKEY, WM_QUIT,
+        GetMessageW, PeekMessageW, PostThreadMessageW, MSG, PM_NOREMOVE, WM_HOTKEY, WM_QUIT,
     }},
 };
 
@@ -72,6 +72,10 @@ fn run_registered_hotkey_loop<P: HotkeyPlatform>(
     result
 }
 
+fn should_join_after_quit_post(post_succeeded: bool, worker_finished: bool) -> bool {
+    post_succeeded || worker_finished
+}
+
 struct Win32HotkeyPlatform;
 
 impl HotkeyPlatform for Win32HotkeyPlatform {
@@ -115,6 +119,8 @@ impl HotkeyWorker {
         let (startup_tx, startup_rx) = std_mpsc::channel();
         let handle = thread::spawn(move || {
             let thread_id = unsafe { GetCurrentThreadId() };
+            let mut message = MSG::default();
+            let _ = unsafe { PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE) };
             let mut platform = Win32HotkeyPlatform;
             let registration = platform.register();
             startup_tx.send((thread_id, registration.clone())).ok();
@@ -134,7 +140,11 @@ impl HotkeyWorker {
     pub fn shutdown(mut self) -> Result<(), String> {
         let post_result = unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) }
             .map_err(|error| format!("PostThreadMessageW failed: {error}"));
-        let join_result = self.handle.take().unwrap().join()
+        let handle = self.handle.take().unwrap();
+        if !should_join_after_quit_post(post_result.is_ok(), handle.is_finished()) {
+            return Err(post_result.unwrap_err());
+        }
+        let join_result = handle.join()
             .map_err(|_| "hotkey worker thread panicked".to_string())?;
         post_result?;
         join_result
@@ -144,8 +154,10 @@ impl HotkeyWorker {
 impl Drop for HotkeyWorker {
     fn drop(&mut self) {
         if let Some(handle) = self.handle.take() {
-            let _ = unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) };
-            let _ = handle.join();
+            let post_succeeded = unsafe { PostThreadMessageW(self.thread_id, WM_QUIT, WPARAM(0), LPARAM(0)) }.is_ok();
+            if should_join_after_quit_post(post_succeeded, handle.is_finished()) {
+                let _ = handle.join();
+            }
         }
     }
 }
@@ -221,5 +233,15 @@ mod tests {
         let result = run_hotkey_loop(platform, Arc::new(AtomicBool::new(false)), command_tx);
         assert_eq!(result, Ok(()));
         assert_eq!(unregister_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn failed_quit_post_does_not_join_running_worker() {
+        assert!(!should_join_after_quit_post(false, false));
+    }
+
+    #[test]
+    fn failed_quit_post_joins_finished_worker() {
+        assert!(should_join_after_quit_post(false, true));
     }
 }
