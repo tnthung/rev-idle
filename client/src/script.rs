@@ -1181,6 +1181,19 @@ mod tests {
                     .unwrap();
                 assert!(!gate.load(Ordering::Acquire));
 
+                command_tx.send(ScriptCommand::Pause).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    loop {
+                        if gate.load(Ordering::Acquire) {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                while event_rx.try_recv().is_ok() {}
+
                 command_tx.send(ScriptCommand::Stop).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), async {
                     loop {
@@ -1193,19 +1206,88 @@ mod tests {
                 .await
                 .unwrap();
                 assert!(!gate.load(Ordering::Acquire));
+                assert!(tokio::time::timeout(
+                    Duration::from_millis(15),
+                    event_rx.recv(),
+                )
+                .await
+                .is_err());
 
+                command_tx
+                    .send(ScriptCommand::Load(second.clone()))
+                    .await
+                    .unwrap();
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(!gate.load(Ordering::Acquire));
+
+                command_tx.send(ScriptCommand::Pause).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    loop {
+                        if gate.load(Ordering::Acquire) {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                while event_rx.try_recv().is_ok() {}
+                fs::remove_file(&second).unwrap();
+
+                command_tx.send(ScriptCommand::Reload).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    loop {
+                        if !gate.load(Ordering::Acquire) {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+                assert!(!gate.load(Ordering::Acquire));
+                assert!(tokio::time::timeout(
+                    Duration::from_millis(15),
+                    event_rx.recv(),
+                )
+                .await
+                .is_err());
+
+                gate.store(true, Ordering::Release);
                 command_tx
                     .send(ScriptCommand::SetPaused(true))
                     .await
                     .unwrap();
-                tokio::task::yield_now().await;
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    loop {
+                        if !gate.load(Ordering::Acquire) {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
                 assert!(!gate.load(Ordering::Acquire));
 
+                gate.store(true, Ordering::Release);
                 command_tx
                     .send(ScriptCommand::SetPaused(false))
                     .await
                     .unwrap();
-                tokio::task::yield_now().await;
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    loop {
+                        if !gate.load(Ordering::Acquire) {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
                 assert!(!gate.load(Ordering::Acquire));
 
                 runner.abort();
