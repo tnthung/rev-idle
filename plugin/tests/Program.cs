@@ -7,7 +7,8 @@ using RevIdle.ScoreTelemetry;
 await ScorePayloadUsesInvariantRoundTripFormatting();
 InvalidPortsDisablePublishing();
 await PublisherSendsExactPayloadToLoopback();
-Console.WriteLine("3 tests passed.");
+TickerUsesFiftyMillisecondAccumulator();
+System.Console.WriteLine("4 tests passed.");
 
 static Task ScorePayloadUsesInvariantRoundTripFormatting()
 {
@@ -50,6 +51,22 @@ static async Task PublisherSendsExactPayloadToLoopback()
     UdpReceiveResult result = await receiver.ReceiveAsync(timeout.Token);
     Equal("127.0.0.1", result.RemoteEndPoint.Address.ToString(), nameof(PublisherSendsExactPayloadToLoopback));
     Equal("{\"score\":\"2.5e42\"}", Encoding.UTF8.GetString(result.Buffer), nameof(PublisherSendsExactPayloadToLoopback));
+}
+
+static void TickerUsesFiftyMillisecondAccumulator()
+{
+    float elapsed = 0f;
+    Equal(false, ScoreTicker.AdvanceTimer(ref elapsed, 0.049f), nameof(TickerUsesFiftyMillisecondAccumulator));
+    Equal(true, ScoreTicker.AdvanceTimer(ref elapsed, 0.001f), nameof(TickerUsesFiftyMillisecondAccumulator));
+    Near(0f, elapsed, nameof(TickerUsesFiftyMillisecondAccumulator));
+    Equal(true, ScoreTicker.AdvanceTimer(ref elapsed, 0.12f), nameof(TickerUsesFiftyMillisecondAccumulator));
+    Near(0.02f, elapsed, nameof(TickerUsesFiftyMillisecondAccumulator));
+}
+
+static void Near(float expected, float actual, string testName)
+{
+    if (MathF.Abs(expected - actual) > 0.0001f)
+        throw new InvalidOperationException($"{testName}: expected approximately '{expected}', got '{actual}'.");
 }
 
 static void Equal<T>(T expected, T actual, string testName)
