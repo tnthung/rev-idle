@@ -13,6 +13,7 @@ pub enum ScriptCommand {
     Pause,
     Resume,
     Stop,
+    SetPaused(bool),
 }
 
 pub fn parse_command(line: &str) -> Result<ScriptCommand, String> {
