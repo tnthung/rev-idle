@@ -2,6 +2,7 @@ mod window;
 mod console;
 mod script;
 mod udp;
+pub mod hotkey;
 
 use std::{io, path::PathBuf};
 use tokio::{
