@@ -1,7 +1,7 @@
 use std::{io, path::PathBuf};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    sync::mpsc,
+    sync::{mpsc, watch},
 };
 
 const USAGE: &str = "commands: load <script-path> | reload | pause | resume | stop";
@@ -48,10 +48,24 @@ pub fn parse_command(line: &str) -> Result<ScriptCommand, String> {
     }
 }
 
-pub async fn run(command_tx: mpsc::Sender<ScriptCommand>) -> io::Result<()> {
+pub async fn run(
+    command_tx: mpsc::Sender<ScriptCommand>,
+    mut shutdown: watch::Receiver<bool>,
+) -> io::Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
 
-    while let Some(line) = lines.next_line().await? {
+    loop {
+        let line = tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+                continue;
+            }
+            line = lines.next_line() => line?,
+        };
+        let Some(line) = line else { break };
+
         match parse_command(&line) {
             Ok(command) => {
                 if command_tx.send(command).await.is_err() {

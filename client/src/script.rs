@@ -21,7 +21,16 @@ use rquickjs::{
     Persistent,
     Value,
 };
-use std::{cell::RefCell, path::Path, rc::Rc, time::Duration};
+use std::{
+    cell::RefCell,
+    path::Path,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio::sync::{mpsc, watch};
 
 trait MouseInput {
@@ -454,30 +463,60 @@ pub async fn run(
     hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
     actions_paused: ActionGate,
+    shutdown: watch::Receiver<bool>,
+    script_running: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mouse: SharedMouse = Rc::new(RefCell::new(
         Enigo::new(&enigo::Settings::default())
             .map_err(|error| format!("failed to initialize mouse input: {error}"))?,
     ));
 
-    run_with_controls(
+    run_with_controls_and_lifecycle(
         commands,
         states,
         hotkey_pauses,
         initial_path,
         HostControls { mouse, window: Rc::new(Win32WindowControl), actions_paused },
         Duration::from_millis(50),
+        shutdown,
+        script_running,
     )
     .await
 }
 
+#[cfg(test)]
 async fn run_with_controls(
+    commands: mpsc::Receiver<ScriptCommand>,
+    states: watch::Receiver<State>,
+    hotkey_pauses: watch::Receiver<PauseUpdate>,
+    initial_path: Option<std::path::PathBuf>,
+    controls: HostControls,
+    loop_delay: Duration,
+) -> Result<(), String> {
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+    let script_running = Arc::new(AtomicBool::new(false));
+    run_with_controls_and_lifecycle(
+        commands,
+        states,
+        hotkey_pauses,
+        initial_path,
+        controls,
+        loop_delay,
+        shutdown,
+        script_running,
+    )
+    .await
+}
+
+async fn run_with_controls_and_lifecycle(
     mut commands: mpsc::Receiver<ScriptCommand>,
     mut states: watch::Receiver<State>,
     mut hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
     controls: HostControls,
     loop_delay: Duration,
+    mut shutdown: watch::Receiver<bool>,
+    script_running: Arc<AtomicBool>,
 ) -> Result<(), String> {
     let mut current_path = initial_path;
     let mut session = match current_path.as_deref() {
@@ -493,6 +532,7 @@ async fn run_with_controls(
         },
         None => None,
     };
+    script_running.store(session.is_some(), Ordering::Release);
     let initial_hotkey_update = *hotkey_pauses.borrow_and_update();
     let mut paused = false;
     apply_hotkey_update(
@@ -504,6 +544,11 @@ async fn run_with_controls(
     let mut hotkey_channel_open = true;
 
     loop {
+        if *shutdown.borrow() {
+            script_running.store(false, Ordering::Release);
+            return Ok(());
+        }
+
         if hotkey_channel_open {
             match hotkey_pauses.has_changed() {
                 Ok(true) => {
@@ -526,6 +571,7 @@ async fn run_with_controls(
                 Ok(command) => Some(command),
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    script_running.store(false, Ordering::Release);
                     return Ok(());
                 }
             }
@@ -547,9 +593,19 @@ async fn run_with_controls(
                     }
                     continue;
                 }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        script_running.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                    continue;
+                }
                 command = commands.recv() => match command {
                     Some(command) => Some(command),
-                    None => return Ok(()),
+                    None => {
+                        script_running.store(false, Ordering::Release);
+                        return Ok(());
+                    }
                 },
             }
         };
@@ -559,12 +615,14 @@ async fn run_with_controls(
                 ScriptCommand::Load(path) => {
                     controls.actions_paused.set_paused(false);
                     session = None;
+                    script_running.store(false, Ordering::Release);
                     paused = false;
                     current_path = Some(path);
                     if let Some(path) = current_path.as_deref() {
                         match load_path(path).await {
                             Ok(loaded) => {
                                 session = Some(loaded);
+                                script_running.store(true, Ordering::Release);
                                 println!("running {}", path.display());
                             }
                             Err(error) => eprintln!("{error}"),
@@ -574,11 +632,13 @@ async fn run_with_controls(
                 ScriptCommand::Reload => {
                     controls.actions_paused.set_paused(false);
                     session = None;
+                    script_running.store(false, Ordering::Release);
                     paused = false;
                     if let Some(path) = current_path.as_deref() {
                         match load_path(path).await {
                             Ok(loaded) => {
                                 session = Some(loaded);
+                                script_running.store(true, Ordering::Release);
                                 println!("reloaded {}", path.display());
                             }
                             Err(error) => eprintln!("{error}"),
@@ -616,6 +676,7 @@ async fn run_with_controls(
                 ScriptCommand::Stop => {
                     controls.actions_paused.set_paused(false);
                     if session.take().is_some() {
+                        script_running.store(false, Ordering::Release);
                         paused = false;
                         println!("script stopped");
                     } else {
@@ -643,8 +704,20 @@ async fn run_with_controls(
         };
         let snapshot = states.borrow_and_update().clone();
 
-        if let Err(error) = active.invoke(snapshot, controls.clone()).await {
-            eprintln!("script invocation failed: {error}");
+        let invocation = active.invoke(snapshot, controls.clone());
+        tokio::pin!(invocation);
+        tokio::select! {
+            result = &mut invocation => {
+                if let Err(error) = result {
+                    eprintln!("script invocation failed: {error}");
+                }
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    script_running.store(false, Ordering::Release);
+                    return Ok(());
+                }
+            }
         }
 
         tokio::time::sleep(loop_delay).await;

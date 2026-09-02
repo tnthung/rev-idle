@@ -54,19 +54,28 @@ async fn receive_one(
     Ok(())
 }
 
-pub async fn run(state_tx: watch::Sender<State>) -> io::Result<()> {
+pub async fn run(
+    state_tx: watch::Sender<State>,
+    mut shutdown: watch::Receiver<bool>,
+) -> io::Result<()> {
     let socket = UdpSocket::bind(LISTEN_ADDRESS).await?;
     let mut sequence = 0;
     let mut buffer = [0_u8; 65_535];
 
     loop {
-        receive_one(
-            &socket,
-            &state_tx,
-            &mut sequence,
-            &mut buffer,
-        )
-        .await?;
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+            }
+            result = receive_one(
+                &socket,
+                &state_tx,
+                &mut sequence,
+                &mut buffer,
+            ) => result?,
+        }
     }
 }
 
