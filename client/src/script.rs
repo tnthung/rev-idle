@@ -283,7 +283,7 @@ pub async fn run(
     commands: mpsc::Receiver<ScriptCommand>,
     states: watch::Receiver<State>,
     hotkey_pauses: watch::Receiver<PauseUpdate>,
-    initial_path: std::path::PathBuf,
+    initial_path: Option<std::path::PathBuf>,
     actions_paused: ActionGate,
 ) -> Result<(), String> {
     let mouse: SharedMouse = Rc::new(RefCell::new(
@@ -306,20 +306,23 @@ async fn run_with_controls(
     mut commands: mpsc::Receiver<ScriptCommand>,
     mut states: watch::Receiver<State>,
     mut hotkey_pauses: watch::Receiver<PauseUpdate>,
-    initial_path: std::path::PathBuf,
+    initial_path: Option<std::path::PathBuf>,
     controls: HostControls,
     loop_delay: Duration,
 ) -> Result<(), String> {
     let mut current_path = initial_path;
-    let mut session = match load_path(&current_path).await {
-        Ok(session) => {
-            println!("running {}", current_path.display());
-            Some(session)
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            None
-        }
+    let mut session = match current_path.as_deref() {
+        Some(path) => match load_path(path).await {
+            Ok(session) => {
+                println!("running {}", path.display());
+                Some(session)
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                None
+            }
+        },
+        None => None,
     };
     let initial_hotkey_update = *hotkey_pauses.borrow_and_update();
     let mut paused = false;
@@ -388,25 +391,31 @@ async fn run_with_controls(
                     controls.actions_paused.set_paused(false);
                     session = None;
                     paused = false;
-                    current_path = path;
-                    match load_path(&current_path).await {
-                        Ok(loaded) => {
-                            session = Some(loaded);
-                            println!("running {}", current_path.display());
+                    current_path = Some(path);
+                    if let Some(path) = current_path.as_deref() {
+                        match load_path(path).await {
+                            Ok(loaded) => {
+                                session = Some(loaded);
+                                println!("running {}", path.display());
+                            }
+                            Err(error) => eprintln!("{error}"),
                         }
-                        Err(error) => eprintln!("{error}"),
                     }
                 }
                 ScriptCommand::Reload => {
                     controls.actions_paused.set_paused(false);
                     session = None;
                     paused = false;
-                    match load_path(&current_path).await {
-                        Ok(loaded) => {
-                            session = Some(loaded);
-                            println!("reloaded {}", current_path.display());
+                    if let Some(path) = current_path.as_deref() {
+                        match load_path(path).await {
+                            Ok(loaded) => {
+                                session = Some(loaded);
+                                println!("reloaded {}", path.display());
+                            }
+                            Err(error) => eprintln!("{error}"),
                         }
-                        Err(error) => eprintln!("{error}"),
+                    } else {
+                        println!("no script is loaded; use load <script-path>");
                     }
                 }
                 ScriptCommand::Pause => {
@@ -677,6 +686,14 @@ mod tests {
         initial_path: std::path::PathBuf, mouse: SharedMouse, loop_delay: Duration,
     ) -> Result<(), String> {
         let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+        run_with_controls(commands, states, pause_rx, Some(initial_path), mouse.into(), loop_delay).await
+    }
+
+    async fn run_with_optional_mouse(
+        commands: mpsc::Receiver<ScriptCommand>, states: watch::Receiver<State>,
+        initial_path: Option<std::path::PathBuf>, mouse: SharedMouse, loop_delay: Duration,
+    ) -> Result<(), String> {
+        let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
         run_with_controls(commands, states, pause_rx, initial_path, mouse.into(), loop_delay).await
     }
 
@@ -690,6 +707,58 @@ mod tests {
             self.clicks.borrow_mut().push(Click { x, y, button });
             Ok(())
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn no_initial_script_starts_stopped_until_loaded() {
+        use std::fs;
+
+        let path = std::env::temp_dir().join(format!(
+            "rev-idle-no-initial-script-test-{}.js",
+            std::process::id(),
+        ));
+        fs::write(&path, r#"((rev) => rev.click(1, 1, "left"))"#).unwrap();
+
+        let clicks = Rc::new(RefCell::new(Vec::new()));
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: clicks.clone(),
+        }));
+        let (command_tx, command_rx) = mpsc::channel(8);
+        let (_state_tx, state_rx) = watch::channel(State::default());
+        let local = tokio::task::LocalSet::new();
+        let cleanup_path = path.clone();
+
+        local
+            .run_until(async move {
+                let runner = tokio::task::spawn_local(run_with_optional_mouse(
+                    command_rx,
+                    state_rx,
+                    None,
+                    mouse,
+                    Duration::from_millis(5),
+                ));
+
+                tokio::time::sleep(Duration::from_millis(15)).await;
+                assert!(clicks.borrow().is_empty());
+
+                command_tx.send(ScriptCommand::Load(path.clone())).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    loop {
+                        if !clicks.borrow().is_empty() {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+
+                runner.abort();
+                let _ = runner.await;
+            })
+            .await;
+
+        fs::remove_file(cleanup_path).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1177,7 +1246,7 @@ mod tests {
                     command_rx,
                     state_rx,
                     pause_rx,
-                    runner_path,
+                    Some(runner_path),
                     controls,
                     Duration::from_millis(1),
                 ));
@@ -1261,7 +1330,7 @@ mod tests {
                     command_rx,
                     state_rx,
                     pause_rx,
-                    runner_path,
+                    Some(runner_path),
                     controls,
                     Duration::from_millis(2),
                 ));

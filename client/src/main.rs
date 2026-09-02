@@ -27,6 +27,7 @@ fn finish_shutdown(selected: io::Result<()>, shutdown: io::Result<()>) -> io::Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
 
     #[test]
     fn cleanup_error_is_returned_when_selected_task_succeeds() {
@@ -39,14 +40,23 @@ mod tests {
         let result = finish_shutdown(Err(io::Error::other("task failed")), Ok(()));
         assert_eq!(result.unwrap_err().to_string(), "task failed");
     }
+
+    #[test]
+    fn omitted_cli_script_path_starts_without_an_initial_script() {
+        assert_eq!(initial_script_path(vec![OsString::from("rev-idle")]), None);
+    }
+}
+
+fn initial_script_path<I>(args: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = std::ffi::OsString>,
+{
+    args.into_iter().nth(1).map(PathBuf::from)
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
-    let initial_path = std::env::args_os()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("script.js"));
+    let initial_path = initial_script_path(std::env::args_os());
     let (state_tx, state_rx) = watch::channel(udp::State::default());
     let actions_paused = hotkey::ActionGate::default();
     let (pause_tx, pause_rx) = watch::channel(hotkey::PauseUpdate::initial());
