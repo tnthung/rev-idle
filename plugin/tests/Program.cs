@@ -26,6 +26,7 @@ StatePayloadSerializesIl2CppDatesAndNullables();
 StatePayloadUsesIl2CppCollectionAccessors();
 StatePayloadIncludesInheritedGameplayProperties();
 StatePayloadExcludesIl2CppDelegatesAndUnityEvents();
+StatePayloadStopsBeforeClrDelegateRuntimeBases();
 BridgeDecodesFullWidthCoordinates();
 BridgeRejectsZeroRequestId();
 BridgeMapsTopLeftClientCoordinatesToUnityCoordinates();
@@ -38,7 +39,7 @@ ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
 ScrollProtocolRejectsZeroRequestId();
 ScrollQueuePreservesOrderAndRejectsDuplicates();
 DispatcherFindsFirstScrollableRaycast();
-System.Console.WriteLine("32 tests passed.");
+System.Console.WriteLine("33 tests passed.");
 
 static void InvalidPortsDisableServer()
 {
@@ -398,6 +399,17 @@ static void StatePayloadExcludesIl2CppDelegatesAndUnityEvents()
     Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "Item.Provider" }, out _), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
 }
 
+static void StatePayloadStopsBeforeClrDelegateRuntimeBases()
+{
+    Action callback = static () => { };
+    var data = new ClrDelegateFixture { Selected = callback, Values = new object[] { callback } };
+
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, Array.Empty<string>(), out byte[] canonicalPayload), nameof(StatePayloadStopsBeforeClrDelegateRuntimeBases));
+    Equal("{\"Values\":[{}]}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadStopsBeforeClrDelegateRuntimeBases));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "Selected" }, out byte[] selectedPayload), nameof(StatePayloadStopsBeforeClrDelegateRuntimeBases));
+    Equal("{\"Selected\":{}}", Encoding.UTF8.GetString(selectedPayload), nameof(StatePayloadStopsBeforeClrDelegateRuntimeBases));
+}
+
 static HttpScoreServer CreateServer()
 {
     using var probe = new TcpListener(IPAddress.Loopback, 0);
@@ -689,6 +701,12 @@ sealed class InheritedFixtureDerived : InheritedFixtureBase
 sealed class FilteredMemberRoot
 {
     public object Item { get; init; } = new();
+}
+
+sealed class ClrDelegateFixture
+{
+    public object Selected { get; init; } = new();
+    public object[] Values { get; init; } = Array.Empty<object>();
 }
 
 sealed class ResponseReader

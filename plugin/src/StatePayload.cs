@@ -327,7 +327,9 @@ internal static class StatePayload
             && current.FullName is not "UnityEngine.Object"
             && current.FullName is not "UnityEngine.Events.UnityEventBase"
             && current.FullName is not "Il2CppSystem.Delegate"
-            && current.FullName is not "Il2CppSystem.MulticastDelegate";
+            && current.FullName is not "Il2CppSystem.MulticastDelegate"
+            && current.FullName is not "System.Delegate"
+            && current.FullName is not "System.MulticastDelegate";
             current = current.BaseType)
         {
             foreach (PropertyInfo property in current.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
