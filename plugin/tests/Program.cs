@@ -5,11 +5,19 @@ using System.Text;
 using RevIdle.ScoreTelemetry;
 
 InvalidPortsDisableServer();
-await ServerReturnsQueuedState();
-await ServerReturnsNotFound();
+await ServerReturnsSelectedState();
+await ServerReturnsAllKeysInDocumentedOrder();
+await ServerDeduplicatesSelectedKeys();
+await ServerRejectsUnknownOrEmptyKeys();
+await ServerMatchesExactRoutes();
 await ServerReturnsMethodNotAllowed();
 await ServerReturnsUnavailableState();
-await ServerDisposesPendingRequest();
+await KeepAliveRequestsUseContentLength();
+await SecondClientCompletesWhileFirstIdle();
+await PartialHeaderTimesOut();
+await TimedOutPendingRequestDoesNotConsumeFreshCompletion();
+await DisposeClosesIdleAndQueuedClientsAndAllowsRebind();
+StatePayloadFormatsBigDoubleValues();
 BridgeDecodesFullWidthCoordinates();
 BridgeRejectsZeroRequestId();
 BridgeMapsTopLeftClientCoordinatesToUnityCoordinates();
@@ -22,7 +30,7 @@ ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
 ScrollProtocolRejectsZeroRequestId();
 ScrollQueuePreservesOrderAndRejectsDuplicates();
 DispatcherFindsFirstScrollableRaycast();
-System.Console.WriteLine("20 tests passed.");
+System.Console.WriteLine("26 tests passed.");
 
 static void InvalidPortsDisableServer()
 {
@@ -34,45 +42,180 @@ static void InvalidPortsDisableServer()
     }
 }
 
-static async Task ServerReturnsQueuedState()
+static async Task ServerReturnsSelectedState()
+{
+    using HttpScoreServer server = CreateServer();
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    ResponseReader reader = new(stream);
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score&key=IP HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"score\":\"2.5e42\",\"IP\":\"7e8\"}")));
+    Equal(true, keys.SequenceEqual(new[] { "score", "IP" }), nameof(ServerReturnsSelectedState));
+    HttpResponse response = await reader.ReadResponse();
+    Equal(200, response.StatusCode, nameof(ServerReturnsSelectedState));
+    Equal("application/json", response.ContentType, nameof(ServerReturnsSelectedState));
+    Equal(response.Body.Length, response.ContentLength, nameof(ServerReturnsSelectedState));
+    Equal("close", response.Connection, nameof(ServerReturnsSelectedState));
+    Equal("{\"score\":\"2.5e42\",\"IP\":\"7e8\"}", Encoding.UTF8.GetString(response.Body), nameof(ServerReturnsSelectedState));
+}
+
+static async Task ServerReturnsAllKeysInDocumentedOrder()
 {
     using HttpScoreServer server = CreateServer();
     using TcpClient client = new();
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
     await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    await WaitForPending(server);
-    server.CompletePending(_ => (200, Encoding.UTF8.GetBytes("{\"score\":\"2.5e42\"}")));
-    string response = await ReadResponse(stream);
-    Equal("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"score\":\"2.5e42\"}", response, nameof(ServerReturnsQueuedState));
+    IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Array.Empty<byte>()));
+    Equal(true, keys.SequenceEqual(new[] { "score", "income", "IP", "infinities", "stars", "stardust", "EP", "eternities", "DP", "AP", "RP", "RPMax", "RPSpent", "unities", "passiveUnities", "astrodust", "singularities", "atoms", "PlP", "PlPperPlG", "PlG", "VE", "ViP", "tarotSwords", "tarotWands", "tarotPentacles", "tarotCups", "goldTarotSwords", "goldTarotWands", "goldTarotPentacles", "goldTarotCups", "tarotDraws", "timeSinceStart", "timeInfinity", "timeEternity", "timeUnity", "timeTotal" }), nameof(ServerReturnsAllKeysInDocumentedOrder));
+    HttpResponse response = await new ResponseReader(stream).ReadResponse();
+    Equal(200, response.StatusCode, nameof(ServerReturnsAllKeysInDocumentedOrder));
 }
 
-static async Task ServerReturnsNotFound()
+static async Task ServerDeduplicatesSelectedKeys()
 {
-    Equal(true, (await Request("GET /other HTTP/1.1", null)).StartsWith("HTTP/1.1 404 Not Found\r\n", StringComparison.Ordinal), nameof(ServerReturnsNotFound));
+    using HttpScoreServer server = CreateServer();
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score&key=IP&key=score HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Array.Empty<byte>()));
+    Equal(true, keys.SequenceEqual(new[] { "score", "IP" }), nameof(ServerDeduplicatesSelectedKeys));
+    Equal(200, (await new ResponseReader(stream).ReadResponse()).StatusCode, nameof(ServerDeduplicatesSelectedKeys));
+}
+
+static async Task ServerRejectsUnknownOrEmptyKeys()
+{
+    using HttpScoreServer server = CreateServer();
+    HttpResponse unknown = await RequestWithServer(server, "GET /state?key=unknown HTTP/1.1");
+    HttpResponse empty = await RequestWithServer(server, "GET /state?key= HTTP/1.1");
+    Equal(400, unknown.StatusCode, nameof(ServerRejectsUnknownOrEmptyKeys));
+    Equal(400, empty.StatusCode, nameof(ServerRejectsUnknownOrEmptyKeys));
+}
+
+static async Task ServerMatchesExactRoutes()
+{
+    using HttpScoreServer server = CreateServer();
+    Equal(404, (await RequestWithServer(server, "GET /other HTTP/1.1")).StatusCode, nameof(ServerMatchesExactRoutes));
+    Equal(404, (await RequestWithServer(server, "GET /stateful HTTP/1.1")).StatusCode, nameof(ServerMatchesExactRoutes));
+    Equal(404, (await RequestWithServer(server, "GET /state/extra HTTP/1.1")).StatusCode, nameof(ServerMatchesExactRoutes));
 }
 
 static async Task ServerReturnsMethodNotAllowed()
 {
-    Equal(true, (await Request("POST /state HTTP/1.1", null)).StartsWith("HTTP/1.1 405 Method Not Allowed\r\n", StringComparison.Ordinal), nameof(ServerReturnsMethodNotAllowed));
+    using HttpScoreServer server = CreateServer();
+    Equal(405, (await RequestWithServer(server, "POST /state HTTP/1.1")).StatusCode, nameof(ServerReturnsMethodNotAllowed));
 }
 
 static async Task ServerReturnsUnavailableState()
 {
     using HttpScoreServer server = CreateServer();
-    Equal(true, (await RequestWithServer(server, "GET /state HTTP/1.1", null)).StartsWith("HTTP/1.1 503 Service Unavailable\r\n", StringComparison.Ordinal), nameof(ServerReturnsUnavailableState));
-}
-
-static async Task ServerDisposesPendingRequest()
-{
-    HttpScoreServer server = CreateServer();
     using TcpClient client = new();
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
-    await WaitForPending(server);
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    await CompletePendingUntil(server, _ => (503, Array.Empty<byte>()));
+    HttpResponse response = await new ResponseReader(stream).ReadResponse();
+    Equal(503, response.StatusCode, nameof(ServerReturnsUnavailableState));
+    Equal(0, response.Body.Length, nameof(ServerReturnsUnavailableState));
+}
+
+static async Task KeepAliveRequestsUseContentLength()
+{
+    using HttpScoreServer server = CreateServer();
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    ResponseReader reader = new(stream);
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
+    IReadOnlyList<string> firstKeys = await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"score\":\"1e2\"}")));
+    Equal(true, firstKeys.SequenceEqual(new[] { "score" }), nameof(KeepAliveRequestsUseContentLength));
+    HttpResponse first = await reader.ReadResponse();
+    Equal(200, first.StatusCode, nameof(KeepAliveRequestsUseContentLength));
+    Equal("keep-alive", first.Connection, nameof(KeepAliveRequestsUseContentLength));
+    Equal(first.Body.Length, first.ContentLength, nameof(KeepAliveRequestsUseContentLength));
+    Equal("{\"score\":\"1e2\"}", Encoding.UTF8.GetString(first.Body), nameof(KeepAliveRequestsUseContentLength));
+
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=IP HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    IReadOnlyList<string> secondKeys = await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"IP\":\"2e3\"}")));
+    Equal(true, secondKeys.SequenceEqual(new[] { "IP" }), nameof(KeepAliveRequestsUseContentLength));
+    HttpResponse second = await reader.ReadResponse();
+    Equal(200, second.StatusCode, nameof(KeepAliveRequestsUseContentLength));
+    Equal("close", second.Connection, nameof(KeepAliveRequestsUseContentLength));
+    Equal(second.Body.Length, second.ContentLength, nameof(KeepAliveRequestsUseContentLength));
+    Equal("{\"IP\":\"2e3\"}", Encoding.UTF8.GetString(second.Body), nameof(KeepAliveRequestsUseContentLength));
+}
+
+static async Task SecondClientCompletesWhileFirstIdle()
+{
+    using HttpScoreServer server = CreateServer();
+    using TcpClient idle = new();
+    await idle.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream idleStream = idle.GetStream();
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"score\":\"5\"}")));
+    HttpResponse response = await new ResponseReader(stream).ReadResponse();
+    Equal(200, response.StatusCode, nameof(SecondClientCompletesWhileFirstIdle));
+}
+
+static async Task PartialHeaderTimesOut()
+{
+    using HttpScoreServer server = CreateServer();
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\n"));
+    await ExpectConnectionClosed(stream, nameof(PartialHeaderTimesOut));
+    Equal(false, server.CompletePending(_ => throw new InvalidOperationException("partial header was queued")), nameof(PartialHeaderTimesOut));
+}
+
+static async Task TimedOutPendingRequestDoesNotConsumeFreshCompletion()
+{
+    using HttpScoreServer server = CreateServer();
+    using (TcpClient stale = new())
+    {
+        await stale.ConnectAsync(IPAddress.Loopback, server.Port);
+        await using NetworkStream staleStream = stale.GetStream();
+        await staleStream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+        await ExpectConnectionClosed(staleStream, nameof(TimedOutPendingRequestDoesNotConsumeFreshCompletion));
+    }
+
+    using TcpClient fresh = new();
+    await fresh.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream freshStream = fresh.GetStream();
+    ResponseReader reader = new(freshStream);
+    await freshStream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=IP HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"IP\":\"9e1\"}")));
+    Equal(true, keys.SequenceEqual(new[] { "IP" }), nameof(TimedOutPendingRequestDoesNotConsumeFreshCompletion));
+    Equal(200, (await reader.ReadResponse()).StatusCode, nameof(TimedOutPendingRequestDoesNotConsumeFreshCompletion));
+}
+
+static async Task DisposeClosesIdleAndQueuedClientsAndAllowsRebind()
+{
+    HttpScoreServer server = CreateServer();
+    int port = server.Port;
+    using TcpClient idle = new();
+    await idle.ConnectAsync(IPAddress.Loopback, port);
+    await using NetworkStream idleStream = idle.GetStream();
+    using TcpClient queued = new();
+    await queued.ConnectAsync(IPAddress.Loopback, port);
+    await using NetworkStream queuedStream = queued.GetStream();
+    await queuedStream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
     server.Dispose();
-    Equal(0, await stream.ReadAsync(new byte[1]), nameof(ServerDisposesPendingRequest));
+    server.Dispose();
+    await ExpectConnectionClosed(idleStream, nameof(DisposeClosesIdleAndQueuedClientsAndAllowsRebind));
+    await ExpectConnectionClosed(queuedStream, nameof(DisposeClosesIdleAndQueuedClientsAndAllowsRebind));
+    using HttpScoreServer rebound = HttpScoreServer.Create(port.ToString(CultureInfo.InvariantCulture)) ?? throw new InvalidOperationException("server failed to rebind after disposal");
+}
+
+static void StatePayloadFormatsBigDoubleValues()
+{
+    byte[] payload = StatePayload.Encode(new[] { ("score", 2.5, 42d), ("timeInfinity", 3.5, 7d), ("timeEternity", 4.5, 8d) });
+    Equal("{\"score\":\"2.5e42\",\"timeInfinity\":\"3.5e7\",\"timeEternity\":\"4.5e8\"}", Encoding.UTF8.GetString(payload), nameof(StatePayloadFormatsBigDoubleValues));
 }
 
 static HttpScoreServer CreateServer()
@@ -84,39 +227,41 @@ static HttpScoreServer CreateServer()
     return HttpScoreServer.Create(port.ToString(CultureInfo.InvariantCulture)) ?? throw new InvalidOperationException("server failed to bind");
 }
 
-static async Task WaitForPending(HttpScoreServer server)
-{
-    await Task.Delay(100);
-}
-
-static async Task<string> Request(string request, byte[]? payload)
-{
-    using HttpScoreServer server = CreateServer();
-    return await RequestWithServer(server, request, payload);
-}
-
-static async Task<string> RequestWithServer(HttpScoreServer server, string request, byte[]? payload)
+static async Task<HttpResponse> RequestWithServer(HttpScoreServer server, string request)
 {
     using TcpClient client = new();
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
     await stream.WriteAsync(Encoding.ASCII.GetBytes($"{request}\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    if (request.StartsWith("GET /state", StringComparison.Ordinal))
-    {
-        await WaitForPending(server);
-        server.CompletePending(_ => payload is null ? (503, Array.Empty<byte>()) : (200, payload));
-    }
-    return await ReadResponse(stream);
+    return await new ResponseReader(stream).ReadResponse();
 }
 
-static async Task<string> ReadResponse(NetworkStream stream)
+static async Task<IReadOnlyList<string>> CompletePendingUntil(HttpScoreServer server, Func<IReadOnlyList<string>, (int StatusCode, byte[] Body)> complete)
 {
-    using var memory = new MemoryStream();
-    byte[] buffer = new byte[1024];
-    int read;
-    while ((read = await stream.ReadAsync(buffer)) > 0)
-        memory.Write(buffer, 0, read);
-    return Encoding.UTF8.GetString(memory.ToArray());
+    IReadOnlyList<string>? observed = null;
+    DateTime deadline = DateTime.UtcNow.AddSeconds(4);
+    while (DateTime.UtcNow < deadline)
+    {
+        if (server.CompletePending(keys =>
+        {
+            observed = keys.ToArray();
+            return complete(keys);
+        }))
+            return observed!;
+        await Task.Delay(10);
+    }
+    throw new InvalidOperationException("timed out waiting for a pending request");
+}
+
+static async Task ExpectConnectionClosed(NetworkStream stream, string testName)
+{
+    try
+    {
+        Equal(0, await stream.ReadAsync(new byte[1]).AsTask().WaitAsync(TimeSpan.FromSeconds(4)), testName);
+    }
+    catch (IOException)
+    {
+    }
 }
 
 static void BridgeDecodesFullWidthCoordinates()
@@ -245,4 +390,68 @@ static void Equal<T>(T expected, T actual, string testName)
 {
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
         throw new InvalidOperationException($"{testName}: expected '{expected}', got '{actual}'.");
+}
+
+sealed record HttpResponse(int StatusCode, string ContentType, int ContentLength, string Connection, byte[] Body);
+
+sealed class ResponseReader
+{
+    private readonly NetworkStream _stream;
+    private byte[] _buffer = Array.Empty<byte>();
+
+    public ResponseReader(NetworkStream stream)
+    {
+        _stream = stream;
+    }
+
+    public async Task<HttpResponse> ReadResponse()
+    {
+        byte[] readBuffer = new byte[1024];
+        while (true)
+        {
+            int delimiter = FindHeaderDelimiter();
+            if (delimiter >= 0)
+            {
+                string[] lines = Encoding.ASCII.GetString(_buffer, 0, delimiter).Split("\r\n");
+                string[] status = lines[0].Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+                int contentLength = 0;
+                string contentType = "";
+                string connection = "";
+                foreach (string line in lines.Skip(1))
+                {
+                    string[] pair = line.Split(':', 2);
+                    if (pair.Length != 2)
+                        continue;
+                    if (pair[0].Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                        contentLength = int.Parse(pair[1].Trim(), CultureInfo.InvariantCulture);
+                    if (pair[0].Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
+                        contentType = pair[1].Trim();
+                    if (pair[0].Equals("Connection", StringComparison.OrdinalIgnoreCase))
+                        connection = pair[1].Trim();
+                }
+                int bodyStart = delimiter + 4;
+                if (_buffer.Length - bodyStart >= contentLength)
+                {
+                    byte[] body = _buffer[bodyStart..(bodyStart + contentLength)];
+                    _buffer = _buffer[(bodyStart + contentLength)..];
+                    return new HttpResponse(int.Parse(status[1], CultureInfo.InvariantCulture), contentType, contentLength, connection, body);
+                }
+            }
+
+            int read = await _stream.ReadAsync(readBuffer).AsTask().WaitAsync(TimeSpan.FromSeconds(4));
+            if (read == 0)
+                throw new InvalidOperationException("connection closed before response");
+            int oldLength = _buffer.Length;
+            Array.Resize(ref _buffer, oldLength + read);
+            readBuffer.AsSpan(0, read).CopyTo(_buffer.AsSpan(oldLength));
+        }
+    }
+
+    private int FindHeaderDelimiter()
+    {
+        for (int i = 0; i <= _buffer.Length - 4; i++)
+            if (_buffer[i] == '\r' && _buffer[i + 1] == '\n' && _buffer[i + 2] == '\r' && _buffer[i + 3] == '\n')
+                return i;
+        return -1;
+    }
 }
