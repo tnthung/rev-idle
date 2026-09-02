@@ -4,13 +4,19 @@ use std::{
 };
 
 use windows::{
-    core::{BOOL, PWSTR},
+    core::{BOOL, Error as WinError, PWSTR},
     Win32::{
-        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, WPARAM},
+        Foundation::{CloseHandle, GlobalFree, HANDLE, HGLOBAL, HWND, LPARAM, POINT, RECT, WPARAM},
         Graphics::Gdi::ClientToScreen,
-        System::Threading::{
-            OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-            PROCESS_QUERY_LIMITED_INFORMATION,
+        System::{
+            Console::GetConsoleWindow,
+            DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+            Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
+            Ole::CF_UNICODETEXT,
+            Threading::{
+                OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+                PROCESS_QUERY_LIMITED_INFORMATION,
+            },
         },
         UI::WindowsAndMessaging::{
             EnumWindows, GetClientRect, GetWindowRect, GetWindowThreadProcessId,
@@ -31,6 +37,72 @@ const GAME_EXECUTABLE: &str = "Revolution Idle.exe";
 const CONSOLE_WINDOW_CLASS: &str = "ConsoleWindowClass";
 const INPUT_BRIDGE_MESSAGE: u32 = 0x8417;
 const SCROLL_BRIDGE_MESSAGE: u32 = 0x8418;
+
+fn free_global(memory: HGLOBAL) {
+    unsafe {
+        let _ = GlobalFree(Some(memory));
+    }
+}
+
+fn unicode_clipboard_contents(text: &str) -> Result<Vec<u16>, String> {
+    if text.contains('\0') {
+        return Err("clipboard text cannot contain a null character".to_string());
+    }
+
+    let text = text
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', "\r\n");
+    Ok(text.encode_utf16().chain(std::iter::once(0)).collect())
+}
+
+fn write_unicode_clipboard(text: &str) -> Result<(), String> {
+    let owner = unsafe { GetConsoleWindow() };
+    if owner.is_invalid() {
+        return Err("GetConsoleWindow returned no console window".to_string());
+    }
+
+    let contents = unicode_clipboard_contents(text)?;
+    let byte_count = contents
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .ok_or_else(|| "clipboard text is too large".to_string())?;
+    let memory = unsafe { GlobalAlloc(GMEM_MOVEABLE, byte_count) }
+        .map_err(|error| format!("GlobalAlloc failed: {error}"))?;
+    let destination = unsafe { GlobalLock(memory) };
+    if destination.is_null() {
+        let error = WinError::from_win32();
+        free_global(memory);
+        return Err(format!("GlobalLock failed: {error}"));
+    }
+    unsafe {
+        std::ptr::copy_nonoverlapping(contents.as_ptr(), destination.cast::<u16>(), contents.len());
+        let _ = GlobalUnlock(memory);
+    }
+
+    if let Err(error) = unsafe { OpenClipboard(Some(owner)) } {
+        free_global(memory);
+        return Err(format!("OpenClipboard failed: {error}"));
+    }
+
+    let result = unsafe { EmptyClipboard() }
+        .map_err(|error| format!("EmptyClipboard failed: {error}"))
+        .and_then(|()| {
+            unsafe {
+                SetClipboardData(CF_UNICODETEXT.0 as u32, Some(HANDLE(memory.0)))
+            }
+            .map(|_| ())
+            .map_err(|error| format!("SetClipboardData failed: {error}"))
+        });
+    let close_result = unsafe { CloseClipboard() }
+        .map_err(|error| format!("CloseClipboard failed: {error}"));
+
+    if result.is_err() {
+        free_global(memory);
+    }
+    result?;
+    close_result
+}
 
 fn pack_bridge_coordinates(x: i32, y: i32) -> isize {
     (((y as u32 as u64) << 32) | x as u32 as u64) as isize
@@ -145,6 +217,10 @@ fn outer_size_for_client(
 
 pub trait WindowControl {
     fn resize_client(&self, width: i32, height: i32) -> Result<(), String>;
+
+    fn write_clipboard(&self, _text: &str) -> Result<(), String> {
+        Err("clipboard writing is not supported".to_string())
+    }
 
     fn scroll(
         &self,
@@ -312,6 +388,10 @@ pub(crate) fn screen_to_client_position(
 }
 
 impl WindowControl for Win32WindowControl {
+    fn write_clipboard(&self, text: &str) -> Result<(), String> {
+        write_unicode_clipboard(text)
+    }
+
     fn resize_client(&self, width: i32, height: i32) -> Result<(), String> {
         if width <= 0 || height <= 0 {
             return Err("window dimensions must be positive".to_string());
@@ -403,6 +483,14 @@ mod tests {
     use std::path::Path;
 
     fn assert_window_control<T: WindowControl>() {}
+
+    #[test]
+    fn unicode_clipboard_contents_normalizes_line_endings() {
+        assert_eq!(
+            unicode_clipboard_contents("a\nb\rc\r\nd").unwrap(),
+            vec![97, 13, 10, 98, 13, 10, 99, 13, 10, 100, 0]
+        );
+    }
 
     #[test]
     fn matches_only_the_game_executable_name_case_insensitively() {

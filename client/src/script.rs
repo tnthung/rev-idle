@@ -376,6 +376,16 @@ impl ScriptSession {
                         )?,
                     )?;
 
+                    let clipboard_window = controls.window.clone();
+                    let clipboard_paused = controls.actions_paused.clone();
+                    rev.set(
+                        "write_clipboard",
+                        Function::new(ctx.clone(), move |text: String| {
+                            ensure_actions_running(&clipboard_paused)?;
+                            clipboard_window.write_clipboard(&text).map_err(host_error)
+                        })?,
+                    )?;
+
                     let resize_window = controls.window.clone();
                     let resize_paused = controls.actions_paused.clone();
                     rev.set("resize", Function::new(ctx.clone(), move |width: f64, height: f64| {
@@ -909,12 +919,17 @@ mod tests {
         Resize(i32, i32),
         Click(i32, i32, Button),
         Scroll(i32, i32, i32, Axis),
+        Clipboard(String),
     }
 
     struct RecordingWindow { events: Rc<RefCell<Vec<HostEvent>>> }
     impl WindowControl for RecordingWindow {
         fn resize_client(&self, width: i32, height: i32) -> Result<(), String> {
             self.events.borrow_mut().push(HostEvent::Resize(width, height)); Ok(())
+        }
+
+        fn write_clipboard(&self, text: &str) -> Result<(), String> {
+            self.events.borrow_mut().push(HostEvent::Clipboard(text.to_owned())); Ok(())
         }
 
         fn scroll(&self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
@@ -2015,6 +2030,23 @@ mod tests {
             .await;
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn write_clipboard_forwards_text_to_host() {
+        let session = ScriptSession::new(
+            r#"((rev) => rev.write_clipboard("hello 世界"))"#,
+        )
+        .await
+        .unwrap();
+        let (controls, events) = recording_controls();
+
+        session.invoke(State::default(), controls).await.unwrap();
+
+        assert_eq!(
+            *events.borrow(),
+            vec![HostEvent::Clipboard("hello 世界".to_string())]
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
