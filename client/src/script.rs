@@ -13,6 +13,7 @@ use rquickjs::{
     promise::MaybePromise,
     AsyncContext,
     AsyncRuntime,
+    CaughtError,
     Error,
     FromJs,
     Function,
@@ -278,7 +279,7 @@ impl ScriptSession {
         &self,
         state: State,
         controls: C,
-    ) -> rquickjs::Result<()> {
+    ) -> Result<(), String> {
         let controls = controls.into();
         let script = self.script.clone();
         let memory = self.memory.clone();
@@ -286,147 +287,152 @@ impl ScriptSession {
 
         self.context
             .async_with(async move |ctx| {
-                let script: Function = script.restore(&ctx)?;
-                let memory: Object = memory.restore(&ctx)?;
-                let freeze: Function = freeze.restore(&ctx)?;
+                let result: rquickjs::Result<()> = async {
+                    let script: Function = script.restore(&ctx)?;
+                    let memory: Object = memory.restore(&ctx)?;
+                    let freeze: Function = freeze.restore(&ctx)?;
 
-                let state_object = Object::new(ctx.clone())?;
-                match state.score {
-                    Some(score) => state_object.set("score", score)?,
-                    None => state_object.set("score", Value::new_null(ctx.clone()))?,
-                }
-                state_object.set("sequence", state.sequence)?;
-                match state.received_at_ms {
-                    Some(received_at_ms) => {
-                        state_object.set("receivedAtMs", received_at_ms)?
+                    let state_object = Object::new(ctx.clone())?;
+                    match state.score {
+                        Some(score) => state_object.set("score", score)?,
+                        None => state_object.set("score", Value::new_null(ctx.clone()))?,
                     }
-                    None => state_object
-                        .set("receivedAtMs", Value::new_null(ctx.clone()))?,
-                }
+                    state_object.set("sequence", state.sequence)?;
+                    match state.received_at_ms {
+                        Some(received_at_ms) => {
+                            state_object.set("receivedAtMs", received_at_ms)?
+                        }
+                        None => state_object
+                            .set("receivedAtMs", Value::new_null(ctx.clone()))?,
+                    }
 
-                let rev = Object::new(ctx.clone())?;
-                rev.set("state", state_object.clone())?;
+                    let rev = Object::new(ctx.clone())?;
+                    rev.set("state", state_object.clone())?;
 
-                let click_controls = controls.clone();
-                rev.set(
-                    "click",
-                    Function::new(
-                        ctx.clone(),
-                        move |x: f64, y: f64, button: Opt<Value>| {
-                            let x = validate_coordinate(x)?;
-                            let y = validate_coordinate(y)?;
-                            let button = parse_button(button)?;
-                            click_with_controls(&click_controls, x, y, button)
-                        },
-                    )?,
-                )?;
-
-                let clickn_controls = controls.clone();
-                rev.set(
-                    "clickn",
-                    Function::new(
-                        ctx.clone(),
-                        Async(move |x: f64, y: f64, n: f64, button: Opt<Value>| {
-                            let arguments = (|| -> Result<_, Error> {
+                    let click_controls = controls.clone();
+                    rev.set(
+                        "click",
+                        Function::new(
+                            ctx.clone(),
+                            move |x: f64, y: f64, button: Opt<Value>| {
                                 let x = validate_coordinate(x)?;
                                 let y = validate_coordinate(y)?;
-                                if !n.is_finite()
-                                    || n.fract() != 0.0
-                                    || n < 0.0
-                                    || n >= u64::MAX as f64
+                                let button = parse_button(button)?;
+                                click_with_controls(&click_controls, x, y, button)
+                            },
+                        )?,
+                    )?;
+
+                    let clickn_controls = controls.clone();
+                    rev.set(
+                        "clickn",
+                        Function::new(
+                            ctx.clone(),
+                            Async(move |x: f64, y: f64, n: f64, button: Opt<Value>| {
+                                let arguments = (|| -> Result<_, Error> {
+                                    let x = validate_coordinate(x)?;
+                                    let y = validate_coordinate(y)?;
+                                    if !n.is_finite()
+                                        || n.fract() != 0.0
+                                        || n < 0.0
+                                        || n >= u64::MAX as f64
+                                    {
+                                        return Err(Error::new_from_js_message(
+                                            "number",
+                                            "non-negative integer click count",
+                                            "invalid click count",
+                                        ));
+                                    }
+                                    let button = parse_button(button)?;
+                                    Ok((x, y, n as u64, button))
+                                })();
+                                let controls = clickn_controls.clone();
+                                async move {
+                                    let (x, y, count, button) = arguments?;
+                                    for index in 0..count {
+                                        if index > 0 {
+                                            tokio::time::sleep(Duration::from_millis(10)).await;
+                                        }
+                                        click_with_controls(&controls, x, y, button)?;
+                                    }
+
+                                    Ok::<(), Error>(())
+                                }
+                            }),
+                        )?,
+                    )?;
+
+                    let scroll_controls = controls.clone();
+                    rev.set(
+                        "scroll",
+                        Function::new(
+                            ctx.clone(),
+                            move |length: f64, axis: Opt<Value>| {
+                                let length = validate_scroll_length(length)?;
+                                let axis = parse_scroll_axis(axis)?;
+                                ensure_actions_running(&scroll_controls.actions_paused)?;
+                                scroll_controls
+                                    .mouse
+                                    .borrow_mut()
+                                    .scroll(length, axis)
+                                    .map_err(|message| {
+                                        Error::new_from_js_message(
+                                            "mouse input",
+                                            "JavaScript",
+                                            message,
+                                        )
+                                    })
+                            },
+                        )?,
+                    )?;
+
+                    let resize_window = controls.window.clone();
+                    let resize_paused = controls.actions_paused.clone();
+                    rev.set("resize", Function::new(ctx.clone(), move |width: f64, height: f64| {
+                        ensure_actions_running(&resize_paused)?;
+                        if !width.is_finite() || width.fract() != 0.0 || width <= 0.0 || width > i32::MAX as f64
+                            || !height.is_finite() || height.fract() != 0.0 || height <= 0.0 || height > i32::MAX as f64 {
+                            return Err(Error::new_from_js_message("number", "positive finite 32-bit integer dimensions", "invalid window dimensions"));
+                        }
+                        resize_window.resize_client(width as i32, height as i32).map_err(host_error)
+                    })?)?;
+
+                    rev.set(
+                        "sleep",
+                        Function::new(
+                            ctx.clone(),
+                            Async(|milliseconds: f64| async move {
+                                if !milliseconds.is_finite()
+                                    || milliseconds < 0.0
+                                    || milliseconds.fract() != 0.0
+                                    || milliseconds >= u64::MAX as f64
                                 {
                                     return Err(Error::new_from_js_message(
                                         "number",
-                                        "non-negative integer click count",
-                                        "invalid click count",
+                                        "non-negative integer milliseconds",
+                                        "invalid sleep duration",
                                     ));
                                 }
-                                let button = parse_button(button)?;
-                                Ok((x, y, n as u64, button))
-                            })();
-                            let controls = clickn_controls.clone();
-                            async move {
-                                let (x, y, count, button) = arguments?;
-                                for index in 0..count {
-                                    if index > 0 {
-                                        tokio::time::sleep(Duration::from_millis(10)).await;
-                                    }
-                                    click_with_controls(&controls, x, y, button)?;
-                                }
 
+                                tokio::time::sleep(Duration::from_millis(
+                                    milliseconds as u64,
+                                ))
+                                .await;
                                 Ok::<(), Error>(())
-                            }
-                        }),
-                    )?,
-                )?;
+                            }),
+                        )?,
+                    )?;
 
-                let scroll_controls = controls.clone();
-                rev.set(
-                    "scroll",
-                    Function::new(
-                        ctx.clone(),
-                        move |length: f64, axis: Opt<Value>| {
-                            let length = validate_scroll_length(length)?;
-                            let axis = parse_scroll_axis(axis)?;
-                            ensure_actions_running(&scroll_controls.actions_paused)?;
-                            scroll_controls
-                                .mouse
-                                .borrow_mut()
-                                .scroll(length, axis)
-                                .map_err(|message| {
-                                    Error::new_from_js_message(
-                                        "mouse input",
-                                        "JavaScript",
-                                        message,
-                                    )
-                                })
-                        },
-                    )?,
-                )?;
+                    let _: Object = freeze.call((state_object.clone(),))?;
+                    let _: Object = freeze.call((rev.clone(),))?;
 
-                let resize_window = controls.window.clone();
-                let resize_paused = controls.actions_paused.clone();
-                rev.set("resize", Function::new(ctx.clone(), move |width: f64, height: f64| {
-                    ensure_actions_running(&resize_paused)?;
-                    if !width.is_finite() || width.fract() != 0.0 || width <= 0.0 || width > i32::MAX as f64
-                        || !height.is_finite() || height.fract() != 0.0 || height <= 0.0 || height > i32::MAX as f64 {
-                        return Err(Error::new_from_js_message("number", "positive finite 32-bit integer dimensions", "invalid window dimensions"));
-                    }
-                    resize_window.resize_client(width as i32, height as i32).map_err(host_error)
-                })?)?;
+                    let result: MaybePromise = script.call((rev, memory))?;
+                    let _: Value = result.into_future().await?;
+                    Ok(())
+                }
+                .await;
 
-                rev.set(
-                    "sleep",
-                    Function::new(
-                        ctx.clone(),
-                        Async(|milliseconds: f64| async move {
-                            if !milliseconds.is_finite()
-                                || milliseconds < 0.0
-                                || milliseconds.fract() != 0.0
-                                || milliseconds >= u64::MAX as f64
-                            {
-                                return Err(Error::new_from_js_message(
-                                    "number",
-                                    "non-negative integer milliseconds",
-                                    "invalid sleep duration",
-                                ));
-                            }
-
-                            tokio::time::sleep(Duration::from_millis(
-                                milliseconds as u64,
-                            ))
-                            .await;
-                            Ok::<(), Error>(())
-                        }),
-                    )?,
-                )?;
-
-                let _: Object = freeze.call((state_object.clone(),))?;
-                let _: Object = freeze.call((rev.clone(),))?;
-
-                let result: MaybePromise = script.call((rev, memory))?;
-                let _: Value = result.into_future().await?;
-                Ok(())
+                result.map_err(|error| CaughtError::from_error(&ctx, error).to_string())
             })
             .await
     }
@@ -851,6 +857,50 @@ mod tests {
         let session = ScriptSession::new(r#"((rev) => rev.click(10, 20))"#).await.unwrap();
         assert!(session.invoke(State::default(), controls).await.is_err());
         assert_eq!(*events.borrow(), vec![HostEvent::FocusAndTranslate(10, 20)]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn script_errors_include_message_and_stack() {
+        let session = ScriptSession::new(
+            r#"((rev) => { function fail() { throw new Error("boom"); } fail(); })"#,
+        )
+        .await
+        .unwrap();
+        let (controls, _) = recording_controls((0, 0));
+
+        let error = session
+            .invoke(State::default(), controls)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("boom"), "missing exception message: {error}");
+        assert!(error.contains("fail"), "missing exception stack: {error}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_script_errors_include_message_and_stack() {
+        let session = ScriptSession::new(
+            r#"(async (rev) => { await rev.sleep(0); function fail() { throw new Error("async boom"); } fail(); })"#,
+        )
+        .await
+        .unwrap();
+        let (controls, _) = recording_controls((0, 0));
+
+        let error = session
+            .invoke(State::default(), controls)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("async boom"),
+            "missing async exception message: {error}"
+        );
+        assert!(
+            error.contains("fail"),
+            "missing async exception stack: {error}"
+        );
     }
 
     async fn run_with_mouse(
