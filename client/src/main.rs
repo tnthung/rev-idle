@@ -1,7 +1,9 @@
+#![allow(clippy::items_after_test_module)]
+
 mod window;
 mod console;
 mod script;
-mod udp;
+mod telemetry;
 mod hotkey;
 mod capture;
 
@@ -108,13 +110,17 @@ async fn shutdown_tasks(
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
     let initial_path = initial_script_path(std::env::args_os());
-    let (state_tx, state_rx) = watch::channel(udp::State::default());
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(io::Error::other)?;
     let actions_paused = hotkey::ActionGate::default();
     let (pause_tx, pause_rx) = watch::channel(hotkey::PauseUpdate::initial());
     let (command_tx, command_rx) = mpsc::channel(32);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let script_running = Arc::new(AtomicBool::new(false));
-    let capture_state = capture::CaptureState::default();
+    let capture_state = capture::CaptureState;
     let console_commands = command_tx.clone();
     let hotkey = hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx)
         .map_err(io::Error::other)?;
@@ -124,10 +130,6 @@ async fn main() -> io::Result<()> {
     local
         .run_until(async move {
             let mut tasks = JoinSet::new();
-            let udp_shutdown = shutdown_rx.clone();
-            tasks.spawn_local(async move {
-                udp::run(state_tx, udp_shutdown).await
-            });
             let console_shutdown = shutdown_rx.clone();
             tasks.spawn_local(async move {
                 console::run(console_commands, console_shutdown).await
@@ -137,7 +139,7 @@ async fn main() -> io::Result<()> {
             tasks.spawn_local(async move {
                 script::run(
                     command_rx,
-                    state_rx,
+                    client,
                     pause_rx,
                     initial_path,
                     actions_paused,

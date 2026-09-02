@@ -2,7 +2,7 @@ use crate::{
     capture::CaptureState,
     console::ScriptCommand,
     hotkey::{ActionGate, PauseUpdate},
-    udp::State,
+    telemetry,
     window::{post_click_to_game, Axis, Win32WindowControl, WindowControl},
 };
 use rquickjs::{
@@ -32,6 +32,14 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{mpsc, watch};
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct State {
+    score: Option<String>,
+    sequence: u64,
+    received_at_ms: Option<u64>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Button {
@@ -218,10 +226,24 @@ struct ScriptSession {
     freeze: Persistent<Function<'static>>,
     context: AsyncContext,
     _runtime: AsyncRuntime,
+    client: reqwest::Client,
 }
 
 impl ScriptSession {
+    #[cfg(test)]
     async fn new(source: &str) -> rquickjs::Result<Self> {
+        Self::new_with_client(
+            source,
+            reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
+                .build()
+                .map_err(|error| Error::new_from_js_message("client", "HTTP client", error.to_string()))?,
+        )
+        .await
+    }
+
+    async fn new_with_client(source: &str, client: reqwest::Client) -> rquickjs::Result<Self> {
         let runtime = AsyncRuntime::new()?;
         let context = AsyncContext::full(&runtime).await?;
         let source = source.to_owned();
@@ -263,12 +285,13 @@ impl ScriptSession {
             freeze,
             context,
             _runtime: runtime,
+            client,
         })
     }
 
-    async fn invoke<C: Into<HostControls>>(
+    async fn invoke<S, C: Into<HostControls>>(
         &self,
-        state: State,
+        _state: S,
         controls: C,
     ) -> Result<bool, String> {
         let controls = controls.into();
@@ -285,22 +308,24 @@ impl ScriptSession {
                     let memory: Object = memory.restore(&ctx)?;
                     let freeze: Function = freeze.restore(&ctx)?;
 
-                    let state_object = Object::new(ctx.clone())?;
-                    match state.score {
-                        Some(score) => state_object.set("score", score)?,
-                        None => state_object.set("score", Value::new_null(ctx.clone()))?,
-                    }
-                    state_object.set("sequence", state.sequence)?;
-                    match state.received_at_ms {
-                        Some(received_at_ms) => {
-                            state_object.set("receivedAtMs", received_at_ms)?
-                        }
-                        None => state_object
-                            .set("receivedAtMs", Value::new_null(ctx.clone()))?,
-                    }
-
                     let rev = Object::new(ctx.clone())?;
-                    rev.set("state", state_object.clone())?;
+                    let state_client = self.client.clone();
+                    let state_raw = Function::new(
+                        ctx.clone(),
+                        Async(move |keys: Rest<String>| {
+                            let client = state_client.clone();
+                            async move {
+                                telemetry::request_state(&client, &keys.0)
+                                    .await
+                                    .map_err(|error| Error::new_from_js_message("state", "HTTP response", error))
+                            }
+                        }),
+                    )?;
+                    let state_wrapper: Function = ctx.eval(
+                        "(raw) => async (...keys) => Object.freeze(await raw(...keys))",
+                    )?;
+                    let state: Function = state_wrapper.call((state_raw,))?;
+                    rev.set("state", state)?;
                     rev.set(
                         "stop",
                         Function::new(ctx.clone(), move || stop_request.set(true))?,
@@ -423,7 +448,6 @@ impl ScriptSession {
                         )?,
                     )?;
 
-                    let _: Object = freeze.call((state_object.clone(),))?;
                     let _: Object = freeze.call((rev.clone(),))?;
 
                     let result: MaybePromise = script.call((rev, memory))?;
@@ -440,19 +464,20 @@ impl ScriptSession {
     }
 }
 
-async fn load_path(path: &Path) -> Result<ScriptSession, String> {
+async fn load_path(path: &Path, client: reqwest::Client) -> Result<ScriptSession, String> {
     let source = tokio::fs::read_to_string(path)
         .await
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
 
-    ScriptSession::new(&source)
+    ScriptSession::new_with_client(&source, client)
         .await
         .map_err(|error| format!("failed to load {}: {error}", path.display()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     commands: mpsc::Receiver<ScriptCommand>,
-    states: watch::Receiver<State>,
+    client: reqwest::Client,
     hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
     actions_paused: ActionGate,
@@ -464,7 +489,7 @@ pub async fn run(
 
     run_with_controls_and_lifecycle(
         commands,
-        states,
+        client,
         hotkey_pauses,
         initial_path,
         HostControls { mouse, window: Rc::new(Win32WindowControl), actions_paused },
@@ -479,7 +504,7 @@ pub async fn run(
 #[cfg(test)]
 async fn run_with_controls(
     commands: mpsc::Receiver<ScriptCommand>,
-    states: watch::Receiver<State>,
+    _states: watch::Receiver<State>,
     hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
     controls: HostControls,
@@ -487,10 +512,10 @@ async fn run_with_controls(
 ) -> Result<(), String> {
     let (_shutdown_tx, shutdown) = watch::channel(false);
     let script_running = Arc::new(AtomicBool::new(false));
-    let capture_state = CaptureState::default();
+    let capture_state = CaptureState;
     run_with_controls_and_lifecycle(
         commands,
-        states,
+        reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(2)).build().map_err(|error| error.to_string())?,
         hotkey_pauses,
         initial_path,
         controls,
@@ -502,9 +527,10 @@ async fn run_with_controls(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_with_controls_and_lifecycle(
     mut commands: mpsc::Receiver<ScriptCommand>,
-    mut states: watch::Receiver<State>,
+    client: reqwest::Client,
     mut hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
     controls: HostControls,
@@ -515,7 +541,7 @@ async fn run_with_controls_and_lifecycle(
 ) -> Result<(), String> {
     let mut current_path = initial_path;
     let mut session = match current_path.as_deref() {
-        Some(path) => match load_path(path).await {
+        Some(path) => match load_path(path, client.clone()).await {
             Ok(session) => {
                 println!("running {}", path.display());
                 Some(session)
@@ -617,7 +643,7 @@ async fn run_with_controls_and_lifecycle(
                     paused = false;
                     current_path = Some(path);
                     if let Some(path) = current_path.as_deref() {
-                        match load_path(path).await {
+                        match load_path(path, client.clone()).await {
                             Ok(loaded) => {
                                 session = Some(loaded);
                                 script_running.store(true, Ordering::Release);
@@ -634,7 +660,7 @@ async fn run_with_controls_and_lifecycle(
                     script_running.store(false, Ordering::Release);
                     paused = false;
                     if let Some(path) = current_path.as_deref() {
-                        match load_path(path).await {
+                        match load_path(path, client.clone()).await {
                             Ok(loaded) => {
                                 session = Some(loaded);
                                 script_running.store(true, Ordering::Release);
@@ -723,13 +749,11 @@ async fn run_with_controls_and_lifecycle(
             continue;
         }
 
-        let snapshot = states.borrow_and_update().clone();
-
         let stop_requested = {
             let Some(active) = session.as_ref() else {
                 continue;
             };
-            let invocation = active.invoke(snapshot, controls.clone());
+            let invocation = active.invoke((), controls.clone());
             tokio::pin!(invocation);
             tokio::select! {
                 result = &mut invocation => {
@@ -846,7 +870,6 @@ fn apply_hotkey_update_and_report(
 mod tests {
     use super::*;
     use crate::hotkey::ActionGate;
-    use crate::udp::State;
     use std::{
         cell::RefCell,
         rc::Rc,
@@ -1102,7 +1125,7 @@ mod tests {
     async fn passes_fresh_state_and_preserves_memory_and_globals() {
         let source = r#"
             (async (rev, memory) => {
-                if (!Object.isFrozen(rev) || !Object.isFrozen(rev.state)) {
+                if (!Object.isFrozen(rev)) {
                     throw new Error("rev and state must be frozen");
                 }
                 memory.count = (memory.count ?? 0) + 1;
@@ -1110,17 +1133,10 @@ mod tests {
                 if (memory.count !== globalThis.count) {
                     throw new Error("persistent state mismatch");
                 }
-                if (rev.state.sequence !== memory.count) {
-                    throw new Error("stale invocation state");
-                }
                 if (memory.count === 2) {
                     rev.click(-12, 34, "right");
                 }
-                const sequence = rev.state.sequence;
                 await rev.sleep(1);
-                if (rev.state.sequence !== sequence) {
-                    throw new Error("state changed during invocation");
-                }
             })
         "#;
 
@@ -1170,7 +1186,7 @@ mod tests {
                 (() => {
                     Object.freeze = (value) => value;
                     return ((rev, memory) => {
-                        if (!Object.isFrozen(rev) || !Object.isFrozen(rev.state)) {
+                        if (!Object.isFrozen(rev)) {
                             throw new Error("rev and state must be frozen");
                         }
                         memory.calls = (memory.calls ?? 0) + 1;
@@ -1196,7 +1212,7 @@ mod tests {
         let session = ScriptSession::new(
             r#"
                 ((rev, memory) => {
-                    if (!Object.isFrozen(rev) || !Object.isFrozen(rev.state)) {
+                    if (!Object.isFrozen(rev)) {
                         throw new Error("rev and state must be frozen");
                     }
                     memory.calls = (memory.calls ?? 0) + 1;
@@ -1253,8 +1269,8 @@ mod tests {
     async fn missing_state_fields_are_null() {
         let session = ScriptSession::new(
             r#"((rev) => {
-                if (rev.state.score !== null || rev.state.receivedAtMs !== null) {
-                    throw new Error("missing state fields must be null");
+                if (typeof rev.state !== "function") {
+                    throw new Error("state must be callable");
                 }
             })"#,
         )
@@ -2206,7 +2222,7 @@ mod tests {
         assert_eq!(capture_action(false, true, false), CaptureAction::Reject);
         assert_eq!(capture_action(true, true, false), CaptureAction::Disable);
 
-        let capture_state = CaptureState::default();
+    let capture_state = CaptureState;
         capture_state.set_enabled(true);
         disable_capture_if_running(&capture_state, true, false);
         assert!(!capture_state.is_enabled());
