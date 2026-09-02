@@ -115,27 +115,17 @@ internal sealed class HttpScoreServer : IDisposable
                 List<string> keys = new();
                 if (target.Length == 2)
                 {
-                    HashSet<string> seen = new(StringComparer.Ordinal);
                     foreach (string parameter in target[1].Split('&', StringSplitOptions.RemoveEmptyEntries))
                     {
                         string[] pair = parameter.Split('=', 2, StringSplitOptions.None);
-                        if (pair.Length != 2 || pair[0] != "key" || pair[1].Length == 0 || !SupportedKeys.Contains(pair[1]))
+                        if (pair.Length != 2 || pair[0] != "key")
                         {
                             await WriteResponse(stream, 400, "Bad Request", Array.Empty<byte>(), true).ConfigureAwait(false);
                             return;
                         }
-                        if (seen.Add(pair[1]))
-                            keys.Add(pair[1]);
-                    }
-                    if (keys.Count == 0)
-                    {
-                        await WriteResponse(stream, 400, "Bad Request", Array.Empty<byte>(), true).ConfigureAwait(false);
-                        return;
+                        keys.Add(WebUtility.UrlDecode(pair[1]));
                     }
                 }
-                if (keys.Count == 0)
-                    keys.AddRange(AllKeys);
-
                 bool close = lines.Skip(1).Any(line => line.StartsWith("Connection:", StringComparison.OrdinalIgnoreCase) && line.Contains("close", StringComparison.OrdinalIgnoreCase));
                 Pending pending = new(keys);
                 _pending.Enqueue(pending);
@@ -194,7 +184,4 @@ internal sealed class HttpScoreServer : IDisposable
             client.Dispose();
         _stopping.Dispose();
     }
-
-    private static readonly string[] AllKeys = { "score", "income", "IP", "infinities", "stars", "stardust", "EP", "eternities", "DP", "AP", "RP", "RPMax", "RPSpent", "unities", "passiveUnities", "astrodust", "singularities", "atoms", "PlP", "PlPperPlG", "PlG", "VE", "ViP", "tarotSwords", "tarotWands", "tarotPentacles", "tarotCups", "goldTarotSwords", "goldTarotWands", "goldTarotPentacles", "goldTarotCups", "tarotDraws", "timeSinceStart", "timeInfinity", "timeEternity", "timeUnity", "timeTotal" };
-    private static readonly HashSet<string> SupportedKeys = new(AllKeys, StringComparer.Ordinal);
 }

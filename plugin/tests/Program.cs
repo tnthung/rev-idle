@@ -7,13 +7,13 @@ using System.Text;
 using RevIdle.ScoreTelemetry;
 
 InvalidPortsDisableServer();
-await ServerReturnsSelectedState();
-await ServerReturnsAllKeysInDocumentedOrder();
-await ServerDeduplicatesSelectedKeys();
-await ServerRejectsUnknownOrEmptyKeys();
+await ServerQueuesDecodedPathsUnchanged();
+await ServerQueuesEmptyPathsWithoutArguments();
+await ServerReturnsInvalidPathStatus();
 await ServerMatchesExactRoutes();
 await ServerReturnsMethodNotAllowed();
 await ServerReturnsUnavailableState();
+await ServerReturnsSerializationFailureStatus();
 await KeepAliveRequestsUseContentLength();
 StatePayloadFormatsBigDoubleValues();
 StatePayloadSerializesCompleteGraph();
@@ -51,25 +51,25 @@ static void InvalidPortsDisableServer()
     }
 }
 
-static async Task ServerReturnsSelectedState()
+static async Task ServerQueuesDecodedPathsUnchanged()
 {
     using HttpScoreServer server = CreateServer();
     using TcpClient client = new();
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
     ResponseReader reader = new(stream);
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score&key=IP HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"score\":\"2.5e42\",\"IP\":\"7e8\"}")));
-    Equal(true, keys.SequenceEqual(new[] { "score", "IP" }), nameof(ServerReturnsSelectedState));
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=eternity%2EdtpSpent&key=rows%2E1%2EValue&key=eternity%2EdtpSpent HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"eternity.dtpSpent\":7,\"rows.1.Value\":\"one\"}")));
+    Equal(true, keys.SequenceEqual(new[] { "eternity.dtpSpent", "rows.1.Value", "eternity.dtpSpent" }), nameof(ServerQueuesDecodedPathsUnchanged));
     HttpResponse response = await reader.ReadResponse();
-    Equal(200, response.StatusCode, nameof(ServerReturnsSelectedState));
-    Equal("application/json", response.ContentType, nameof(ServerReturnsSelectedState));
-    Equal(response.Body.Length, response.ContentLength, nameof(ServerReturnsSelectedState));
-    Equal("close", response.Connection, nameof(ServerReturnsSelectedState));
-    Equal("{\"score\":\"2.5e42\",\"IP\":\"7e8\"}", Encoding.UTF8.GetString(response.Body), nameof(ServerReturnsSelectedState));
+    Equal(200, response.StatusCode, nameof(ServerQueuesDecodedPathsUnchanged));
+    Equal("application/json", response.ContentType, nameof(ServerQueuesDecodedPathsUnchanged));
+    Equal(response.Body.Length, response.ContentLength, nameof(ServerQueuesDecodedPathsUnchanged));
+    Equal("close", response.Connection, nameof(ServerQueuesDecodedPathsUnchanged));
+    Equal("{\"eternity.dtpSpent\":7,\"rows.1.Value\":\"one\"}", Encoding.UTF8.GetString(response.Body), nameof(ServerQueuesDecodedPathsUnchanged));
 }
 
-static async Task ServerReturnsAllKeysInDocumentedOrder()
+static async Task ServerQueuesEmptyPathsWithoutArguments()
 {
     using HttpScoreServer server = CreateServer();
     using TcpClient client = new();
@@ -77,30 +77,22 @@ static async Task ServerReturnsAllKeysInDocumentedOrder()
     await using NetworkStream stream = client.GetStream();
     await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
     IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Array.Empty<byte>()));
-    Equal(true, keys.SequenceEqual(new[] { "score", "income", "IP", "infinities", "stars", "stardust", "EP", "eternities", "DP", "AP", "RP", "RPMax", "RPSpent", "unities", "passiveUnities", "astrodust", "singularities", "atoms", "PlP", "PlPperPlG", "PlG", "VE", "ViP", "tarotSwords", "tarotWands", "tarotPentacles", "tarotCups", "goldTarotSwords", "goldTarotWands", "goldTarotPentacles", "goldTarotCups", "tarotDraws", "timeSinceStart", "timeInfinity", "timeEternity", "timeUnity", "timeTotal" }), nameof(ServerReturnsAllKeysInDocumentedOrder));
+    Equal(0, keys.Count, nameof(ServerQueuesEmptyPathsWithoutArguments));
     HttpResponse response = await new ResponseReader(stream).ReadResponse();
-    Equal(200, response.StatusCode, nameof(ServerReturnsAllKeysInDocumentedOrder));
+    Equal(200, response.StatusCode, nameof(ServerQueuesEmptyPathsWithoutArguments));
 }
 
-static async Task ServerDeduplicatesSelectedKeys()
+static async Task ServerReturnsInvalidPathStatus()
 {
     using HttpScoreServer server = CreateServer();
     using TcpClient client = new();
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score&key=IP&key=score HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Array.Empty<byte>()));
-    Equal(true, keys.SequenceEqual(new[] { "score", "IP" }), nameof(ServerDeduplicatesSelectedKeys));
-    Equal(200, (await new ResponseReader(stream).ReadResponse()).StatusCode, nameof(ServerDeduplicatesSelectedKeys));
-}
-
-static async Task ServerRejectsUnknownOrEmptyKeys()
-{
-    using HttpScoreServer server = CreateServer();
-    HttpResponse unknown = await RequestWithServer(server, "GET /state?key=unknown HTTP/1.1");
-    HttpResponse empty = await RequestWithServer(server, "GET /state?key= HTTP/1.1");
-    Equal(400, unknown.StatusCode, nameof(ServerRejectsUnknownOrEmptyKeys));
-    Equal(400, empty.StatusCode, nameof(ServerRejectsUnknownOrEmptyKeys));
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    await CompletePluginPendingUntil(server, new PathFixture());
+    HttpResponse response = await new ResponseReader(stream).ReadResponse();
+    Equal(400, response.StatusCode, nameof(ServerReturnsInvalidPathStatus));
+    Equal(0, response.Body.Length, nameof(ServerReturnsInvalidPathStatus));
 }
 
 static async Task ServerMatchesExactRoutes()
@@ -124,10 +116,23 @@ static async Task ServerReturnsUnavailableState()
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
     await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    await CompletePendingUntil(server, _ => (503, Array.Empty<byte>()));
+    await CompletePluginPendingUntil(server, null);
     HttpResponse response = await new ResponseReader(stream).ReadResponse();
     Equal(503, response.StatusCode, nameof(ServerReturnsUnavailableState));
     Equal(0, response.Body.Length, nameof(ServerReturnsUnavailableState));
+}
+
+static async Task ServerReturnsSerializationFailureStatus()
+{
+    using HttpScoreServer server = CreateServer();
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    await CompletePluginPendingUntil(server, new GetterFailureFixture());
+    HttpResponse response = await new ResponseReader(stream).ReadResponse();
+    Equal(500, response.StatusCode, nameof(ServerReturnsSerializationFailureStatus));
+    Equal(0, response.Body.Length, nameof(ServerReturnsSerializationFailureStatus));
 }
 
 static async Task KeepAliveRequestsUseContentLength()
@@ -440,6 +445,18 @@ static async Task<IReadOnlyList<string>> CompletePendingUntil(HttpScoreServer se
             return complete(keys);
         }))
             return observed!;
+        await Task.Delay(10);
+    }
+    throw new InvalidOperationException("timed out waiting for a pending request");
+}
+
+static async Task CompletePluginPendingUntil(HttpScoreServer server, object? data)
+{
+    DateTime deadline = DateTime.UtcNow.AddSeconds(4);
+    while (DateTime.UtcNow < deadline)
+    {
+        if (Plugin.CompletePending(server, data))
+            return;
         await Task.Delay(10);
     }
     throw new InvalidOperationException("timed out waiting for a pending request");

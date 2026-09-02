@@ -39,16 +39,28 @@ public sealed class Plugin : BasePlugin
         {
             if (_server is null)
                 return;
-            _server.CompletePending(keys =>
-            {
-                GameData? data = GameController.data;
-                return data is null || !StatePayload.TryEncode(data, keys, out byte[] payload) ? (503, Array.Empty<byte>()) : (200, payload);
-            });
+            CompletePending(_server, GameController.data);
         }
-        catch
+        catch (Exception exception)
         {
+            _logger?.LogError($"State request completion failed: {exception}");
         }
     }
+
+    internal static bool CompletePending(HttpScoreServer server, object? data) => server.CompletePending(keys =>
+    {
+        if (data is null)
+            return (503, Array.Empty<byte>());
+        StatePayloadStatus status = StatePayload.Encode(data, keys, out byte[] payload);
+        if (status == StatePayloadStatus.SerializationFailure)
+            _logger?.LogError("State serialization failed.");
+        return status switch
+        {
+            StatePayloadStatus.Success => (200, payload),
+            StatePayloadStatus.InvalidPath => (400, Array.Empty<byte>()),
+            _ => (500, Array.Empty<byte>())
+        };
+    });
 
     internal static void StopServer() => _server?.Dispose();
 }
