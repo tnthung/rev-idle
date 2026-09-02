@@ -6,12 +6,15 @@ use crate::{
 };
 use enigo::{Axis, Button, Direction, Enigo, Mouse};
 use rquickjs::{
+    convert::Coerced,
+    function::Rest,
     function::Async,
     function::Opt,
     promise::MaybePromise,
     AsyncContext,
     AsyncRuntime,
     Error,
+    FromJs,
     Function,
     Object,
     Persistent,
@@ -191,6 +194,30 @@ fn parse_scroll_axis(axis: Opt<Value>) -> Result<Axis, Error> {
     }
 }
 
+fn format_console_message(args: Rest<Value>) -> rquickjs::Result<String> {
+    args.0
+        .into_iter()
+        .map(|value| {
+            if value.is_string() {
+                value
+                    .as_string()
+                    .expect("string value must have a string representation")
+                    .to_string()
+            } else if value.is_object() {
+                let ctx = value.ctx().clone();
+                match ctx.json_stringify(value.clone())? {
+                    Some(json) => json.to_string(),
+                    None => Ok(Coerced::<std::string::String>::from_js(&ctx, value)?.0),
+                }
+            } else {
+                let ctx = value.ctx().clone();
+                Ok(Coerced::<std::string::String>::from_js(&ctx, value)?.0)
+            }
+        })
+        .collect::<rquickjs::Result<Vec<_>>>()
+        .map(|values| values.join(" "))
+}
+
 struct ScriptSession {
     // Rust drops fields in declaration order. Persistent roots must be gone
     // before their context and runtime.
@@ -209,6 +236,23 @@ impl ScriptSession {
 
         let (script, memory, freeze) = context
             .async_with(async move |ctx| {
+                let console = Object::new(ctx.clone())?;
+                console.set(
+                    "log",
+                    Function::new(ctx.clone(), move |args: Rest<Value>| {
+                        println!("{}", format_console_message(args)?);
+                        Ok::<(), rquickjs::Error>(())
+                    })?,
+                )?;
+                console.set(
+                    "error",
+                    Function::new(ctx.clone(), move |args: Rest<Value>| {
+                        eprintln!("{}", format_console_message(args)?);
+                        Ok::<(), rquickjs::Error>(())
+                    })?,
+                )?;
+                ctx.globals().set("console", console)?;
+
                 let freeze: Function = ctx.eval("Object.freeze")?;
                 let script: Function = ctx.eval(source)?;
                 let memory = Object::new(ctx.clone())?;
@@ -1047,6 +1091,23 @@ mod tests {
                 if (rev.state.score !== null || rev.state.receivedAtMs !== null) {
                     throw new Error("missing state fields must be null");
                 }
+            })"#,
+        )
+        .await
+        .unwrap();
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: Rc::new(RefCell::new(Vec::new())),
+        }));
+
+        session.invoke(State::default(), mouse).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn console_log_and_error_accept_multiple_values() {
+        let session = ScriptSession::new(
+            r#"((rev) => {
+                console.log("hello", { answer: 42 });
+                console.error("problem", 7);
             })"#,
         )
         .await
