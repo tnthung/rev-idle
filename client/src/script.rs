@@ -4,7 +4,7 @@ use crate::{
     udp::State,
     window::{move_cursor_to_screen, Win32WindowControl, WindowControl},
 };
-use enigo::{Button, Direction, Enigo, Mouse};
+use enigo::{Axis, Button, Direction, Enigo, Mouse};
 use rquickjs::{
     function::Async,
     function::Opt,
@@ -27,6 +27,11 @@ trait MouseInput {
         y: i32,
         button: Button,
     ) -> Result<(), String>;
+
+    fn scroll(&mut self, length: i32, axis: Axis) -> Result<(), String> {
+        let _ = (length, axis);
+        Err("mouse scrolling is not supported".to_string())
+    }
 }
 
 fn click_at_with<M, C>(
@@ -62,6 +67,10 @@ impl MouseInput for Enigo {
             },
         )
     }
+
+    fn scroll(&mut self, length: i32, axis: Axis) -> Result<(), String> {
+        Mouse::scroll(self, length, axis).map_err(|error| error.to_string())
+    }
 }
 
 type SharedMouse = Rc<RefCell<dyn MouseInput>>;
@@ -82,6 +91,104 @@ fn ensure_actions_running(paused: &ActionGate) -> Result<(), Error> {
     if paused.is_paused() {
         Err(Error::new_from_js_message("actions", "JavaScript", "actions are paused"))
     } else { Ok(()) }
+}
+
+fn validate_coordinate(value: f64) -> Result<i32, Error> {
+    if !value.is_finite()
+        || value.fract() != 0.0
+        || value < i32::MIN as f64
+        || value > i32::MAX as f64
+    {
+        return Err(Error::new_from_js_message(
+            "number",
+            "finite 32-bit integer coordinates",
+            "invalid mouse coordinates",
+        ));
+    }
+
+    Ok(value as i32)
+}
+
+fn parse_button(button: Opt<Value>) -> Result<Button, Error> {
+    match button.0 {
+        None => Ok(Button::Left),
+        Some(value) if value.is_undefined() => Ok(Button::Left),
+        Some(value) => {
+            let type_name = value.type_name();
+            let Some(value) = value.as_string() else {
+                return Err(Error::new_from_js(type_name, "mouse button"));
+            };
+            let value = value.to_string()?;
+            match value.as_str() {
+                "left" => Ok(Button::Left),
+                "right" => Ok(Button::Right),
+                "middle" => Ok(Button::Middle),
+                value => Err(Error::new_from_js_message(
+                    "string",
+                    "mouse button",
+                    format!("unsupported button: {value}"),
+                )),
+            }
+        }
+    }
+}
+
+fn click_with_controls(
+    controls: &HostControls,
+    x: i32,
+    y: i32,
+    button: Button,
+) -> Result<(), Error> {
+    ensure_actions_running(&controls.actions_paused)?;
+    let (screen_x, screen_y) = controls
+        .window
+        .focus_and_translate(x, y)
+        .map_err(host_error)?;
+    ensure_actions_running(&controls.actions_paused)?;
+    controls
+        .mouse
+        .borrow_mut()
+        .click_at(screen_x, screen_y, button)
+        .map_err(|message| Error::new_from_js_message("mouse input", "JavaScript", message))
+}
+
+fn validate_scroll_length(value: f64) -> Result<i32, Error> {
+    if !value.is_finite()
+        || value.fract() != 0.0
+        || value < i32::MIN as f64
+        || value > i32::MAX as f64
+    {
+        return Err(Error::new_from_js_message(
+            "number",
+            "finite 32-bit integer scroll length",
+            "invalid scroll length",
+        ));
+    }
+
+    Ok(value as i32)
+}
+
+fn parse_scroll_axis(axis: Opt<Value>) -> Result<Axis, Error> {
+    match axis.0 {
+        None => Ok(Axis::Vertical),
+        Some(value) if value.is_undefined() => Ok(Axis::Vertical),
+        Some(value) => {
+            let type_name = value.type_name();
+            let Some(value) = value.as_string() else {
+                return Err(Error::new_from_js(type_name, "scroll axis"));
+            };
+            let value = value.to_string()?;
+            match value.as_str() {
+                "vertical" | "v" => Ok(Axis::Vertical),
+                "horizontal" | "h" => Ok(Axis::Horizontal),
+                value => Err(Error::new_from_js_message(
+                    "string",
+                    "scroll axis",
+                    format!("unsupported scroll axis: {value}"),
+                )),
+            }
+        }
+    }
 }
 
 struct ScriptSession {
@@ -162,54 +269,66 @@ impl ScriptSession {
                     Function::new(
                         ctx.clone(),
                         move |x: f64, y: f64, button: Opt<Value>| {
-                            if !x.is_finite()
-                                || x.fract() != 0.0
-                                || x < i32::MIN as f64
-                                || x > i32::MAX as f64
-                                || !y.is_finite()
-                                || y.fract() != 0.0
-                                || y < i32::MIN as f64
-                                || y > i32::MAX as f64
-                            {
-                                return Err(Error::new_from_js_message(
-                                    "number",
-                                    "finite 32-bit integer coordinates",
-                                    "invalid mouse coordinates",
-                                ));
-                            }
+                            let x = validate_coordinate(x)?;
+                            let y = validate_coordinate(y)?;
+                            let button = parse_button(button)?;
+                            click_with_controls(&click_controls, x, y, button)
+                        },
+                    )?,
+                )?;
 
-                            let button = match button.0 {
-                                None => Button::Left,
-                                Some(value) if value.is_undefined() => Button::Left,
-                                Some(value) => {
-                                    let type_name = value.type_name();
-                                    let Some(value) = value.as_string() else {
-                                        return Err(Error::new_from_js(type_name, "mouse button"));
-                                    };
-                                    let value = value.to_string()?;
-                                    match value.as_str() {
-                                        "left" => Button::Left,
-                                        "right" => Button::Right,
-                                        "middle" => Button::Middle,
-                                        value => {
-                                            return Err(Error::new_from_js_message(
-                                                "string",
-                                                "mouse button",
-                                                format!("unsupported button: {value}"),
-                                            ));
-                                        }
-                                    }
+                let clickn_controls = controls.clone();
+                rev.set(
+                    "clickn",
+                    Function::new(
+                        ctx.clone(),
+                        Async(move |x: f64, y: f64, n: f64, button: Opt<Value>| {
+                            let arguments = (|| -> Result<_, Error> {
+                                let x = validate_coordinate(x)?;
+                                let y = validate_coordinate(y)?;
+                                if !n.is_finite()
+                                    || n.fract() != 0.0
+                                    || n < 0.0
+                                    || n >= u64::MAX as f64
+                                {
+                                    return Err(Error::new_from_js_message(
+                                        "number",
+                                        "non-negative integer click count",
+                                        "invalid click count",
+                                    ));
                                 }
-                            };
+                                let button = parse_button(button)?;
+                                Ok((x, y, n as u64, button))
+                            })();
+                            let controls = clickn_controls.clone();
+                            async move {
+                                let (x, y, count, button) = arguments?;
+                                for index in 0..count {
+                                    if index > 0 {
+                                        tokio::time::sleep(Duration::from_millis(10)).await;
+                                    }
+                                    click_with_controls(&controls, x, y, button)?;
+                                }
 
-                            ensure_actions_running(&click_controls.actions_paused)?;
-                            let (screen_x, screen_y) = click_controls.window
-                                .focus_and_translate(x as i32, y as i32)
-                                .map_err(host_error)?;
-                            ensure_actions_running(&click_controls.actions_paused)?;
-                            click_controls.mouse
+                                Ok::<(), Error>(())
+                            }
+                        }),
+                    )?,
+                )?;
+
+                let scroll_controls = controls.clone();
+                rev.set(
+                    "scroll",
+                    Function::new(
+                        ctx.clone(),
+                        move |length: f64, axis: Opt<Value>| {
+                            let length = validate_scroll_length(length)?;
+                            let axis = parse_scroll_axis(axis)?;
+                            ensure_actions_running(&scroll_controls.actions_paused)?;
+                            scroll_controls
+                                .mouse
                                 .borrow_mut()
-                                .click_at(screen_x, screen_y, button)
+                                .scroll(length, axis)
                                 .map_err(|message| {
                                     Error::new_from_js_message(
                                         "mouse input",
@@ -538,7 +657,7 @@ mod tests {
     use super::*;
     use crate::hotkey::ActionGate;
     use crate::udp::State;
-    use enigo::Button;
+    use enigo::{Axis, Button};
     use std::{
         cell::RefCell,
         rc::Rc,
@@ -623,7 +742,12 @@ mod tests {
     }
 
     #[derive(Clone, Debug, PartialEq, Eq)]
-    enum HostEvent { Resize(i32, i32), FocusAndTranslate(i32, i32), Click(i32, i32, Button) }
+    enum HostEvent {
+        Resize(i32, i32),
+        FocusAndTranslate(i32, i32),
+        Click(i32, i32, Button),
+        Scroll(i32, Axis),
+    }
 
     struct RecordingWindow { events: Rc<RefCell<Vec<HostEvent>>>, translated: (i32, i32), error: bool }
     impl WindowControl for RecordingWindow {
@@ -639,6 +763,10 @@ mod tests {
     impl MouseInput for RecordingMouse {
         fn click_at(&mut self, x: i32, y: i32, button: Button) -> Result<(), String> {
             self.events.borrow_mut().push(HostEvent::Click(x, y, button)); Ok(())
+        }
+
+        fn scroll(&mut self, length: i32, axis: Axis) -> Result<(), String> {
+            self.events.borrow_mut().push(HostEvent::Scroll(length, axis)); Ok(())
         }
     }
     fn recording_controls(translated: (i32, i32)) -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
@@ -974,6 +1102,83 @@ mod tests {
         }
 
         assert!(clicks.borrow().is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn clickn_repeats_clicks_and_allows_zero_clicks() {
+        let session = ScriptSession::new(
+            r#"
+                (async (rev) => {
+                    await rev.clickn(10, 20, 3, "right");
+                    await rev.clickn(30, 40, 0);
+                })
+            "#,
+        )
+        .await
+        .unwrap();
+        let clicks = Rc::new(RefCell::new(Vec::new()));
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: clicks.clone(),
+        }));
+
+        let started = Instant::now();
+        session.invoke(State::default(), mouse).await.unwrap();
+
+        assert!(started.elapsed() >= Duration::from_millis(20));
+        assert_eq!(
+            clicks.borrow().as_slice(),
+            &[
+                Click { x: 10, y: 20, button: Button::Right },
+                Click { x: 10, y: 20, button: Button::Right },
+                Click { x: 10, y: 20, button: Button::Right },
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn scroll_accepts_named_axes_and_short_aliases() {
+        let session = ScriptSession::new(
+            r#"
+                (async (rev) => {
+                    await rev.scroll(2, "vertical");
+                    await rev.scroll(-1, "h");
+                    await rev.scroll(3, "v");
+                    await rev.scroll(-4, "horizontal");
+                })
+            "#,
+        )
+        .await
+        .unwrap();
+        let (controls, events) = recording_controls((0, 0));
+
+        session.invoke(State::default(), controls).await.unwrap();
+
+        assert_eq!(
+            *events.borrow(),
+            vec![
+                HostEvent::Scroll(2, Axis::Vertical),
+                HostEvent::Scroll(-1, Axis::Horizontal),
+                HostEvent::Scroll(3, Axis::Vertical),
+                HostEvent::Scroll(-4, Axis::Horizontal),
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn repeated_click_and_scroll_arguments_are_validated() {
+        for source in [
+            r#"((rev) => rev.clickn(1, 2, -1))"#,
+            r#"((rev) => rev.clickn(1, 2, 1.5))"#,
+            r#"((rev) => rev.clickn(1, 2, Infinity))"#,
+            r#"((rev) => rev.scroll(1.5))"#,
+            r#"((rev) => rev.scroll(1, "diagonal"))"#,
+            r#"((rev) => rev.scroll(1, null))"#,
+        ] {
+            let session = ScriptSession::new(source).await.unwrap();
+            let (controls, events) = recording_controls((0, 0));
+            assert!(session.invoke(State::default(), controls).await.is_err());
+            assert!(events.borrow().is_empty());
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
