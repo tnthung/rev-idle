@@ -55,10 +55,12 @@ public sealed class ScoreTicker : MonoBehaviour
     private const float IntervalSeconds = 0.05f;
     private const float BridgeRetrySeconds = 1f;
     private const int MaxClicksPerFrame = 32;
+    private const int MaxScrollsPerFrame = 32;
 
     private float _elapsed;
     private float _bridgeRetryRemaining;
     private readonly ClickCommandQueue _clicks = new();
+    private readonly ScrollCommandQueue _scrolls = new();
     private Win32InputBridge? _bridge;
 
     public ScoreTicker(IntPtr pointer) : base(pointer)
@@ -70,6 +72,7 @@ public sealed class ScoreTicker : MonoBehaviour
         float delta = Time.unscaledDeltaTime;
         TryAttachBridge(delta);
         DispatchQueuedClicks();
+        DispatchQueuedScrolls();
 
         if (AdvanceTimer(ref _elapsed, delta))
             Plugin.PublishScore();
@@ -98,7 +101,7 @@ public sealed class ScoreTicker : MonoBehaviour
             return;
         }
 
-        var bridge = new Win32InputBridge(_clicks);
+        var bridge = new Win32InputBridge(_clicks, _scrolls);
         if (bridge.TryAttach())
         {
             _bridge = bridge;
@@ -136,11 +139,37 @@ public sealed class ScoreTicker : MonoBehaviour
         }
     }
 
+    private void DispatchQueuedScrolls()
+    {
+        Win32InputBridge? bridge = _bridge;
+        if (bridge is null || !bridge.IsAttached)
+            return;
+
+        int processed = 0;
+        while (processed < MaxScrollsPerFrame && _scrolls.TryDequeue(out ScrollCommand command))
+        {
+            try
+            {
+                if (UnityUiClickDispatcher.TryDispatchScroll(bridge.Window, command, out string result))
+                    Plugin.LogBridgeInfo(result);
+                else
+                    Plugin.LogBridgeError(result);
+            }
+            catch (Exception exception)
+            {
+                Plugin.LogBridgeError($"request {command.RequestId} failed: {exception.Message}");
+            }
+
+            processed++;
+        }
+    }
+
     private void StopBridge()
     {
         _bridge?.Dispose();
         _bridge = null;
         _clicks.Clear();
+        _scrolls.Clear();
     }
 
     internal static bool AdvanceTimer(ref float elapsed, float delta)

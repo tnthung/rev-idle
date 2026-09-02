@@ -5,7 +5,7 @@ use crate::{
     udp::State,
     window::{post_click_to_game, Win32WindowControl, WindowControl},
 };
-use enigo::{Axis, Button, Enigo, Mouse};
+use enigo::{Axis, Button, Enigo};
 use rquickjs::{
     convert::Coerced,
     function::Rest,
@@ -41,11 +41,6 @@ trait MouseInput {
         y: i32,
         button: Button,
     ) -> Result<(), String>;
-
-    fn scroll(&mut self, length: i32, axis: Axis) -> Result<(), String> {
-        let _ = (length, axis);
-        Err("mouse scrolling is not supported".to_string())
-    }
 }
 
 fn click_at_with<C>(
@@ -67,10 +62,6 @@ impl MouseInput for Enigo {
         _button: Button,
     ) -> Result<(), String> {
         click_at_with(x, y, post_click_to_game)
-    }
-
-    fn scroll(&mut self, length: i32, axis: Axis) -> Result<(), String> {
-        Mouse::scroll(self, length, axis).map_err(|error| error.to_string())
     }
 }
 
@@ -354,26 +345,19 @@ impl ScriptSession {
                         )?,
                     )?;
 
-                    let scroll_controls = controls.clone();
+                    let scroll_window = controls.window.clone();
+                    let scroll_paused = controls.actions_paused.clone();
                     rev.set(
                         "scroll",
                         Function::new(
                             ctx.clone(),
-                            move |length: f64, axis: Opt<Value>| {
+                            move |x: f64, y: f64, length: f64, axis: Opt<Value>| {
+                                let x = validate_coordinate(x)?;
+                                let y = validate_coordinate(y)?;
                                 let length = validate_scroll_length(length)?;
                                 let axis = parse_scroll_axis(axis)?;
-                                ensure_actions_running(&scroll_controls.actions_paused)?;
-                                scroll_controls
-                                    .mouse
-                                    .borrow_mut()
-                                    .scroll(length, axis)
-                                    .map_err(|message| {
-                                        Error::new_from_js_message(
-                                            "mouse input",
-                                            "JavaScript",
-                                            message,
-                                        )
-                                    })
+                                ensure_actions_running(&scroll_paused)?;
+                                scroll_window.scroll(x, y, length, axis).map_err(host_error)
                             },
                         )?,
                     )?;
@@ -890,13 +874,17 @@ mod tests {
     enum HostEvent {
         Resize(i32, i32),
         Click(i32, i32, Button),
-        Scroll(i32, Axis),
+        Scroll(i32, i32, i32, Axis),
     }
 
     struct RecordingWindow { events: Rc<RefCell<Vec<HostEvent>>> }
     impl WindowControl for RecordingWindow {
         fn resize_client(&self, width: i32, height: i32) -> Result<(), String> {
             self.events.borrow_mut().push(HostEvent::Resize(width, height)); Ok(())
+        }
+
+        fn scroll(&self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
+            self.events.borrow_mut().push(HostEvent::Scroll(x, y, length, axis)); Ok(())
         }
     }
     struct RecordingMouse { events: Rc<RefCell<Vec<HostEvent>>> }
@@ -905,9 +893,6 @@ mod tests {
             self.events.borrow_mut().push(HostEvent::Click(x, y, button)); Ok(())
         }
 
-        fn scroll(&mut self, length: i32, axis: Axis) -> Result<(), String> {
-            self.events.borrow_mut().push(HostEvent::Scroll(length, axis)); Ok(())
-        }
     }
     fn recording_controls() -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
         let events = Rc::new(RefCell::new(Vec::new()));
@@ -1324,14 +1309,14 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn scroll_accepts_named_axes_and_short_aliases() {
+    async fn scroll_posts_through_window_control_for_named_axes_and_short_aliases() {
         let session = ScriptSession::new(
             r#"
                 (async (rev) => {
-                    await rev.scroll(2, "vertical");
-                    await rev.scroll(-1, "h");
-                    await rev.scroll(3, "v");
-                    await rev.scroll(-4, "horizontal");
+                    await rev.scroll(10, 20, 2, "vertical");
+                    await rev.scroll(-30, 40, -1, "h");
+                    await rev.scroll(50, -60, 3, "v");
+                    await rev.scroll(-70, -80, -4, "horizontal");
                 })
             "#,
         )
@@ -1344,10 +1329,10 @@ mod tests {
         assert_eq!(
             *events.borrow(),
             vec![
-                HostEvent::Scroll(2, Axis::Vertical),
-                HostEvent::Scroll(-1, Axis::Horizontal),
-                HostEvent::Scroll(3, Axis::Vertical),
-                HostEvent::Scroll(-4, Axis::Horizontal),
+                HostEvent::Scroll(10, 20, 2, Axis::Vertical),
+                HostEvent::Scroll(-30, 40, -1, Axis::Horizontal),
+                HostEvent::Scroll(50, -60, 3, Axis::Vertical),
+                HostEvent::Scroll(-70, -80, -4, Axis::Horizontal),
             ]
         );
     }
@@ -1358,9 +1343,11 @@ mod tests {
             r#"((rev) => rev.clickn(1, 2, -1))"#,
             r#"((rev) => rev.clickn(1, 2, 1.5))"#,
             r#"((rev) => rev.clickn(1, 2, Infinity))"#,
-            r#"((rev) => rev.scroll(1.5))"#,
-            r#"((rev) => rev.scroll(1, "diagonal"))"#,
-            r#"((rev) => rev.scroll(1, null))"#,
+            r#"((rev) => rev.scroll(1.5, 2, 1))"#,
+            r#"((rev) => rev.scroll(1, Infinity, 1))"#,
+            r#"((rev) => rev.scroll(1, 2, 1.5))"#,
+            r#"((rev) => rev.scroll(1, 2, 1, "diagonal"))"#,
+            r#"((rev) => rev.scroll(1, 2, 1, null))"#,
         ] {
             let session = ScriptSession::new(source).await.unwrap();
             let (controls, events) = recording_controls();

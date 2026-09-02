@@ -17,6 +17,87 @@ internal static class UnityUiClickDispatcher
         return -1;
     }
 
+    internal static int FindFirstScrollableIndex(IReadOnlyList<bool> scrollable)
+    {
+        for (int index = 0; index < scrollable.Count; index++)
+        {
+            if (scrollable[index])
+                return index;
+        }
+
+        return -1;
+    }
+
+    internal static bool TryDispatchScroll(nint window, ScrollCommand command, out string result)
+    {
+        if (window == 0 || !GetClientRect(window, out Rect client))
+        {
+            result = $"invalid bounds at ({command.X}, {command.Y})";
+            return false;
+        }
+
+        int clientWidth = client.Right - client.Left;
+        int clientHeight = client.Bottom - client.Top;
+        if (!InputBridgeProtocol.TryMapToUnity(
+                new ClickCommand(command.RequestId, command.X, command.Y),
+                clientWidth,
+                clientHeight,
+                Screen.width,
+                Screen.height,
+                out float unityX,
+                out float unityY))
+        {
+            result = $"invalid bounds at ({command.X}, {command.Y})";
+            return false;
+        }
+
+        EventSystem? eventSystem = EventSystem.current;
+        if (eventSystem is null)
+        {
+            result = "no EventSystem";
+            return false;
+        }
+
+        var pointerData = new PointerEventData(eventSystem)
+        {
+            position = new Vector2(unityX, unityY),
+            scrollDelta = command.Axis == 0
+                ? new Vector2(0f, command.Length)
+                : new Vector2(command.Length, 0f)
+        };
+        var raycasts = new Il2CppSystem.Collections.Generic.List<RaycastResult>();
+        eventSystem.RaycastAll(pointerData, raycasts);
+
+        var scrollable = new bool[raycasts.Count];
+        var scrollTargets = new GameObject?[raycasts.Count];
+        for (int index = 0; index < raycasts.Count; index++)
+        {
+            GameObject? candidate = raycasts[index].gameObject;
+            if (candidate is null)
+                continue;
+
+            GameObject? target = ExecuteEvents.GetEventHandler<IScrollHandler>(candidate);
+            if (target is not null)
+            {
+                scrollable[index] = true;
+                scrollTargets[index] = target;
+            }
+        }
+
+        int scrollableIndex = FindFirstScrollableIndex(scrollable);
+        if (scrollableIndex < 0)
+        {
+            result = $"no scroll handler at ({command.X}, {command.Y})";
+            return false;
+        }
+
+        GameObject targetObject = scrollTargets[scrollableIndex]!;
+        pointerData.pointerCurrentRaycast = raycasts[scrollableIndex];
+        ExecuteEvents.Execute(targetObject, pointerData, ExecuteEvents.scrollHandler);
+        result = $"scrolled '{targetObject.name}' at ({command.X}, {command.Y})";
+        return true;
+    }
+
     internal static bool TryDispatch(
         nint window,
         ClickCommand command,

@@ -20,10 +20,12 @@ use windows::{
         },
     },
 };
+use enigo::Axis;
 
 const GAME_EXECUTABLE: &str = "Revolution Idle.exe";
 const CONSOLE_WINDOW_CLASS: &str = "ConsoleWindowClass";
-const INPUT_BRIDGE_MESSAGE: u32 = 0x8000 + 0x417;
+const INPUT_BRIDGE_MESSAGE: u32 = 0x8417;
+const SCROLL_BRIDGE_MESSAGE: u32 = 0x8418;
 
 fn pack_bridge_coordinates(x: i32, y: i32) -> isize {
     (((y as u32 as u64) << 32) | x as u32 as u64) as isize
@@ -49,6 +51,34 @@ where
         LPARAM(pack_bridge_coordinates(x, y)),
     )
     .map_err(|error| format!("PostMessageW(INPUT_BRIDGE_MESSAGE) failed: {error}"))
+}
+
+fn pack_bridge_scroll(length: i32, axis: Axis, request_id: usize) -> usize {
+    let axis_code = match axis {
+        Axis::Vertical => 0u64,
+        Axis::Horizontal => 1,
+    };
+    let request_id = (request_id as u64) & 0x7fff_ffff;
+    ((request_id << 33) | (axis_code << 32) | length as u32 as u64) as usize
+}
+
+fn post_bridge_scroll_with<F>(
+    x: i32,
+    y: i32,
+    length: i32,
+    axis: Axis,
+    request_id: usize,
+    post: F,
+) -> Result<(), String>
+where
+    F: FnOnce(u32, WPARAM, LPARAM) -> windows::core::Result<()>,
+{
+    post(
+        SCROLL_BRIDGE_MESSAGE,
+        WPARAM(pack_bridge_scroll(length, axis, request_id)),
+        LPARAM(pack_bridge_coordinates(x, y)),
+    )
+    .map_err(|error| format!("PostMessageW(SCROLL_BRIDGE_MESSAGE) failed: {error}"))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,6 +140,16 @@ fn outer_size_for_client(
 
 pub trait WindowControl {
     fn resize_client(&self, width: i32, height: i32) -> Result<(), String>;
+
+    fn scroll(
+        &self,
+        _x: i32,
+        _y: i32,
+        _length: i32,
+        _axis: Axis,
+    ) -> Result<(), String> {
+        Err("window scrolling is not supported".to_string())
+    }
 }
 
 #[derive(Default)]
@@ -206,6 +246,33 @@ pub(crate) fn post_click_to_game(x: i32, y: i32) -> Result<(), String> {
     post_bridge_click_with(x, y, request_id, |message, wparam, lparam| unsafe {
         PostMessageW(Some(hwnd), message, wparam, lparam)
     })
+}
+
+pub(crate) fn post_scroll_to_game(
+    x: i32,
+    y: i32,
+    length: i32,
+    axis: Axis,
+) -> Result<(), String> {
+    let hwnd = find_game_window()?;
+    let request_id = request_id_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("system clock is before UNIX epoch: {error}"))?
+            .as_nanos(),
+        std::process::id(),
+    );
+
+    post_bridge_scroll_with(
+        x,
+        y,
+        length,
+        axis,
+        request_id,
+        |message, wparam, lparam| unsafe {
+            PostMessageW(Some(hwnd), message, wparam, lparam)
+        },
+    )
 }
 
 pub(crate) fn screen_to_client_position(
@@ -319,11 +386,16 @@ impl WindowControl for Win32WindowControl {
 
         Ok(())
     }
+
+    fn scroll(&self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
+        post_scroll_to_game(x, y, length, axis)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use enigo::Axis;
     use std::path::Path;
 
     fn assert_window_control<T: WindowControl>() {}
@@ -407,5 +479,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(received, vec![(0x8417, 17, 0x00000050000004b0)]);
+    }
+
+    #[test]
+    fn background_scroll_packs_coordinates_length_axis_and_request_id() {
+        let mut received = Vec::new();
+        post_bridge_scroll_with(1200, 80, -1, Axis::Horizontal, 17, |message, wparam, lparam| {
+            received.push((message, wparam.0, lparam.0 as u64));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            received,
+            vec![(0x8418, 0x00000023ffffffff, 0x00000050000004b0)]
+        );
     }
 }

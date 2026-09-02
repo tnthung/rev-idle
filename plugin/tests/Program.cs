@@ -16,7 +16,11 @@ BridgeQueueDequeuesInOrderAndClears();
 BridgeCallbackIdentityRequiresUndisposedActiveWindowAndSubclass();
 BridgeOwnershipReleaseRequiresDestroyedOrSuccessfulOwnerRemoval();
 DispatcherSkipsNonClickableRaycasts();
-System.Console.WriteLine("12 tests passed.");
+ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
+ScrollProtocolRejectsZeroRequestId();
+ScrollQueuePreservesOrderAndRejectsDuplicates();
+DispatcherFindsFirstScrollableRaycast();
+System.Console.WriteLine("16 tests passed.");
 
 static Task ScorePayloadUsesInvariantRoundTripFormatting()
 {
@@ -142,6 +146,49 @@ static void DispatcherSkipsNonClickableRaycasts()
 
     Equal(2, UnityUiClickDispatcher.FindFirstClickableIndex(new[] { false, false, true }), testName);
     Equal(-1, UnityUiClickDispatcher.FindFirstClickableIndex(new[] { false, false }), testName);
+}
+
+static void ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId()
+{
+    const string testName = nameof(ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId);
+    Equal((uint)0x8418, InputBridgeProtocol.ScrollMessageId, testName);
+    Equal(true, InputBridgeProtocol.TryDecodeScroll(
+        unchecked((nuint)((42UL << 33) | (1UL << 32) | 0xFFFFFFFCUL)),
+        unchecked((nint)(long)0x12345678_ABCDEF01UL),
+        out ScrollCommand command), testName);
+    Equal(42UL, command.RequestId, testName);
+    Equal(-4, command.Length, testName);
+    Equal(1U, command.Axis, testName);
+    Equal(0xABCDEF01U, command.X, testName);
+    Equal(0x12345678U, command.Y, testName);
+}
+
+static void ScrollProtocolRejectsZeroRequestId()
+{
+    Equal(false, InputBridgeProtocol.TryDecodeScroll(
+        unchecked((nuint)((1UL << 32) | 5UL)),
+        (nint)1,
+        out _), nameof(ScrollProtocolRejectsZeroRequestId));
+}
+
+static void ScrollQueuePreservesOrderAndRejectsDuplicates()
+{
+    const string testName = nameof(ScrollQueuePreservesOrderAndRejectsDuplicates);
+    var queue = new ScrollCommandQueue();
+    Equal(true, InputBridgeProtocol.TryDecodeScroll(
+        unchecked((nuint)((7UL << 33) | unchecked((uint)-2))),
+        unchecked((nint)(long)0x00000002_00000001UL),
+        out ScrollCommand first), testName);
+    Equal(true, queue.TryEnqueue(first), testName);
+    Equal(false, queue.TryEnqueue(first), testName);
+    Equal(true, queue.TryDequeue(out ScrollCommand command), testName);
+    Equal(7UL, command.RequestId, testName);
+}
+
+static void DispatcherFindsFirstScrollableRaycast()
+{
+    const string testName = nameof(DispatcherFindsFirstScrollableRaycast);
+    Equal(1, UnityUiClickDispatcher.FindFirstScrollableIndex(new[] { false, true, false }), testName);
 }
 
 static void Near(float expected, float actual, string testName)

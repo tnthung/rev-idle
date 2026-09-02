@@ -13,10 +13,15 @@ internal sealed class Win32InputBridge : IDisposable
     private static Win32InputBridge? _active;
 
     private readonly ClickCommandQueue _queue;
+    private readonly ScrollCommandQueue _scrollQueue;
     private nint _window;
     private bool _disposed;
 
-    internal Win32InputBridge(ClickCommandQueue queue) => _queue = queue;
+    internal Win32InputBridge(ClickCommandQueue queue, ScrollCommandQueue? scrollQueue = null)
+    {
+        _queue = queue;
+        _scrollQueue = scrollQueue ?? new ScrollCommandQueue();
+    }
 
     internal nint Window => _window;
     internal bool IsAttached => _window != 0;
@@ -105,6 +110,7 @@ internal sealed class Win32InputBridge : IDisposable
 
         _disposed = true;
         _queue.Clear();
+        _scrollQueue.Clear();
 
         nint window = _window;
         if (window == 0)
@@ -157,6 +163,15 @@ internal sealed class Win32InputBridge : IDisposable
                 InputBridgeProtocol.TryDecode(wParam, lParam, out ClickCommand command))
             {
                 bridge._queue.TryEnqueue(command);
+                return 0;
+            }
+
+            if (message == InputBridgeProtocol.ScrollMessageId &&
+                _active is Win32InputBridge scrollBridge &&
+                IsCallbackIdentityValid(scrollBridge._disposed, window, scrollBridge._window, subclassId) &&
+                InputBridgeProtocol.TryDecodeScroll(wParam, lParam, out ScrollCommand scrollCommand))
+            {
+                scrollBridge._scrollQueue.TryEnqueue(scrollCommand);
                 return 0;
             }
         }
