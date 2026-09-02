@@ -278,7 +278,7 @@ internal static class StatePayload
         foreach (PropertyInfo property in GetProperties(type))
         {
             object? propertyValue = property.GetValue(value);
-            if (propertyValue is Delegate || IsUnityObject(propertyValue?.GetType()))
+            if (IsExcludedType(propertyValue?.GetType()))
                 continue;
             if (propertyValue is not null && IsTrackable(propertyValue.GetType()) && IsVisited(propertyValue, references, pointers))
                 continue;
@@ -315,21 +315,42 @@ internal static class StatePayload
         }
     }
 
-    private static PropertyInfo[] GetProperties(Type type) => Properties.GetOrAdd(type, type => type.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-        .Where(property => property.CanRead && property.GetMethod is { IsPublic: true } && property.GetIndexParameters().Length == 0 && !IsExcludedProperty(property))
-        .OrderBy(property => property.Name, StringComparer.Ordinal)
-        .ToArray());
+    private static PropertyInfo[] GetProperties(Type type) => Properties.GetOrAdd(type, type =>
+    {
+        List<PropertyInfo> properties = new();
+        HashSet<string> names = new(StringComparer.Ordinal);
+        for (Type? current = type; current is not null
+            && current != typeof(object)
+            && current != typeof(ValueType)
+            && current.FullName is not "Il2CppSystem.Object"
+            && current.FullName is not "Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase"
+            && current.FullName is not "UnityEngine.Object"
+            && current.FullName is not "UnityEngine.Events.UnityEventBase"
+            && current.FullName is not "Il2CppSystem.Delegate"
+            && current.FullName is not "Il2CppSystem.MulticastDelegate";
+            current = current.BaseType)
+        {
+            foreach (PropertyInfo property in current.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                if (names.Add(property.Name) && property.CanRead && property.GetMethod is { IsPublic: true } && property.GetIndexParameters().Length == 0 && !IsExcludedProperty(property))
+                    properties.Add(property);
+        }
+        return properties.OrderBy(property => property.Name, StringComparer.Ordinal).ToArray();
+    });
 
     private static bool IsExcludedProperty(PropertyInfo property) => property.Name is "Pointer" or "ObjectClass" or "WasCollected" or "Data" or "Controller" or "Parent"
         || property.Name.StartsWith("prop_", StringComparison.Ordinal)
         || property.Name.Contains("BackingField", StringComparison.Ordinal)
-        || typeof(Delegate).IsAssignableFrom(property.PropertyType)
-        || IsUnityObject(property.PropertyType);
+        || IsExcludedType(property.PropertyType);
 
-    private static bool IsUnityObject(Type? type)
+    private static bool IsExcludedType(Type? type)
     {
         for (; type is not null; type = type.BaseType)
-            if (type.FullName == "UnityEngine.Object")
+            if (type.FullName is "System.Delegate"
+                or "System.MulticastDelegate"
+                or "Il2CppSystem.Delegate"
+                or "Il2CppSystem.MulticastDelegate"
+                or "UnityEngine.Object"
+                or "UnityEngine.Events.UnityEventBase")
                 return true;
         return false;
     }

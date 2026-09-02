@@ -24,6 +24,8 @@ StatePayloadSerializesGameSpecificScalars();
 StatePayloadKeepsSelectedKeysForSharedValues();
 StatePayloadSerializesIl2CppDatesAndNullables();
 StatePayloadUsesIl2CppCollectionAccessors();
+StatePayloadIncludesInheritedGameplayProperties();
+StatePayloadExcludesIl2CppDelegatesAndUnityEvents();
 BridgeDecodesFullWidthCoordinates();
 BridgeRejectsZeroRequestId();
 BridgeMapsTopLeftClientCoordinatesToUnityCoordinates();
@@ -36,7 +38,7 @@ ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
 ScrollProtocolRejectsZeroRequestId();
 ScrollQueuePreservesOrderAndRejectsDuplicates();
 DispatcherFindsFirstScrollableRaycast();
-System.Console.WriteLine("30 tests passed.");
+System.Console.WriteLine("32 tests passed.");
 
 static void InvalidPortsDisableServer()
 {
@@ -353,6 +355,49 @@ static void StatePayloadUsesIl2CppCollectionAccessors()
     Equal("{\"Dictionary\":{\"2\":\"two\"},\"List\":[3,4]}", Encoding.UTF8.GetString(payload), nameof(StatePayloadUsesIl2CppCollectionAccessors));
 }
 
+static void StatePayloadIncludesInheritedGameplayProperties()
+{
+    var data = new InheritedFixtureRoot { Item = new InheritedFixtureDerived() };
+
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, Array.Empty<string>(), out byte[] canonicalPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
+    Equal("{\"Item\":{\"Base\":\"base\",\"Derived\":\"derived\",\"Hidden\":\"derived hidden\"}}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "Item.Base", "Item.Hidden" }, out byte[] selectedPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
+    Equal("{\"Item.Base\":\"base\",\"Item.Hidden\":\"derived hidden\"}", Encoding.UTF8.GetString(selectedPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
+}
+
+static void StatePayloadExcludesIl2CppDelegatesAndUnityEvents()
+{
+    static Type CreateDerivedType(ModuleBuilder module, string name, Type? baseType = null) => module.DefineType(name, TypeAttributes.Public | TypeAttributes.Class, baseType).CreateType();
+
+    static void AddThrowingProperty(TypeBuilder type, string name, Type propertyType)
+    {
+        MethodBuilder getter = type.DefineMethod($"get_{name}", MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig, propertyType, Type.EmptyTypes);
+        getter.GetILGenerator().Emit(OpCodes.Ldstr, "excluded getter invoked");
+        getter.GetILGenerator().Emit(OpCodes.Newobj, typeof(InvalidOperationException).GetConstructor(new[] { typeof(string) })!);
+        getter.GetILGenerator().Emit(OpCodes.Throw);
+        type.DefineProperty(name, PropertyAttributes.None, propertyType, null).SetGetMethod(getter);
+    }
+
+    ModuleBuilder module = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("ExcludedFixtures"), AssemblyBuilderAccess.Run).DefineDynamicModule("main");
+    Type unityEvent = CreateDerivedType(module, "UnityEngine.Events.UnityEvent", CreateDerivedType(module, "UnityEngine.Events.UnityEventBase"));
+    Type il2CppDelegate = CreateDerivedType(module, "Il2CppSystem.Delegate");
+    Type il2CppMulticastDelegate = CreateDerivedType(module, "Il2CppSystem.MulticastDelegate", il2CppDelegate);
+    Type il2CppFunc = CreateDerivedType(module, "Il2CppSystem.Func`2", il2CppMulticastDelegate);
+    TypeBuilder itemType = module.DefineType("FilteredGameplayFixture", TypeAttributes.Public | TypeAttributes.Class);
+    AddThrowingProperty(itemType, "Event", unityEvent);
+    AddThrowingProperty(itemType, "Provider", il2CppFunc);
+    MethodBuilder value = itemType.DefineMethod("get_Value", MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig, typeof(int), Type.EmptyTypes);
+    value.GetILGenerator().Emit(OpCodes.Ldc_I4_7);
+    value.GetILGenerator().Emit(OpCodes.Ret);
+    itemType.DefineProperty("Value", PropertyAttributes.None, typeof(int), null).SetGetMethod(value);
+    var data = new FilteredMemberRoot { Item = Activator.CreateInstance(itemType.CreateType())! };
+
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, Array.Empty<string>(), out byte[] canonicalPayload), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
+    Equal("{\"Item\":{\"Value\":7}}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "Item.Event" }, out _), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "Item.Provider" }, out _), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
+}
+
 static HttpScoreServer CreateServer()
 {
     using var probe = new TcpListener(IPAddress.Loopback, 0);
@@ -622,6 +667,28 @@ public class ReflectedDictionaryFixture : System.Collections.IEnumerable
 {
     public List<KeyValuePair<int, string>>.Enumerator GetEnumerator() => new List<KeyValuePair<int, string>> { new(2, "two") }.GetEnumerator();
     System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => throw new InvalidOperationException("CLR enumeration must not be used");
+}
+
+sealed class InheritedFixtureRoot
+{
+    public InheritedFixtureDerived Item { get; init; } = new();
+}
+
+class InheritedFixtureBase
+{
+    public string Base => "base";
+    public string Hidden => "base hidden";
+}
+
+sealed class InheritedFixtureDerived : InheritedFixtureBase
+{
+    public string Derived => "derived";
+    public new string Hidden => "derived hidden";
+}
+
+sealed class FilteredMemberRoot
+{
+    public object Item { get; init; } = new();
 }
 
 sealed class ResponseReader
