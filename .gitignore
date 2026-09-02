@@ -1,5 +1,6 @@
 .worktrees/
 .superpowers/
+client/target/
 plugin/**/bin/
 plugin/**/obj/
 plugin/.vs/
