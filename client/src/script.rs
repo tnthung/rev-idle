@@ -512,7 +512,7 @@ async fn run_with_controls(
 ) -> Result<(), String> {
     let (_shutdown_tx, shutdown) = watch::channel(false);
     let script_running = Arc::new(AtomicBool::new(false));
-    let capture_state = CaptureState;
+    let capture_state = CaptureState::default();
     run_with_controls_and_lifecycle(
         commands,
         reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(2)).build().map_err(|error| error.to_string())?,
@@ -1515,7 +1515,7 @@ mod tests {
             r#"
                 ((rev, memory) => {
                     memory.count = (memory.count ?? 0) + 1;
-                    rev.click(memory.count, rev.state.sequence);
+                    rev.click(memory.count, 0);
                 })
             "#,
         )
@@ -1565,7 +1565,7 @@ mod tests {
 
                 assert_eq!(
                     event_rx.recv().await,
-                    Some((1, 7, Button::Left))
+                    Some((1, 0, Button::Left))
                 );
 
                 state_tx

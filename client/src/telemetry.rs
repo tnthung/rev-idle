@@ -8,13 +8,9 @@ pub async fn request_state(
 ) -> Result<BTreeMap<String, String>, String> {
     let mut request = client.get(STATE_URL);
     if !keys.is_empty() {
-        request = client.get(format!(
-            "{STATE_URL}?{}",
-            keys.iter()
-                .map(|key| url::form_urlencoded::Serializer::new(String::new()).append_pair("key", key).finish())
-                .collect::<Vec<_>>()
-                .join("&")
-        ));
+        request = request.query(
+            &keys.iter().map(|key| ("key", key)).collect::<Vec<_>>(),
+        );
     }
     let response = request.send().await.map_err(|error| error.to_string())?;
     let response = response

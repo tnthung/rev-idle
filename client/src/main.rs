@@ -1,5 +1,3 @@
-#![allow(clippy::items_after_test_module)]
-
 mod window;
 mod console;
 mod script;
@@ -120,7 +118,7 @@ async fn main() -> io::Result<()> {
     let (command_tx, command_rx) = mpsc::channel(32);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let script_running = Arc::new(AtomicBool::new(false));
-    let capture_state = capture::CaptureState;
+    let capture_state = capture::CaptureState::default();
     let console_commands = command_tx.clone();
     let hotkey = hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx)
         .map_err(io::Error::other)?;
