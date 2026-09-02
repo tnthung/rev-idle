@@ -31,6 +31,9 @@
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.CoreModule.dll">
       <Private>false</Private>
     </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.UI.dll">
+      <Private>false</Private>
+    </Reference>
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.dll">
       <Private>false</Private>
     </Reference>

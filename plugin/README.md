@@ -62,6 +62,18 @@ Port = 19841
 
 `0`, non-numeric values, and values outside `1..65535` disable output. The destination is always `127.0.0.1`; send failures are intentionally ignored.
 
+## Background UI click probe
+
+The plugin accepts only the fixed background-input bridge message and dispatches matching clicks to Unity uGUI handlers. It does not use `Input.GetMouseButtonDown()`, focus the game window, or move the cursor by default.
+
+Run the background click probe from the repository root:
+
+```powershell
+cargo +1.97.1 run --manifest-path client/Cargo.toml --bin window_message_probe
+```
+
+Add `--focus` only when explicit window focus is desired.
+
 ## Receive a packet
 
 Run this in PowerShell before starting the game:

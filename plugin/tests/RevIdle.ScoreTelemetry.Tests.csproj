@@ -13,6 +13,10 @@
     <Compile Include="..\src\ScorePayload.cs" Link="ScorePayload.cs" />
     <Compile Include="..\src\UdpScorePublisher.cs" Link="UdpScorePublisher.cs" />
     <Compile Include="..\src\Plugin.cs" Link="Plugin.cs" />
+    <Compile Include="..\src\InputBridgeProtocol.cs" Link="InputBridgeProtocol.cs" />
+    <Compile Include="..\src\ClickCommandQueue.cs" Link="ClickCommandQueue.cs" />
+    <Compile Include="..\src\Win32InputBridge.cs" Link="Win32InputBridge.cs" />
+    <Compile Include="..\src\UnityUiClickDispatcher.cs" Link="UnityUiClickDispatcher.cs" />
   </ItemGroup>
 
   <ItemGroup>
@@ -32,6 +36,9 @@
       <Private>true</Private>
     </Reference>
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.CoreModule.dll">
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.UI.dll">
       <Private>true</Private>
     </Reference>
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.dll">
