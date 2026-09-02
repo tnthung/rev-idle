@@ -11,14 +11,15 @@ use windows::{
         },
         UI::WindowsAndMessaging::{
             EnumWindows, GetClientRect, GetForegroundWindow, GetWindowRect,
-            GetWindowThreadProcessId, IsWindowVisible, SetCursorPos, SetForegroundWindow,
-            SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-            SW_RESTORE,
+            GetWindowThreadProcessId, GetClassNameW, IsWindowVisible, SetCursorPos,
+            SetForegroundWindow, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOMOVE,
+            SWP_NOZORDER, SW_RESTORE,
         },
     },
 };
 
 const GAME_EXECUTABLE: &str = "Revolution Idle.exe";
+const CONSOLE_WINDOW_CLASS: &str = "ConsoleWindowClass";
 
 fn move_cursor_with<F>(x: i32, y: i32, set_cursor_pos: F) -> Result<(), String>
 where
@@ -62,6 +63,10 @@ fn is_game_executable(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.eq_ignore_ascii_case(GAME_EXECUTABLE))
+}
+
+fn is_console_window_class(class_name: &str) -> bool {
+    class_name.eq_ignore_ascii_case(CONSOLE_WINDOW_CLASS)
 }
 
 fn require_exactly_one<T>(matches: Vec<T>) -> Result<T, String> {
@@ -140,6 +145,16 @@ fn process_image_path(pid: u32) -> Result<PathBuf, String> {
     Ok(PathBuf::from(String::from_utf16_lossy(&buffer)))
 }
 
+fn window_class_name(hwnd: HWND) -> Result<String, String> {
+    let mut buffer = [0u16; 256];
+    let length = unsafe { GetClassNameW(hwnd, &mut buffer) };
+    if length == 0 {
+        return Err(format!("GetClassNameW failed for window {hwnd:?}"));
+    }
+
+    Ok(String::from_utf16_lossy(&buffer[..length as usize]))
+}
+
 fn find_game_window() -> Result<HWND, String> {
     let mut visible_windows = Vec::new();
     let lparam = LPARAM((&mut visible_windows as *mut Vec<HWND>) as isize);
@@ -148,6 +163,10 @@ fn find_game_window() -> Result<HWND, String> {
 
     let mut matches = Vec::new();
     for hwnd in visible_windows {
+        if is_console_window_class(&window_class_name(hwnd)?) {
+            continue;
+        }
+
         let mut pid = 0u32;
         let thread_id = unsafe {
             GetWindowThreadProcessId(hwnd, Some(&mut pid as *mut u32))
@@ -302,6 +321,13 @@ mod tests {
         assert!(!is_game_executable(Path::new(
             r#"C:\Games\Revolution Idle Launcher.exe"#,
         )));
+    }
+
+    #[test]
+    fn identifies_the_windows_console_class_case_insensitively() {
+        assert!(is_console_window_class("ConsoleWindowClass"));
+        assert!(is_console_window_class("consolewindowclass"));
+        assert!(!is_console_window_class("UnityWndClass"));
     }
 
     #[test]
