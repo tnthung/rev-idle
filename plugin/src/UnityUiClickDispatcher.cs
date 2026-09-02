@@ -6,6 +6,17 @@ namespace RevIdle.ScoreTelemetry;
 
 internal static class UnityUiClickDispatcher
 {
+    internal static int FindFirstClickableIndex(IReadOnlyList<bool> clickable)
+    {
+        for (int index = 0; index < clickable.Count; index++)
+        {
+            if (clickable[index])
+                return index;
+        }
+
+        return -1;
+    }
+
     internal static bool TryDispatch(
         nint window,
         ClickCommand command,
@@ -50,38 +61,45 @@ internal static class UnityUiClickDispatcher
         var raycasts = new Il2CppSystem.Collections.Generic.List<RaycastResult>();
         eventSystem.RaycastAll(pointerData, raycasts);
 
-        RaycastResult hit = default!;
-        bool hasHit = false;
+        string firstHitName = "<none>";
+        if (raycasts.Count > 0)
+        {
+            GameObject? firstHitObject = raycasts[0].gameObject;
+            firstHitName = firstHitObject == null ? "<null>" : firstHitObject.name;
+        }
+
+        var clickable = new bool[raycasts.Count];
+        var clickTargets = new GameObject?[raycasts.Count];
         for (int index = 0; index < raycasts.Count; index++)
         {
             RaycastResult candidate = raycasts[index];
-            if (candidate.gameObject == null)
+            GameObject? candidateObject = candidate.gameObject;
+            if (candidateObject == null)
                 continue;
 
-            hit = candidate;
-            hasHit = true;
-            break;
+            GameObject? candidateTarget = ExecuteEvents.GetEventHandler<IPointerClickHandler>(candidateObject);
+            if (candidateTarget is null)
+                continue;
+
+            clickable[index] = true;
+            clickTargets[index] = candidateTarget;
         }
 
-        if (!hasHit)
+        int clickableIndex = FindFirstClickableIndex(clickable);
+        if (clickableIndex < 0)
         {
-            result = $"no raycast hit at ({command.X}, {command.Y})";
+            result = $"no clickable handler: raycasts={raycasts.Count}, first='{firstHitName}' at ({command.X}, {command.Y})";
             return false;
         }
 
+        RaycastResult hit = raycasts[clickableIndex];
         GameObject hitObject = hit.gameObject!;
+        GameObject clickTarget = clickTargets[clickableIndex]!;
         pointerData.pointerCurrentRaycast = hit;
         pointerData.pointerPressRaycast = hit;
 
         ExecuteEvents.ExecuteHierarchy(hitObject, pointerData, ExecuteEvents.pointerDownHandler);
         ExecuteEvents.ExecuteHierarchy(hitObject, pointerData, ExecuteEvents.pointerUpHandler);
-        GameObject? clickTarget = ExecuteEvents.GetEventHandler<IPointerClickHandler>(hitObject);
-        if (clickTarget is null)
-        {
-            result = $"no click handler at ({command.X}, {command.Y})";
-            return false;
-        }
-
         ExecuteEvents.Execute(clickTarget, pointerData, ExecuteEvents.pointerClickHandler);
         result = $"clicked '{clickTarget.name}' at ({command.X}, {command.Y})";
         return true;

@@ -15,7 +15,8 @@ BridgeQueueRejectsDuplicatesAndOverflow();
 BridgeQueueDequeuesInOrderAndClears();
 BridgeCallbackIdentityRequiresUndisposedActiveWindowAndSubclass();
 BridgeOwnershipReleaseRequiresDestroyedOrSuccessfulOwnerRemoval();
-System.Console.WriteLine("11 tests passed.");
+DispatcherSkipsNonClickableRaycasts();
+System.Console.WriteLine("12 tests passed.");
 
 static Task ScorePayloadUsesInvariantRoundTripFormatting()
 {
@@ -133,6 +134,14 @@ static void BridgeOwnershipReleaseRequiresDestroyedOrSuccessfulOwnerRemoval()
     Equal(true, Win32InputBridge.CanReleaseManagedOwnership(false, true, true), testName);
     Equal(false, Win32InputBridge.CanReleaseManagedOwnership(false, true, false), testName);
     Equal(false, Win32InputBridge.CanReleaseManagedOwnership(false, false, true), testName);
+}
+
+static void DispatcherSkipsNonClickableRaycasts()
+{
+    const string testName = nameof(DispatcherSkipsNonClickableRaycasts);
+
+    Equal(2, UnityUiClickDispatcher.FindFirstClickableIndex(new[] { false, false, true }), testName);
+    Equal(-1, UnityUiClickDispatcher.FindFirstClickableIndex(new[] { false, false }), testName);
 }
 
 static void Near(float expected, float actual, string testName)
