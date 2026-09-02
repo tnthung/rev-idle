@@ -10,8 +10,8 @@
 
   <ItemGroup>
     <Compile Include="Program.cs" />
-    <Compile Include="..\src\ScorePayload.cs" Link="ScorePayload.cs" />
-    <Compile Include="..\src\UdpScorePublisher.cs" Link="UdpScorePublisher.cs" />
+    <Compile Include="..\src\HttpScoreServer.cs" Link="HttpScoreServer.cs" />
+    <Compile Include="..\src\StatePayload.cs" Link="StatePayload.cs" />
     <Compile Include="..\src\Plugin.cs" Link="Plugin.cs" />
     <Compile Include="..\src\InputBridgeProtocol.cs" Link="InputBridgeProtocol.cs" />
     <Compile Include="..\src\ClickCommandQueue.cs" Link="ClickCommandQueue.cs" />

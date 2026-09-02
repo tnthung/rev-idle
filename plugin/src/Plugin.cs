@@ -12,7 +12,7 @@ public sealed class Plugin : BasePlugin
     public const string PluginName = "Revolution Idle Score Telemetry";
     public const string PluginVersion = "0.1.0";
 
-    private static UdpScorePublisher? _publisher;
+    private static HttpScoreServer? _server;
     private static ManualLogSource? _logger;
 
     public override void Load()
@@ -23,9 +23,9 @@ public sealed class Plugin : BasePlugin
             "Network",
             "Port",
             "19841",
-            "UDP destination port on 127.0.0.1. Set to 0 to disable.").Value;
+            "HTTP server port on 127.0.0.1. Set to 0 to disable.").Value;
 
-        _publisher = UdpScorePublisher.Create(configuredPort);
+        _server = HttpScoreServer.Create(configuredPort);
         AddComponent<ScoreTicker>();
     }
 
@@ -33,31 +33,29 @@ public sealed class Plugin : BasePlugin
 
     internal static void LogBridgeError(string message) => _logger?.LogError($"[InputBridge] {message}");
 
-    internal static void PublishScore()
+    internal static void CompletePending()
     {
         try
         {
             GameData? data = GameController.data;
-            if (data is null || _publisher is null)
+            if (data is null || _server is null)
                 return;
-
-            BigDouble score = data.score;
-            _publisher.Publish(ScorePayload.Encode(score.Mantissa, score.Exponent));
+            _server.CompletePending(keys => StatePayload.TryEncode(data, keys, out byte[] payload) ? (200, payload) : (503, Array.Empty<byte>()));
         }
         catch
         {
         }
     }
+
+    internal static void StopServer() => _server?.Dispose();
 }
 
 public sealed class ScoreTicker : MonoBehaviour
 {
-    private const float IntervalSeconds = 0.05f;
     private const float BridgeRetrySeconds = 1f;
     private const int MaxClicksPerFrame = 32;
     private const int MaxScrollsPerFrame = 32;
 
-    private float _elapsed;
     private float _bridgeRetryRemaining;
     private readonly ClickCommandQueue _clicks = new();
     private readonly ScrollCommandQueue _scrolls = new();
@@ -74,13 +72,20 @@ public sealed class ScoreTicker : MonoBehaviour
         DispatchQueuedClicks();
         DispatchQueuedScrolls();
 
-        if (AdvanceTimer(ref _elapsed, delta))
-            Plugin.PublishScore();
+        Plugin.CompletePending();
     }
 
-    public void OnDestroy() => StopBridge();
+    public void OnDestroy()
+    {
+        StopBridge();
+        Plugin.StopServer();
+    }
 
-    public void OnApplicationQuit() => StopBridge();
+    public void OnApplicationQuit()
+    {
+        StopBridge();
+        Plugin.StopServer();
+    }
 
     private void TryAttachBridge(float delta)
     {
@@ -172,15 +177,4 @@ public sealed class ScoreTicker : MonoBehaviour
         _scrolls.Clear();
     }
 
-    internal static bool AdvanceTimer(ref float elapsed, float delta)
-    {
-        elapsed += delta;
-        if (elapsed + 0.000001f < IntervalSeconds)
-            return false;
-
-        elapsed %= IntervalSeconds;
-        if (elapsed > IntervalSeconds - 0.000001f)
-            elapsed = 0f;
-        return true;
-    }
 }

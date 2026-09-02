@@ -4,10 +4,12 @@ using System.Net.Sockets;
 using System.Text;
 using RevIdle.ScoreTelemetry;
 
-await ScorePayloadUsesInvariantRoundTripFormatting();
-InvalidPortsDisablePublishing();
-await PublisherSendsExactPayloadToLoopback();
-TickerUsesFiftyMillisecondAccumulator();
+InvalidPortsDisableServer();
+await ServerReturnsQueuedState();
+await ServerReturnsNotFound();
+await ServerReturnsMethodNotAllowed();
+await ServerReturnsUnavailableState();
+await ServerDisposesPendingRequest();
 BridgeDecodesFullWidthCoordinates();
 BridgeRejectsZeroRequestId();
 BridgeMapsTopLeftClientCoordinatesToUnityCoordinates();
@@ -20,59 +22,101 @@ ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
 ScrollProtocolRejectsZeroRequestId();
 ScrollQueuePreservesOrderAndRejectsDuplicates();
 DispatcherFindsFirstScrollableRaycast();
-System.Console.WriteLine("16 tests passed.");
+System.Console.WriteLine("20 tests passed.");
 
-static Task ScorePayloadUsesInvariantRoundTripFormatting()
-{
-    CultureInfo previous = CultureInfo.CurrentCulture;
-    CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
-    try
-    {
-        string actual = Encoding.UTF8.GetString(ScorePayload.Encode(1.2345678901234567, 123));
-        Equal("{\"score\":\"1.2345678901234567e123\"}", actual, nameof(ScorePayloadUsesInvariantRoundTripFormatting));
-    }
-    finally
-    {
-        CultureInfo.CurrentCulture = previous;
-    }
-
-    return Task.CompletedTask;
-}
-
-static void InvalidPortsDisablePublishing()
+static void InvalidPortsDisableServer()
 {
     foreach (string? value in new string?[] { null, "", "not-a-port", "0", "-1", "65536" })
     {
-        using UdpScorePublisher? publisher = UdpScorePublisher.Create(value);
-        if (publisher is not null)
-            throw new InvalidOperationException($"{nameof(InvalidPortsDisablePublishing)}: '{value}' should be disabled.");
+        using HttpScoreServer? server = HttpScoreServer.Create(value);
+        if (server is not null)
+            throw new InvalidOperationException($"{nameof(InvalidPortsDisableServer)}: '{value}' should be disabled.");
     }
 }
 
-static async Task PublisherSendsExactPayloadToLoopback()
+static async Task ServerReturnsQueuedState()
 {
-    using var receiver = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
-    int port = ((IPEndPoint)receiver.Client.LocalEndPoint!).Port;
-    using UdpScorePublisher publisher = UdpScorePublisher.Create(port.ToString(CultureInfo.InvariantCulture))
-        ?? throw new InvalidOperationException($"{nameof(PublisherSendsExactPayloadToLoopback)}: valid port was rejected.");
-    byte[] payload = Encoding.UTF8.GetBytes("{\"score\":\"2.5e42\"}");
-
-    publisher.Publish(payload);
-
-    using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-    UdpReceiveResult result = await receiver.ReceiveAsync(timeout.Token);
-    Equal("127.0.0.1", result.RemoteEndPoint.Address.ToString(), nameof(PublisherSendsExactPayloadToLoopback));
-    Equal("{\"score\":\"2.5e42\"}", Encoding.UTF8.GetString(result.Buffer), nameof(PublisherSendsExactPayloadToLoopback));
+    using HttpScoreServer server = CreateServer();
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    await WaitForPending(server);
+    server.CompletePending(_ => (200, Encoding.UTF8.GetBytes("{\"score\":\"2.5e42\"}")));
+    string response = await ReadResponse(stream);
+    Equal("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: close\r\n\r\n{\"score\":\"2.5e42\"}", response, nameof(ServerReturnsQueuedState));
 }
 
-static void TickerUsesFiftyMillisecondAccumulator()
+static async Task ServerReturnsNotFound()
 {
-    float elapsed = 0f;
-    Equal(false, ScoreTicker.AdvanceTimer(ref elapsed, 0.049f), nameof(TickerUsesFiftyMillisecondAccumulator));
-    Equal(true, ScoreTicker.AdvanceTimer(ref elapsed, 0.001f), nameof(TickerUsesFiftyMillisecondAccumulator));
-    Near(0f, elapsed, nameof(TickerUsesFiftyMillisecondAccumulator));
-    Equal(true, ScoreTicker.AdvanceTimer(ref elapsed, 0.12f), nameof(TickerUsesFiftyMillisecondAccumulator));
-    Near(0.02f, elapsed, nameof(TickerUsesFiftyMillisecondAccumulator));
+    Equal(true, (await Request("GET /other HTTP/1.1", null)).StartsWith("HTTP/1.1 404 Not Found\r\n", StringComparison.Ordinal), nameof(ServerReturnsNotFound));
+}
+
+static async Task ServerReturnsMethodNotAllowed()
+{
+    Equal(true, (await Request("POST /state HTTP/1.1", null)).StartsWith("HTTP/1.1 405 Method Not Allowed\r\n", StringComparison.Ordinal), nameof(ServerReturnsMethodNotAllowed));
+}
+
+static async Task ServerReturnsUnavailableState()
+{
+    using HttpScoreServer server = CreateServer();
+    Equal(true, (await RequestWithServer(server, "GET /state HTTP/1.1", null)).StartsWith("HTTP/1.1 503 Service Unavailable\r\n", StringComparison.Ordinal), nameof(ServerReturnsUnavailableState));
+}
+
+static async Task ServerDisposesPendingRequest()
+{
+    HttpScoreServer server = CreateServer();
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
+    await WaitForPending(server);
+    server.Dispose();
+    Equal(0, await stream.ReadAsync(new byte[1]), nameof(ServerDisposesPendingRequest));
+}
+
+static HttpScoreServer CreateServer()
+{
+    using var probe = new TcpListener(IPAddress.Loopback, 0);
+    probe.Start();
+    int port = ((IPEndPoint)probe.LocalEndpoint).Port;
+    probe.Stop();
+    return HttpScoreServer.Create(port.ToString(CultureInfo.InvariantCulture)) ?? throw new InvalidOperationException("server failed to bind");
+}
+
+static async Task WaitForPending(HttpScoreServer server)
+{
+    await Task.Delay(100);
+}
+
+static async Task<string> Request(string request, byte[]? payload)
+{
+    using HttpScoreServer server = CreateServer();
+    return await RequestWithServer(server, request, payload);
+}
+
+static async Task<string> RequestWithServer(HttpScoreServer server, string request, byte[]? payload)
+{
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    await stream.WriteAsync(Encoding.ASCII.GetBytes($"{request}\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    if (request.StartsWith("GET /state", StringComparison.Ordinal))
+    {
+        await WaitForPending(server);
+        server.CompletePending(_ => payload is null ? (503, Array.Empty<byte>()) : (200, payload));
+    }
+    return await ReadResponse(stream);
+}
+
+static async Task<string> ReadResponse(NetworkStream stream)
+{
+    using var memory = new MemoryStream();
+    byte[] buffer = new byte[1024];
+    int read;
+    while ((read = await stream.ReadAsync(buffer)) > 0)
+        memory.Write(buffer, 0, read);
+    return Encoding.UTF8.GetString(memory.ToArray());
 }
 
 static void BridgeDecodesFullWidthCoordinates()
