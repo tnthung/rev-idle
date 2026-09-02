@@ -22,7 +22,7 @@ use rquickjs::{
     Value,
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::Path,
     rc::Rc,
     sync::{
@@ -270,13 +270,15 @@ impl ScriptSession {
         &self,
         state: State,
         controls: C,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let controls = controls.into();
         let script = self.script.clone();
         let memory = self.memory.clone();
         let freeze = self.freeze.clone();
+        let stop_requested = Rc::new(Cell::new(false));
+        let stop_request = stop_requested.clone();
 
-        self.context
+        let result = self.context
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<()> = async {
                     let script: Function = script.restore(&ctx)?;
@@ -299,6 +301,10 @@ impl ScriptSession {
 
                     let rev = Object::new(ctx.clone())?;
                     rev.set("state", state_object.clone())?;
+                    rev.set(
+                        "stop",
+                        Function::new(ctx.clone(), move || stop_request.set(true))?,
+                    )?;
 
                     let click_controls = controls.clone();
                     rev.set(
@@ -418,7 +424,9 @@ impl ScriptSession {
 
                 result.map_err(|error| CaughtError::from_error(&ctx, error).to_string())
             })
-            .await
+            .await;
+
+        result.map(|()| stop_requested.get())
     }
 }
 
@@ -705,25 +713,41 @@ async fn run_with_controls_and_lifecycle(
             continue;
         }
 
-        let Some(active) = session.as_ref() else {
-            continue;
-        };
         let snapshot = states.borrow_and_update().clone();
 
-        let invocation = active.invoke(snapshot, controls.clone());
-        tokio::pin!(invocation);
-        tokio::select! {
-            result = &mut invocation => {
-                if let Err(error) = result {
-                    eprintln!("script invocation failed: {error}");
+        let stop_requested = {
+            let Some(active) = session.as_ref() else {
+                continue;
+            };
+            let invocation = active.invoke(snapshot, controls.clone());
+            tokio::pin!(invocation);
+            tokio::select! {
+                result = &mut invocation => {
+                    match result {
+                        Ok(stop_requested) => stop_requested,
+                        Err(error) => {
+                            eprintln!("script invocation failed: {error}");
+                            false
+                        }
+                    }
+                }
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        script_running.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                    false
                 }
             }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    script_running.store(false, Ordering::Release);
-                    return Ok(());
-                }
-            }
+        };
+
+        if stop_requested {
+            controls.actions_paused.set_paused(false);
+            session = None;
+            script_running.store(false, Ordering::Release);
+            paused = false;
+            println!("script stopped");
+            continue;
         }
 
         tokio::time::sleep(loop_delay).await;
@@ -1929,6 +1953,68 @@ mod tests {
             .await;
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rev_stop_unloads_script_after_current_invocation() {
+        use std::fs;
+        use tokio::sync::{mpsc, watch};
+
+        let path = std::env::temp_dir().join(format!(
+            "rev-idle-stop-test-{}.js",
+            std::process::id(),
+        ));
+        fs::write(&path, r#"((rev) => { rev.stop(); rev.click(1, 1); })"#).unwrap();
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        struct StopMouse(mpsc::UnboundedSender<()>);
+        impl MouseInput for StopMouse {
+            fn click_at(
+                &mut self,
+                _x: i32,
+                _y: i32,
+                _button: Button,
+            ) -> Result<(), String> {
+                self.0.send(()).map_err(|error| error.to_string())
+            }
+        }
+
+        let mouse: SharedMouse = Rc::new(RefCell::new(StopMouse(event_tx)));
+        let (command_tx, command_rx) = mpsc::channel(32);
+        let (_state_tx, state_rx) = watch::channel(State::default());
+        let local = tokio::task::LocalSet::new();
+
+        let runner_path = path.clone();
+        local
+            .run_until(async move {
+                let runner = tokio::task::spawn_local(run_with_mouse(
+                    command_rx,
+                    state_rx,
+                    runner_path,
+                    mouse,
+                    Duration::from_millis(5),
+                ));
+
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(30), event_rx.recv())
+                        .await
+                        .is_err()
+                );
+
+                command_tx.send(ScriptCommand::Exit).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), runner)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            })
+            .await;
+
+        fs::remove_file(path).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
