@@ -1,6 +1,6 @@
 use std::{io, path::PathBuf};
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, BufReader},
     sync::{mpsc, watch},
 };
 
@@ -54,9 +54,17 @@ pub fn parse_command(line: &str) -> Result<ScriptCommand, String> {
 
 pub async fn run(
     command_tx: mpsc::Sender<ScriptCommand>,
+    shutdown: watch::Receiver<bool>,
+) -> io::Result<()> {
+    run_with_input(tokio::io::stdin(), command_tx, shutdown).await
+}
+
+async fn run_with_input<R: AsyncRead + Unpin>(
+    input: R,
+    command_tx: mpsc::Sender<ScriptCommand>,
     mut shutdown: watch::Receiver<bool>,
 ) -> io::Result<()> {
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut lines = BufReader::new(input).lines();
 
     loop {
         let line = tokio::select! {
@@ -72,7 +80,11 @@ pub async fn run(
 
         match parse_command(&line) {
             Ok(command) => {
+                let should_exit = command == ScriptCommand::Exit;
                 if command_tx.send(command).await.is_err() {
+                    return Ok(());
+                }
+                if should_exit {
                     return Ok(());
                 }
             }
@@ -87,6 +99,7 @@ pub async fn run(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use tokio::io::AsyncWriteExt;
 
     #[test]
     fn parses_lifecycle_commands() {
@@ -127,5 +140,25 @@ mod tests {
         assert!(parse_command(r#"load """#).is_err());
         assert!(parse_command("pause now").is_err());
         assert!(parse_command("exit now").is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn exit_returns_without_waiting_for_more_input() {
+        let (mut input, output) = tokio::io::duplex(64);
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let mut runner = tokio::spawn(run_with_input(output, command_tx, shutdown_rx));
+
+        input.write_all(b"exit\n").await.unwrap();
+        assert_eq!(command_rx.recv().await, Some(ScriptCommand::Exit));
+
+        match tokio::time::timeout(std::time::Duration::from_millis(30), &mut runner).await {
+            Ok(result) => result.unwrap().unwrap(),
+            Err(_) => {
+                runner.abort();
+                let _ = runner.await;
+                panic!("console waited for more input after exit");
+            }
+        }
     }
 }
