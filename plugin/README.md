@@ -1,18 +1,20 @@
 # Revolution Idle Score Telemetry
 
-This proof-of-concept BepInEx plugin sends the live Revolution Idle score to a local UDP listener every 50 ms.
+This proof-of-concept BepInEx plugin sends the live Revolution Idle state to a local UDP listener every 50 ms.
 
 Payload:
 
 ```json
-{"score":"1.2345678901234567e123"}
+{"score":"1.2345678901234567e123","income":"5e90","timeInf":123.4}
 ```
+
+All readable top-level `GameData` fields are emitted alongside `score`. Primitive numeric and Boolean values keep their JSON types; complex values use their invariant string representation. Large-number values use the same mantissa/exponent string representation as `score`.
 
 ## Requirements
 
 - Revolution Idle for Windows x64 (Steam)
 - BepInEx 6 IL2CPP build 785 or newer with generated `BepInEx/interop` assemblies
-- .NET SDK 9 for building
+- .NET SDK 8 or newer for building
 
 The plugin itself targets .NET 6 because that is the runtime embedded by BepInEx IL2CPP.
 

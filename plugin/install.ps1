@@ -359,7 +359,7 @@ function Invoke-ScoreTelemetryInstall {
     $gameDirectory = Resolve-GameDirectory $RequestedInstallationFolder
 
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-        throw "The .NET SDK is required. Install .NET SDK 9 and retry."
+        throw "The .NET SDK is required. Install .NET SDK 8 or newer and retry."
     }
 
     switch (Get-BepInExState $gameDirectory) {
