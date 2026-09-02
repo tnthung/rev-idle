@@ -682,6 +682,12 @@ async fn run_with_controls_and_lifecycle(
                         eprintln!("cannot capture while script is running");
                     }
                 },
+                ScriptCommand::Exit => {
+                    capture_state.set_enabled(false);
+                    controls.actions_paused.set_paused(false);
+                    script_running.store(false, Ordering::Release);
+                    return Ok(());
+                }
                 ScriptCommand::SetPaused(requested_paused) => {
                     let update = controls.actions_paused.current_update();
                     if update.paused() == requested_paused {
@@ -1041,8 +1047,12 @@ mod tests {
                 .await
                 .unwrap();
 
-                runner.abort();
-                let _ = runner.await;
+                command_tx.send(ScriptCommand::Exit).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), runner)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
             })
             .await;
 

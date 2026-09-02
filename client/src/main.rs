@@ -21,14 +21,17 @@ use tokio::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CtrlCAction {
     StopScript,
-    ShutdownClient,
+    StopCapture,
+    Ignore,
 }
 
-fn ctrl_c_action(script_running: bool) -> CtrlCAction {
+fn ctrl_c_action(script_running: bool, capture_enabled: bool) -> CtrlCAction {
     if script_running {
         CtrlCAction::StopScript
+    } else if capture_enabled {
+        CtrlCAction::StopCapture
     } else {
-        CtrlCAction::ShutdownClient
+        CtrlCAction::Ignore
     }
 }
 
@@ -67,12 +70,14 @@ mod tests {
 
     #[test]
     fn ctrl_c_with_a_running_script_requests_script_stop() {
-        assert_eq!(ctrl_c_action(true), CtrlCAction::StopScript);
+        assert_eq!(ctrl_c_action(true, false), CtrlCAction::StopScript);
+        assert_eq!(ctrl_c_action(true, true), CtrlCAction::StopScript);
     }
 
     #[test]
-    fn ctrl_c_without_a_running_script_requests_client_shutdown() {
-        assert_eq!(ctrl_c_action(false), CtrlCAction::ShutdownClient);
+    fn ctrl_c_stops_capture_or_is_ignored_when_idle() {
+        assert_eq!(ctrl_c_action(false, true), CtrlCAction::StopCapture);
+        assert_eq!(ctrl_c_action(false, false), CtrlCAction::Ignore);
     }
 }
 
@@ -153,20 +158,16 @@ async fn main() -> io::Result<()> {
                     }
                     result = tokio::signal::ctrl_c() => {
                         result?;
-                        match ctrl_c_action(script_running.load(Ordering::Acquire)) {
+                        match ctrl_c_action(
+                            script_running.load(Ordering::Acquire),
+                            capture_state.is_enabled(),
+                        ) {
                             CtrlCAction::StopScript => {
-                                if command_tx.send(console::ScriptCommand::Stop).await.is_err() {
-                                    shutdown_tx.send_replace(true);
-                                    break shutdown_tasks(
-                                        tasks,
-                                        Err(io::Error::other("script command channel closed")),
-                                    ).await;
-                                }
+                                capture_state.set_enabled(false);
+                                let _ = command_tx.send(console::ScriptCommand::Stop).await;
                             }
-                            CtrlCAction::ShutdownClient => {
-                                shutdown_tx.send_replace(true);
-                                break shutdown_tasks(tasks, Ok(())).await;
-                            }
+                            CtrlCAction::StopCapture => capture_state.set_enabled(false),
+                            CtrlCAction::Ignore => {}
                         }
                     }
                 }

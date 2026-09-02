@@ -4,7 +4,7 @@ use tokio::{
     sync::{mpsc, watch},
 };
 
-const USAGE: &str = "commands: load <script-path> | reload | pause | resume | stop | capture";
+const USAGE: &str = "commands: load <script-path> | reload | pause | resume | stop | capture | exit";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ScriptCommand {
@@ -14,6 +14,7 @@ pub enum ScriptCommand {
     Resume,
     Stop,
     Capture,
+    Exit,
     #[allow(dead_code)]
     SetPaused(bool),
 }
@@ -30,6 +31,7 @@ pub fn parse_command(line: &str) -> Result<ScriptCommand, String> {
         "resume" if argument.is_empty() => Ok(ScriptCommand::Resume),
         "stop" if argument.is_empty() => Ok(ScriptCommand::Stop),
         "capture" if argument.is_empty() => Ok(ScriptCommand::Capture),
+        "exit" if argument.is_empty() => Ok(ScriptCommand::Exit),
         "load" => {
             let path = if argument.len() >= 2
                 && argument.starts_with('"')
@@ -92,6 +94,7 @@ mod tests {
         assert_eq!(parse_command(" pause "), Ok(ScriptCommand::Pause));
         assert_eq!(parse_command("resume"), Ok(ScriptCommand::Resume));
         assert_eq!(parse_command("stop"), Ok(ScriptCommand::Stop));
+        assert_eq!(parse_command("exit"), Ok(ScriptCommand::Exit));
     }
 
     #[test]
@@ -123,5 +126,6 @@ mod tests {
         assert!(parse_command("load").is_err());
         assert!(parse_command(r#"load """#).is_err());
         assert!(parse_command("pause now").is_err());
+        assert!(parse_command("exit now").is_err());
     }
 }
