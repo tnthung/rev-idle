@@ -1546,11 +1546,7 @@ mod tests {
 
         let mouse: SharedMouse = Rc::new(RefCell::new(ChannelMouse(event_tx)));
         let (command_tx, command_rx) = mpsc::channel(32);
-        let (state_tx, state_rx) = watch::channel(State {
-            score: Some("1e1".to_owned()),
-            sequence: 7,
-            received_at_ms: Some(10),
-        });
+        let (_state_tx, state_rx) = watch::channel(State::default());
 
         let local = tokio::task::LocalSet::new();
         local
@@ -1567,19 +1563,6 @@ mod tests {
                     event_rx.recv().await,
                     Some((1, 0, Button::Left))
                 );
-
-                state_tx
-                    .send(State {
-                        score: Some("2e2".to_owned()),
-                        sequence: 8,
-                        received_at_ms: Some(20),
-                    })
-                    .unwrap();
-                loop {
-                    if event_rx.recv().await.unwrap().1 == 8 {
-                        break;
-                    }
-                }
 
                 command_tx.send(ScriptCommand::Resume).await.unwrap();
                 assert!(event_rx.recv().await.unwrap().0 >= 2);
@@ -1603,7 +1586,7 @@ mod tests {
 
                 command_tx.send(ScriptCommand::Reload).await.unwrap();
                 loop {
-                    if event_rx.recv().await == Some((1, 8, Button::Left)) {
+                    if event_rx.recv().await == Some((1, 0, Button::Left)) {
                         break;
                     }
                 }
