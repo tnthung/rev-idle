@@ -737,7 +737,7 @@ async fn run_with_controls_and_lifecycle(
                         Ok(stop_requested) => stop_requested,
                         Err(error) => {
                             eprintln!("script invocation failed: {error}");
-                            false
+                            true
                         }
                     }
                 }
@@ -1633,7 +1633,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn requested_pause_gates_the_active_turn_then_pauses_the_loop() {
+    async fn pause_error_stops_the_active_script() {
         use crate::console::ScriptCommand;
         use std::fs;
         use tokio::sync::{mpsc, watch};
@@ -1697,19 +1697,22 @@ mod tests {
                 )
                 .await
                 .is_err());
+                assert!(!gate.is_paused());
 
-                gate.set_paused(false);
-                command_tx
-                    .send(ScriptCommand::SetPaused(false))
+                command_tx.send(ScriptCommand::Resume).await.unwrap();
+                assert!(tokio::time::timeout(
+                    Duration::from_millis(30),
+                    event_rx.recv(),
+                )
                     .await
-                    .unwrap();
-                tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                    .is_err());
+
+                command_tx.send(ScriptCommand::Exit).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), runner)
                     .await
                     .unwrap()
+                    .unwrap()
                     .unwrap();
-
-                runner.abort();
-                let _ = runner.await;
             })
             .await;
 
@@ -2050,8 +2053,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn waits_after_failed_and_successful_invocations() {
-        use std::{fs, time::Instant};
+    async fn unhandled_exception_stops_script_after_first_invocation() {
+        use std::fs;
         use tokio::sync::{mpsc, watch};
 
         let path = std::env::temp_dir().join(format!(
@@ -2062,77 +2065,65 @@ mod tests {
             &path,
             r#"
                 ((rev) => {
-                    globalThis.calls = (globalThis.calls ?? 0) + 1;
-                    rev.click(globalThis.calls, 0, "left");
-                    if (globalThis.calls === 1) {
-                        throw new Error("first call fails");
-                    }
+                    rev.click(1, 0, "left");
+                    throw new Error("stop after this invocation");
                 })
             "#,
         )
         .unwrap();
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-        struct TimedMouse(mpsc::UnboundedSender<Instant>);
-        impl MouseInput for TimedMouse {
+        struct ErrorMouse(mpsc::UnboundedSender<()>);
+        impl MouseInput for ErrorMouse {
             fn click_at(
                 &mut self,
                 _x: i32,
                 _y: i32,
                 _button: Button,
             ) -> Result<(), String> {
-                self.0
-                    .send(Instant::now())
-                    .map_err(|error| error.to_string())
+                self.0.send(()).map_err(|error| error.to_string())
             }
         }
 
-        let mouse: SharedMouse = Rc::new(RefCell::new(TimedMouse(event_tx)));
-        let (_command_tx, command_rx) = mpsc::channel(32);
+        let mouse: SharedMouse = Rc::new(RefCell::new(ErrorMouse(event_tx)));
+        let (command_tx, command_rx) = mpsc::channel(32);
         let (_state_tx, state_rx) = watch::channel(State::default());
-        let delay = Duration::from_millis(20);
         let local = tokio::task::LocalSet::new();
 
         let runner_path = path.clone();
-        local
+        let invoked_again = local
             .run_until(async move {
                 let runner = tokio::task::spawn_local(run_with_mouse(
                     command_rx,
                     state_rx,
                     runner_path,
                     mouse,
-                    delay,
+                    Duration::from_millis(5),
                 ));
 
-                let first = tokio::time::timeout(
-                    Duration::from_secs(1),
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let invoked_again = tokio::time::timeout(
+                    Duration::from_millis(30),
                     event_rx.recv(),
                 )
                 .await
-                .unwrap()
-                .unwrap();
-                let second = tokio::time::timeout(
-                    Duration::from_secs(1),
-                    event_rx.recv(),
-                )
-                .await
-                .unwrap()
-                .unwrap();
-                let third = tokio::time::timeout(
-                    Duration::from_secs(1),
-                    event_rx.recv(),
-                )
-                .await
-                .unwrap()
-                .unwrap();
-                assert!(second.duration_since(first) >= delay);
-                assert!(third.duration_since(second) >= delay);
-                runner.abort();
-                let _ = runner.await;
+                .is_ok();
+
+                command_tx.send(ScriptCommand::Exit).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), runner)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+                invoked_again
             })
             .await;
 
         fs::remove_file(path).unwrap();
+        assert!(!invoked_again, "script ran again after an unhandled exception");
     }
 
     #[tokio::test(flavor = "current_thread")]
