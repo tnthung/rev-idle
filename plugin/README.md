@@ -1,14 +1,6 @@
 # Revolution Idle Score Telemetry
 
-This proof-of-concept BepInEx plugin sends the live Revolution Idle state to a local UDP listener every 50 ms.
-
-Payload:
-
-```json
-{"score":"1.2345678901234567e123","income":"5e90","timeInf":123.4}
-```
-
-All readable top-level `GameData` fields are emitted alongside `score`. Primitive numeric and Boolean values keep their JSON types; complex values use their invariant string representation. Large-number values use the same mantissa/exponent string representation as `score`.
+This BepInEx plugin exposes selected live Revolution Idle values through a loopback HTTP server. Values are fetched on demand; the plugin does not push periodic telemetry.
 
 ## Requirements
 
@@ -62,7 +54,7 @@ Configure the destination:
 Port = 19841
 ```
 
-`0`, non-numeric values, and values outside `1..65535` disable output. The destination is always `127.0.0.1`; send failures are intentionally ignored.
+`0`, non-numeric values, and values outside `1..65535` disable the server. The server listens only on `127.0.0.1`.
 
 ## Background UI click probe
 
@@ -76,21 +68,46 @@ cargo +1.97.1 run --manifest-path client/Cargo.toml --bin window_message_probe
 
 Add `--focus` only when explicit window focus is desired.
 
-## Receive a packet
+## Read state
 
-Run this in PowerShell before starting the game:
+The HTTP endpoint is `GET http://127.0.0.1:19841/state`. In PowerShell, request all values or only the values you need:
 
 ```powershell
-$udp = [Net.Sockets.UdpClient]::new(19841)
-try {
-    while ($true) {
-        $packet = $udp.ReceiveAsync().GetAwaiter().GetResult()
-        [Text.Encoding]::UTF8.GetString($packet.Buffer)
-    }
-} finally {
-    $udp.Dispose()
-}
+Invoke-RestMethod http://127.0.0.1:19841/state
+Invoke-RestMethod 'http://127.0.0.1:19841/state?key=score&key=IP'
 ```
+
+In JavaScript, `rev.state()` returns a promise. With no arguments it returns all supported keys; arguments return only those requested, case-sensitively:
+
+```javascript
+const state = await rev.state("score", "IP");
+```
+
+Each call fetches fresh values on demand. The returned object is frozen. Requests reuse one HTTP client and its keep-alive connection when possible. HTTP or response errors reject the promise.
+
+All values are BigDouble strings. Supported keys:
+
+| Key | GameData mapping | Key | GameData mapping |
+| --- | --- | --- | --- |
+| `score` | `score` | `income` | `income` |
+| `IP` | `infinity.IP` | `infinities` | `infinity.infs` |
+| `stars` | `infinity.stars` | `stardust` | `infinity.stardust` |
+| `EP` | `eternity.EP` | `eternities` | `eternity.eters` |
+| `DP` | `eternity.DP` | `AP` | `eternity.AP` |
+| `RP` | `eternity.curRP` | `RPMax` | `eternity.maximumRP` |
+| `RPSpent` | `eternity.spendRP` | `unities` | `unity.unities` |
+| `passiveUnities` | `unity.passiveUnities` | `astrodust` | `unity.astrodust` |
+| `singularities` | `singularity.singularity` | `atoms` | `singularity.atoms` |
+| `PlP` | `plague.PlP` | `PlPperPlG` | `plague.PlPperPlG` |
+| `PlG` | `plague.PlG` | `VE` | `plague.VE` |
+| `ViP` | `plague.ViP` | `tarotSwords` | `tarot.swords` |
+| `tarotWands` | `tarot.wands` | `tarotPentacles` | `tarot.pentacles` |
+| `tarotCups` | `tarot.cups` | `goldTarotSwords` | `tarot.goldSwords` |
+| `goldTarotWands` | `tarot.goldWands` | `goldTarotPentacles` | `tarot.goldPentacles` |
+| `goldTarotCups` | `tarot.goldCups` | `tarotDraws` | `tarot.draws` |
+| `timeSinceStart` | `timeSinceStart` | `timeInfinity` | `timeInf` |
+| `timeEternity` | `timeEtr` | `timeUnity` | `timeUnity` |
+| `timeTotal` | `timeTotal` |  |  |
 
 ## Uninstall
 
