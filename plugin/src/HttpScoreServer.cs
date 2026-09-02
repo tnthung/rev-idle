@@ -112,11 +112,26 @@ internal sealed class HttpScoreServer : IDisposable
                     await WriteResponse(stream, 404, "Not Found", Array.Empty<byte>(), true).ConfigureAwait(false);
                     return;
                 }
-                List<string> keys = ParseKeys(target);
-                if (keys.Count == 0 && target.Length == 2)
+                List<string> keys = new();
+                if (target.Length == 2)
                 {
-                    await WriteResponse(stream, 400, "Bad Request", Array.Empty<byte>(), true).ConfigureAwait(false);
-                    return;
+                    HashSet<string> seen = new(StringComparer.Ordinal);
+                    foreach (string parameter in target[1].Split('&', StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        string[] pair = parameter.Split('=', 2, StringSplitOptions.None);
+                        if (pair.Length != 2 || pair[0] != "key" || pair[1].Length == 0 || !SupportedKeys.Contains(pair[1]))
+                        {
+                            await WriteResponse(stream, 400, "Bad Request", Array.Empty<byte>(), true).ConfigureAwait(false);
+                            return;
+                        }
+                        if (seen.Add(pair[1]))
+                            keys.Add(pair[1]);
+                    }
+                    if (keys.Count == 0)
+                    {
+                        await WriteResponse(stream, 400, "Bad Request", Array.Empty<byte>(), true).ConfigureAwait(false);
+                        return;
+                    }
                 }
                 if (keys.Count == 0)
                     keys.AddRange(AllKeys);
@@ -141,23 +156,6 @@ internal sealed class HttpScoreServer : IDisposable
         catch (IOException) { }
         catch (ObjectDisposedException) { }
         finally { _clients.TryRemove(client, out _); }
-    }
-
-    private static List<string> ParseKeys(string[] target)
-    {
-        List<string> keys = new();
-        HashSet<string> seen = new(StringComparer.Ordinal);
-        if (target.Length != 2)
-            return keys;
-        foreach (string parameter in target[1].Split('&', StringSplitOptions.RemoveEmptyEntries))
-        {
-            string[] pair = parameter.Split('=', 2, StringSplitOptions.None);
-            if (pair.Length != 2 || pair[0] != "key" || pair[1].Length == 0 || !SupportedKeys.Contains(pair[1]))
-                return new();
-            if (seen.Add(pair[1]))
-                keys.Add(pair[1]);
-        }
-        return keys;
     }
 
     private static async Task<string?> ReadHeader(NetworkStream stream, CancellationToken cancellationToken)

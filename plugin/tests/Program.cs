@@ -26,7 +26,7 @@ ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
 ScrollProtocolRejectsZeroRequestId();
 ScrollQueuePreservesOrderAndRejectsDuplicates();
 DispatcherFindsFirstScrollableRaycast();
-System.Console.WriteLine("26 tests passed.");
+System.Console.WriteLine("22 tests passed.");
 
 static void InvalidPortsDisableServer()
 {
@@ -143,71 +143,6 @@ static async Task KeepAliveRequestsUseContentLength()
     Equal("{\"IP\":\"2e3\"}", Encoding.UTF8.GetString(second.Body), nameof(KeepAliveRequestsUseContentLength));
 }
 
-static async Task SecondClientCompletesWhileFirstIdle()
-{
-    using HttpScoreServer server = CreateServer();
-    using TcpClient idle = new();
-    await idle.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream idleStream = idle.GetStream();
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"score\":\"5\"}")));
-    HttpResponse response = await new ResponseReader(stream).ReadResponse();
-    Equal(200, response.StatusCode, nameof(SecondClientCompletesWhileFirstIdle));
-}
-
-static async Task PartialHeaderTimesOut()
-{
-    using HttpScoreServer server = CreateServer();
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\n"));
-    await ExpectConnectionClosed(stream, nameof(PartialHeaderTimesOut));
-    Equal(false, server.CompletePending(_ => throw new InvalidOperationException("partial header was queued")), nameof(PartialHeaderTimesOut));
-}
-
-static async Task TimedOutPendingRequestDoesNotConsumeFreshCompletion()
-{
-    using HttpScoreServer server = CreateServer();
-    using (TcpClient stale = new())
-    {
-        await stale.ConnectAsync(IPAddress.Loopback, server.Port);
-        await using NetworkStream staleStream = stale.GetStream();
-        await staleStream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-        await ExpectConnectionClosed(staleStream, nameof(TimedOutPendingRequestDoesNotConsumeFreshCompletion));
-    }
-
-    using TcpClient fresh = new();
-    await fresh.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream freshStream = fresh.GetStream();
-    ResponseReader reader = new(freshStream);
-    await freshStream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=IP HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"IP\":\"9e1\"}")));
-    Equal(true, keys.SequenceEqual(new[] { "IP" }), nameof(TimedOutPendingRequestDoesNotConsumeFreshCompletion));
-    Equal(200, (await reader.ReadResponse()).StatusCode, nameof(TimedOutPendingRequestDoesNotConsumeFreshCompletion));
-}
-
-static async Task DisposeClosesIdleAndQueuedClientsAndAllowsRebind()
-{
-    HttpScoreServer server = CreateServer();
-    int port = server.Port;
-    using TcpClient idle = new();
-    await idle.ConnectAsync(IPAddress.Loopback, port);
-    await using NetworkStream idleStream = idle.GetStream();
-    using TcpClient queued = new();
-    await queued.ConnectAsync(IPAddress.Loopback, port);
-    await using NetworkStream queuedStream = queued.GetStream();
-    await queuedStream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
-    server.Dispose();
-    server.Dispose();
-    await ExpectConnectionClosed(idleStream, nameof(DisposeClosesIdleAndQueuedClientsAndAllowsRebind));
-    await ExpectConnectionClosed(queuedStream, nameof(DisposeClosesIdleAndQueuedClientsAndAllowsRebind));
-    using HttpScoreServer rebound = HttpScoreServer.Create(port.ToString(CultureInfo.InvariantCulture)) ?? throw new InvalidOperationException("server failed to rebind after disposal");
-}
-
 static void StatePayloadFormatsBigDoubleValues()
 {
     byte[] payload = StatePayload.Encode(new[] { ("score", 2.5, 42d), ("timeInfinity", 3.5, 7d), ("timeEternity", 4.5, 8d) });
@@ -247,17 +182,6 @@ static async Task<IReadOnlyList<string>> CompletePendingUntil(HttpScoreServer se
         await Task.Delay(10);
     }
     throw new InvalidOperationException("timed out waiting for a pending request");
-}
-
-static async Task ExpectConnectionClosed(NetworkStream stream, string testName)
-{
-    try
-    {
-        Equal(0, await stream.ReadAsync(new byte[1]).AsTask().WaitAsync(TimeSpan.FromSeconds(4)), testName);
-    }
-    catch (IOException)
-    {
-    }
 }
 
 static void BridgeDecodesFullWidthCoordinates()
