@@ -20,7 +20,12 @@ use windows::{
         },
     },
 };
-use enigo::Axis;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    Vertical,
+    Horizontal,
+}
 
 const GAME_EXECUTABLE: &str = "Revolution Idle.exe";
 const CONSOLE_WINDOW_CLASS: &str = "ConsoleWindowClass";
@@ -395,7 +400,6 @@ impl WindowControl for Win32WindowControl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use enigo::Axis;
     use std::path::Path;
 
     fn assert_window_control<T: WindowControl>() {}

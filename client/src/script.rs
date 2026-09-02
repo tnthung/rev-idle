@@ -3,9 +3,8 @@ use crate::{
     console::ScriptCommand,
     hotkey::{ActionGate, PauseUpdate},
     udp::State,
-    window::{post_click_to_game, Win32WindowControl, WindowControl},
+    window::{post_click_to_game, Axis, Win32WindowControl, WindowControl},
 };
-use enigo::{Axis, Button, Enigo};
 use rquickjs::{
     convert::Coerced,
     function::Rest,
@@ -34,6 +33,15 @@ use std::{
 };
 use tokio::sync::{mpsc, watch};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Button {
+    Left,
+    Right,
+    Middle,
+}
+
+struct BridgeMouseInput;
+
 trait MouseInput {
     fn click_at(
         &mut self,
@@ -54,7 +62,7 @@ where
     click(x, y)
 }
 
-impl MouseInput for Enigo {
+impl MouseInput for BridgeMouseInput {
     fn click_at(
         &mut self,
         x: i32,
@@ -434,10 +442,7 @@ pub async fn run(
     script_running: Arc<AtomicBool>,
     capture_state: CaptureState,
 ) -> Result<(), String> {
-    let mouse: SharedMouse = Rc::new(RefCell::new(
-        Enigo::new(&enigo::Settings::default())
-            .map_err(|error| format!("failed to initialize mouse input: {error}"))?,
-    ));
+    let mouse: SharedMouse = Rc::new(RefCell::new(BridgeMouseInput));
 
     run_with_controls_and_lifecycle(
         commands,
@@ -802,7 +807,6 @@ mod tests {
     use super::*;
     use crate::hotkey::ActionGate;
     use crate::udp::State;
-    use enigo::{Axis, Button};
     use std::{
         cell::RefCell,
         rc::Rc,
