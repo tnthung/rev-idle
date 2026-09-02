@@ -33,17 +33,21 @@ internal sealed class HttpScoreServer : IDisposable
 
     public bool CompletePending(Func<IReadOnlyList<string>, (int StatusCode, byte[] Body)> complete)
     {
-        if (!_pending.TryDequeue(out Pending? pending))
-            return false;
-        pending.Completion.TrySetResult(complete(pending.Keys));
-        return true;
+        while (_pending.TryDequeue(out Pending? pending))
+        {
+            if (pending.Completion.Task.IsCanceled)
+                continue;
+            pending.Completion.TrySetResult(complete(pending.Keys));
+            return true;
+        }
+        return false;
     }
 
     private async Task AcceptLoop()
     {
         while (!_stopping.IsCancellationRequested)
         {
-            try { await ProcessClient(await _listener.AcceptTcpClientAsync(_stopping.Token)); }
+            try { _ = ProcessClient(await _listener.AcceptTcpClientAsync(_stopping.Token)); }
             catch (OperationCanceledException) { }
             catch (ObjectDisposedException) { }
             catch { }
@@ -60,7 +64,7 @@ internal sealed class HttpScoreServer : IDisposable
         while (!_stopping.IsCancellationRequested)
         {
             string? header;
-            try { header = await ReadHeader(stream); } catch { return; }
+            try { header = await ReadHeader(stream).WaitAsync(TimeSpan.FromSeconds(2)); } catch { return; }
             if (header is null) return;
             string[] lines = header.Split("\r\n");
             string[] request = lines[0].Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -74,15 +78,17 @@ internal sealed class HttpScoreServer : IDisposable
                 foreach (string parameter in parts[1].Split('&', StringSplitOptions.RemoveEmptyEntries))
                 {
                     string[] pair = parameter.Split('=', 2);
-                    if (pair.Length != 2 || pair[0] != "key" || !SupportedKeys.Contains(pair[1]) || keys.Contains(pair[1]))
+                    if (pair.Length != 2 || pair[0] != "key" || !SupportedKeys.Contains(pair[1]))
                     { await WriteResponse(stream, 400, "Bad Request", Array.Empty<byte>(), false); return; }
-                    keys.Add(pair[1]);
+                    if (!keys.Contains(pair[1])) keys.Add(pair[1]);
                 }
             }
+            if (parts[0] != "/state") { await WriteResponse(stream, 404, "Not Found", Array.Empty<byte>(), false); return; }
+            if (keys.Count == 0) keys.AddRange(AllKeys);
             TaskCompletionSource<(int StatusCode, byte[] Body)> completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
             _pending.Enqueue(new Pending(keys, completion));
             (int status, byte[] body) result;
-            try { result = await completion.Task.WaitAsync(TimeSpan.FromSeconds(2)); } catch { return; }
+            try { result = await completion.Task.WaitAsync(TimeSpan.FromSeconds(2)); } catch { completion.TrySetCanceled(); return; }
             bool close = lines.Any(line => line.Equals("Connection: close", StringComparison.OrdinalIgnoreCase));
             await WriteResponse(stream, result.status, result.status == 200 ? "OK" : result.status == 503 ? "Service Unavailable" : "Error", result.body, close);
             if (close) return;
@@ -111,7 +117,8 @@ internal sealed class HttpScoreServer : IDisposable
         await stream.WriteAsync(response);
     }
 
-    private static readonly HashSet<string> SupportedKeys = new(StringComparer.Ordinal) { "score", "income", "IP", "infinities", "stars", "stardust", "EP", "eternities", "DP", "AP", "RP", "RPMax", "RPSpent", "unities", "passiveUnities", "astrodust", "singularities", "atoms", "PlP", "PlPperPlG", "PlG", "VE", "ViP", "tarotSwords", "tarotWands", "tarotPentacles", "tarotCups", "goldTarotSwords", "goldTarotWands", "goldTarotPentacles", "goldTarotCups", "tarotDraws", "timeSinceStart", "timeInfinity", "timeEternity", "timeUnity", "timeTotal" };
+    private static readonly string[] AllKeys = { "score", "income", "IP", "infinities", "stars", "stardust", "EP", "eternities", "DP", "AP", "RP", "RPMax", "RPSpent", "unities", "passiveUnities", "astrodust", "singularities", "atoms", "PlP", "PlPperPlG", "PlG", "VE", "ViP", "tarotSwords", "tarotWands", "tarotPentacles", "tarotCups", "goldTarotSwords", "goldTarotWands", "goldTarotPentacles", "goldTarotCups", "tarotDraws", "timeSinceStart", "timeInfinity", "timeEternity", "timeUnity", "timeTotal" };
+    private static readonly HashSet<string> SupportedKeys = new(AllKeys, StringComparer.Ordinal);
 
     public void Dispose()
     {

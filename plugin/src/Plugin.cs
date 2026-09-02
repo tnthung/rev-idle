@@ -37,10 +37,13 @@ public sealed class Plugin : BasePlugin
     {
         try
         {
-            GameData? data = GameController.data;
-            if (data is null || _server is null)
+            if (_server is null)
                 return;
-            _server.CompletePending(keys => StatePayload.TryEncode(data, keys, out byte[] payload) ? (200, payload) : (503, Array.Empty<byte>()));
+            _server.CompletePending(keys =>
+            {
+                GameData? data = GameController.data;
+                return data is null || !StatePayload.TryEncode(data, keys, out byte[] payload) ? (503, Array.Empty<byte>()) : (200, payload);
+            });
         }
         catch
         {

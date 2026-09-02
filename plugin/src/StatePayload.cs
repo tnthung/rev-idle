@@ -46,8 +46,8 @@ internal static class StatePayload
                 "goldTarotCups" => game.tarot.goldCups,
                 "tarotDraws" => game.tarot.draws,
                 "timeSinceStart" => game.timeSinceStart,
-                "timeInfinity" => game.timeInfinity,
-                "timeEternity" => game.timeEternity,
+                "timeInfinity" => game.timeInf,
+                "timeEternity" => game.timeEtr,
                 "timeUnity" => game.timeUnity,
                 "timeTotal" => game.timeTotal,
                 _ => null
