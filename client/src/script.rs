@@ -3,9 +3,9 @@ use crate::{
     console::ScriptCommand,
     hotkey::{ActionGate, PauseUpdate},
     udp::State,
-    window::{move_cursor_to_screen, Win32WindowControl, WindowControl},
+    window::{post_click_to_game, Win32WindowControl, WindowControl},
 };
-use enigo::{Axis, Button, Direction, Enigo, Mouse};
+use enigo::{Axis, Button, Enigo, Mouse};
 use rquickjs::{
     convert::Coerced,
     function::Rest,
@@ -48,19 +48,15 @@ trait MouseInput {
     }
 }
 
-fn click_at_with<M, C>(
+fn click_at_with<C>(
     x: i32,
     y: i32,
-    button: Button,
-    move_cursor: M,
-    click_button: C,
+    click: C,
 ) -> Result<(), String>
 where
-    M: FnOnce(i32, i32) -> Result<(), String>,
-    C: FnOnce(Button) -> Result<(), String>,
+    C: FnOnce(i32, i32) -> Result<(), String>,
 {
-    move_cursor(x, y)?;
-    click_button(button)
+    click(x, y)
 }
 
 impl MouseInput for Enigo {
@@ -68,18 +64,9 @@ impl MouseInput for Enigo {
         &mut self,
         x: i32,
         y: i32,
-        button: Button,
+        _button: Button,
     ) -> Result<(), String> {
-        click_at_with(
-            x,
-            y,
-            button,
-            move_cursor_to_screen,
-            |button| {
-                self.button(button, Direction::Click)
-                    .map_err(|error| error.to_string())
-            },
-        )
+        click_at_with(x, y, post_click_to_game)
     }
 
     fn scroll(&mut self, length: i32, axis: Axis) -> Result<(), String> {
@@ -154,15 +141,10 @@ fn click_with_controls(
     button: Button,
 ) -> Result<(), Error> {
     ensure_actions_running(&controls.actions_paused)?;
-    let (screen_x, screen_y) = controls
-        .window
-        .focus_and_translate(x, y)
-        .map_err(host_error)?;
-    ensure_actions_running(&controls.actions_paused)?;
     controls
         .mouse
         .borrow_mut()
-        .click_at(screen_x, screen_y, button)
+        .click_at(x, y, button)
         .map_err(|message| Error::new_from_js_message("mouse input", "JavaScript", message))
 }
 
@@ -883,35 +865,19 @@ mod tests {
     }
 
     #[test]
-    fn production_mouse_adapter_routes_win32_movement_before_button_input() {
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let movement_events = events.clone();
-        let button_events = events.clone();
-
-        click_at_with(
-            -1920,
-            1080,
-            Button::Right,
-            move |x, y| {
-                movement_events.borrow_mut().push(format!("move {x} {y}"));
-                Ok(())
-            },
-            move |button| {
-                button_events.borrow_mut().push(format!("button {button:?}"));
-                Ok(())
-            },
-        )
+    fn production_mouse_adapter_sends_one_bridge_event() {
+        let mut received = None;
+        click_at_with(1200, 80, |x, y| {
+            received = Some((x, y));
+            Ok(())
+        })
         .unwrap();
 
-        assert_eq!(
-            events.borrow().as_slice(),
-            ["move -1920 1080", "button Right"]
-        );
+        assert_eq!(received, Some((1200, 80)));
     }
 
     impl WindowControl for FakeWindow {
         fn resize_client(&self, _width: i32, _height: i32) -> Result<(), String> { Ok(()) }
-        fn focus_and_translate(&self, x: i32, y: i32) -> Result<(i32, i32), String> { Ok((x, y)) }
     }
 
     impl From<SharedMouse> for HostControls {
@@ -923,19 +889,14 @@ mod tests {
     #[derive(Clone, Debug, PartialEq, Eq)]
     enum HostEvent {
         Resize(i32, i32),
-        FocusAndTranslate(i32, i32),
         Click(i32, i32, Button),
         Scroll(i32, Axis),
     }
 
-    struct RecordingWindow { events: Rc<RefCell<Vec<HostEvent>>>, translated: (i32, i32), error: bool }
+    struct RecordingWindow { events: Rc<RefCell<Vec<HostEvent>>> }
     impl WindowControl for RecordingWindow {
         fn resize_client(&self, width: i32, height: i32) -> Result<(), String> {
             self.events.borrow_mut().push(HostEvent::Resize(width, height)); Ok(())
-        }
-        fn focus_and_translate(&self, x: i32, y: i32) -> Result<(i32, i32), String> {
-            self.events.borrow_mut().push(HostEvent::FocusAndTranslate(x, y));
-            if self.error { Err("coordinates outside client area".into()) } else { Ok(self.translated) }
         }
     }
     struct RecordingMouse { events: Rc<RefCell<Vec<HostEvent>>> }
@@ -948,44 +909,31 @@ mod tests {
             self.events.borrow_mut().push(HostEvent::Scroll(length, axis)); Ok(())
         }
     }
-    fn recording_controls(translated: (i32, i32)) -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
+    fn recording_controls() -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
         let events = Rc::new(RefCell::new(Vec::new()));
-        (HostControls { mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })), window: Rc::new(RecordingWindow { events: events.clone(), translated, error: false }), actions_paused: ActionGate::default() }, events)
+        (HostControls { mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })), window: Rc::new(RecordingWindow { events: events.clone() }), actions_paused: ActionGate::default() }, events)
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn resize_and_relative_click_use_the_window_controller_in_order() {
+    async fn resize_and_click_sends_one_event_without_window_work() {
         let session = ScriptSession::new(r#"((rev) => { rev.resize(1280, 720); rev.click(10, 20, "right"); })"#).await.unwrap();
-        let (controls, events) = recording_controls((1010, 2020));
+        let (controls, events) = recording_controls();
         session.invoke(State::default(), controls).await.unwrap();
-        assert_eq!(*events.borrow(), vec![HostEvent::Resize(1280, 720), HostEvent::FocusAndTranslate(10, 20), HostEvent::Click(1010, 2020, Button::Right)]);
+        assert_eq!(*events.borrow(), vec![HostEvent::Resize(1280, 720), HostEvent::Click(10, 20, Button::Right)]);
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn resize_rejects_invalid_dimensions_without_window_work() {
         for source in [r#"((rev) => rev.resize(0, 720))"#, r#"((rev) => rev.resize(-1, 720))"#, r#"((rev) => rev.resize(1.5, 720))"#, r#"((rev) => rev.resize(Infinity, 720))"#] {
-            let (controls, events) = recording_controls((0, 0));
+            let (controls, events) = recording_controls();
             let session = ScriptSession::new(source).await.unwrap();
             assert!(session.invoke(State::default(), controls).await.is_err());
             assert!(events.borrow().is_empty());
         }
-        let (controls, events) = recording_controls((0, 0));
+        let (controls, events) = recording_controls();
         let session = ScriptSession::new(r#"((rev) => rev.resize(1280, 720))"#).await.unwrap();
         session.invoke(State::default(), controls).await.unwrap();
         assert_eq!(*events.borrow(), vec![HostEvent::Resize(1280, 720)]);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn translation_error_prevents_click() {
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let controls = HostControls {
-            mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })),
-            window: Rc::new(RecordingWindow { events: events.clone(), translated: (0, 0), error: true }),
-            actions_paused: ActionGate::default(),
-        };
-        let session = ScriptSession::new(r#"((rev) => rev.click(10, 20))"#).await.unwrap();
-        assert!(session.invoke(State::default(), controls).await.is_err());
-        assert_eq!(*events.borrow(), vec![HostEvent::FocusAndTranslate(10, 20)]);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -995,7 +943,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let (controls, _) = recording_controls((0, 0));
+        let (controls, _) = recording_controls();
 
         let error = session
             .invoke(State::default(), controls)
@@ -1014,7 +962,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let (controls, _) = recording_controls((0, 0));
+        let (controls, _) = recording_controls();
 
         let error = session
             .invoke(State::default(), controls)
@@ -1389,7 +1337,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let (controls, events) = recording_controls((0, 0));
+        let (controls, events) = recording_controls();
 
         session.invoke(State::default(), controls).await.unwrap();
 
@@ -1415,7 +1363,7 @@ mod tests {
             r#"((rev) => rev.scroll(1, null))"#,
         ] {
             let session = ScriptSession::new(source).await.unwrap();
-            let (controls, events) = recording_controls((0, 0));
+            let (controls, events) = recording_controls();
             assert!(session.invoke(State::default(), controls).await.is_err());
             assert!(events.borrow().is_empty());
         }

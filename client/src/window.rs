@@ -1,18 +1,21 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use windows::{
     core::{BOOL, PWSTR},
     Win32::{
-        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT},
+        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, WPARAM},
         Graphics::Gdi::ClientToScreen,
         System::Threading::{
             OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
             PROCESS_QUERY_LIMITED_INFORMATION,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetClientRect, GetForegroundWindow, GetWindowRect,
-            GetWindowThreadProcessId, GetClassNameW, IsWindowVisible, SetCursorPos,
-            SetForegroundWindow, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOMOVE,
+            EnumWindows, GetClientRect, GetWindowRect, GetWindowThreadProcessId,
+            GetClassNameW, IsWindowVisible, PostMessageW, SetWindowPos, ShowWindow,
+            SWP_NOACTIVATE, SWP_NOMOVE,
             SWP_NOZORDER, SW_RESTORE,
         },
     },
@@ -20,17 +23,32 @@ use windows::{
 
 const GAME_EXECUTABLE: &str = "Revolution Idle.exe";
 const CONSOLE_WINDOW_CLASS: &str = "ConsoleWindowClass";
+const INPUT_BRIDGE_MESSAGE: u32 = 0x8000 + 0x417;
 
-fn move_cursor_with<F>(x: i32, y: i32, set_cursor_pos: F) -> Result<(), String>
-where
-    F: FnOnce(i32, i32) -> windows::core::Result<()>,
-{
-    set_cursor_pos(x, y)
-        .map_err(|error| format!("SetCursorPos({x}, {y}) failed: {error}"))
+fn pack_bridge_coordinates(x: i32, y: i32) -> isize {
+    (((y as u32 as u64) << 32) | x as u32 as u64) as isize
 }
 
-pub(crate) fn move_cursor_to_screen(x: i32, y: i32) -> Result<(), String> {
-    move_cursor_with(x, y, |x, y| unsafe { SetCursorPos(x, y) })
+fn request_id_from(timestamp_nanos: u128, process_id: u32) -> usize {
+    let mixed = timestamp_nanos as u64 ^ ((process_id as u64) << 32);
+    (mixed as usize) | 1
+}
+
+fn post_bridge_click_with<F>(
+    x: i32,
+    y: i32,
+    request_id: usize,
+    post: F,
+) -> Result<(), String>
+where
+    F: FnOnce(u32, WPARAM, LPARAM) -> windows::core::Result<()>,
+{
+    post(
+        INPUT_BRIDGE_MESSAGE,
+        WPARAM(request_id),
+        LPARAM(pack_bridge_coordinates(x, y)),
+    )
+    .map_err(|error| format!("PostMessageW(INPUT_BRIDGE_MESSAGE) failed: {error}"))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,22 +60,6 @@ struct ClientGeometry {
 }
 
 impl ClientGeometry {
-    fn translate(self, x: i32, y: i32) -> Result<(i32, i32), String> {
-        if x < 0 || y < 0 || x >= self.width || y >= self.height {
-            return Err("coordinates outside client area".to_string());
-        }
-
-        let screen_x = self
-            .origin_x
-            .checked_add(x)
-            .ok_or_else(|| "arithmetic overflow while translating x coordinate".to_string())?;
-        let screen_y = self
-            .origin_y
-            .checked_add(y)
-            .ok_or_else(|| "arithmetic overflow while translating y coordinate".to_string())?;
-        Ok((screen_x, screen_y))
-    }
-
     fn screen_to_client(self, screen_x: i32, screen_y: i32) -> Option<(i32, i32)> {
         let x = screen_x.checked_sub(self.origin_x)?;
         let y = screen_y.checked_sub(self.origin_y)?;
@@ -108,7 +110,6 @@ fn outer_size_for_client(
 
 pub trait WindowControl {
     fn resize_client(&self, width: i32, height: i32) -> Result<(), String>;
-    fn focus_and_translate(&self, x: i32, y: i32) -> Result<(i32, i32), String>;
 }
 
 #[derive(Default)]
@@ -190,6 +191,21 @@ fn find_game_window() -> Result<HWND, String> {
     }
 
     require_exactly_one(matches)
+}
+
+pub(crate) fn post_click_to_game(x: i32, y: i32) -> Result<(), String> {
+    let hwnd = find_game_window()?;
+    let request_id = request_id_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("system clock is before UNIX epoch: {error}"))?
+            .as_nanos(),
+        std::process::id(),
+    );
+
+    post_bridge_click_with(x, y, request_id, |message, wparam, lparam| unsafe {
+        PostMessageW(Some(hwnd), message, wparam, lparam)
+    })
 }
 
 pub(crate) fn screen_to_client_position(
@@ -303,41 +319,6 @@ impl WindowControl for Win32WindowControl {
 
         Ok(())
     }
-
-    fn focus_and_translate(&self, x: i32, y: i32) -> Result<(i32, i32), String> {
-        let hwnd = find_game_window()?;
-        if !unsafe { SetForegroundWindow(hwnd).as_bool() } {
-            return Err("SetForegroundWindow failed".to_string());
-        }
-        if unsafe { GetForegroundWindow() } != hwnd {
-            return Err("window did not become foreground".to_string());
-        }
-
-        let mut client_rect = RECT::default();
-        unsafe { GetClientRect(hwnd, &mut client_rect) }
-            .map_err(|error| format!("GetClientRect failed: {error}"))?;
-        let width = client_rect
-            .right
-            .checked_sub(client_rect.left)
-            .ok_or_else(|| "arithmetic overflow while reading client width".to_string())?;
-        let height = client_rect
-            .bottom
-            .checked_sub(client_rect.top)
-            .ok_or_else(|| "arithmetic overflow while reading client height".to_string())?;
-
-        let mut origin = POINT { x: 0, y: 0 };
-        if !unsafe { ClientToScreen(hwnd, &mut origin).as_bool() } {
-            return Err("ClientToScreen failed".to_string());
-        }
-
-        ClientGeometry {
-            origin_x: origin.x,
-            origin_y: origin.y,
-            width,
-            height,
-        }
-        .translate(x, y)
-    }
 }
 
 #[cfg(test)]
@@ -381,21 +362,6 @@ mod tests {
     }
 
     #[test]
-    fn translates_only_points_inside_the_client_area() {
-        let geometry = ClientGeometry {
-            origin_x: -1200,
-            origin_y: 40,
-            width: 1280,
-            height: 720,
-        };
-        assert_eq!(geometry.translate(0, 0).unwrap(), (-1200, 40));
-        assert_eq!(geometry.translate(1279, 719).unwrap(), (79, 759));
-        for point in [(-1, 0), (0, -1), (1280, 0), (0, 720)] {
-            assert!(geometry.translate(point.0, point.1).is_err());
-        }
-    }
-
-    #[test]
     fn converts_screen_points_to_client_coordinates_only_inside_the_client_area() {
         let geometry = ClientGeometry {
             origin_x: -1200,
@@ -432,14 +398,14 @@ mod tests {
     }
 
     #[test]
-    fn cursor_movement_seam_preserves_signed_virtual_screen_coordinates() {
-        let mut received = None;
-        move_cursor_with(-1920, 1080, |x, y| {
-            received = Some((x, y));
+    fn background_click_posts_one_bridge_event() {
+        let mut received = Vec::new();
+        post_bridge_click_with(1200, 80, 17, |message, wparam, lparam| {
+            received.push((message, wparam.0, lparam.0 as u64));
             Ok(())
         })
         .unwrap();
 
-        assert_eq!(received, Some((-1920, 1080)));
+        assert_eq!(received, vec![(0x8417, 17, 0x00000050000004b0)]);
     }
 }
