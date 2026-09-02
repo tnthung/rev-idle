@@ -1,4 +1,5 @@
 use crate::{
+    capture::CaptureState,
     console::ScriptCommand,
     hotkey::{ActionGate, PauseUpdate},
     udp::State,
@@ -465,6 +466,7 @@ pub async fn run(
     actions_paused: ActionGate,
     shutdown: watch::Receiver<bool>,
     script_running: Arc<AtomicBool>,
+    capture_state: CaptureState,
 ) -> Result<(), String> {
     let mouse: SharedMouse = Rc::new(RefCell::new(
         Enigo::new(&enigo::Settings::default())
@@ -480,6 +482,7 @@ pub async fn run(
         Duration::from_millis(50),
         shutdown,
         script_running,
+        capture_state,
     )
     .await
 }
@@ -495,6 +498,7 @@ async fn run_with_controls(
 ) -> Result<(), String> {
     let (_shutdown_tx, shutdown) = watch::channel(false);
     let script_running = Arc::new(AtomicBool::new(false));
+    let capture_state = CaptureState::default();
     run_with_controls_and_lifecycle(
         commands,
         states,
@@ -504,6 +508,7 @@ async fn run_with_controls(
         loop_delay,
         shutdown,
         script_running,
+        capture_state,
     )
     .await
 }
@@ -517,6 +522,7 @@ async fn run_with_controls_and_lifecycle(
     loop_delay: Duration,
     mut shutdown: watch::Receiver<bool>,
     script_running: Arc<AtomicBool>,
+    capture_state: CaptureState,
 ) -> Result<(), String> {
     let mut current_path = initial_path;
     let mut session = match current_path.as_deref() {
@@ -559,6 +565,7 @@ async fn run_with_controls_and_lifecycle(
                         session.is_some(),
                         &mut paused,
                     );
+                    disable_capture_if_running(&capture_state, session.is_some(), paused);
                     continue;
                 }
                 Ok(false) => {}
@@ -588,6 +595,7 @@ async fn run_with_controls_and_lifecycle(
                                 session.is_some(),
                                 &mut paused,
                             );
+                            disable_capture_if_running(&capture_state, session.is_some(), paused);
                         }
                         Err(_) => hotkey_channel_open = false,
                     }
@@ -613,6 +621,7 @@ async fn run_with_controls_and_lifecycle(
         if let Some(command) = command {
             match command {
                 ScriptCommand::Load(path) => {
+                    capture_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
                     session = None;
                     script_running.store(false, Ordering::Release);
@@ -630,6 +639,7 @@ async fn run_with_controls_and_lifecycle(
                     }
                 }
                 ScriptCommand::Reload => {
+                    capture_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
                     session = None;
                     script_running.store(false, Ordering::Release);
@@ -665,6 +675,7 @@ async fn run_with_controls_and_lifecycle(
                         controls.actions_paused.set_paused(false);
                         println!("script is stopped; use reload or load");
                     } else if paused {
+                        capture_state.set_enabled(false);
                         controls.actions_paused.set_paused(false);
                         paused = false;
                         println!("script resumed");
@@ -683,6 +694,23 @@ async fn run_with_controls_and_lifecycle(
                         println!("script is already stopped");
                     }
                 }
+                ScriptCommand::Capture => match capture_action(
+                    capture_state.is_enabled(),
+                    session.is_some(),
+                    paused,
+                ) {
+                    CaptureAction::Enable => {
+                        capture_state.set_enabled(true);
+                        println!("mouse capture started");
+                    }
+                    CaptureAction::Disable => {
+                        capture_state.set_enabled(false);
+                        println!("mouse capture stopped");
+                    }
+                    CaptureAction::Reject => {
+                        eprintln!("cannot capture while script is running");
+                    }
+                },
                 ScriptCommand::SetPaused(requested_paused) => {
                     let update = controls.actions_paused.current_update();
                     if update.paused() == requested_paused {
@@ -692,6 +720,7 @@ async fn run_with_controls_and_lifecycle(
                             session.is_some(),
                             &mut paused,
                         );
+                        disable_capture_if_running(&capture_state, session.is_some(), paused);
                     }
                 }
             }
@@ -721,6 +750,33 @@ async fn run_with_controls_and_lifecycle(
         }
 
         tokio::time::sleep(loop_delay).await;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CaptureAction {
+    Enable,
+    Disable,
+    Reject,
+}
+
+fn capture_action(enabled: bool, script_loaded: bool, paused: bool) -> CaptureAction {
+    if enabled {
+        CaptureAction::Disable
+    } else if script_loaded && !paused {
+        CaptureAction::Reject
+    } else {
+        CaptureAction::Enable
+    }
+}
+
+fn disable_capture_if_running(
+    capture_state: &CaptureState,
+    script_loaded: bool,
+    paused: bool,
+) {
+    if script_loaded && !paused {
+        capture_state.set_enabled(false);
     }
 }
 
@@ -2083,5 +2139,18 @@ mod tests {
                 fs::remove_file(missing).unwrap();
             })
             .await;
+    }
+
+    #[test]
+    fn capture_is_allowed_only_when_the_script_is_paused_or_stopped() {
+        assert_eq!(capture_action(false, false, false), CaptureAction::Enable);
+        assert_eq!(capture_action(false, true, true), CaptureAction::Enable);
+        assert_eq!(capture_action(false, true, false), CaptureAction::Reject);
+        assert_eq!(capture_action(true, true, false), CaptureAction::Disable);
+
+        let capture_state = CaptureState::default();
+        capture_state.set_enabled(true);
+        disable_capture_if_running(&capture_state, true, false);
+        assert!(!capture_state.is_enabled());
     }
 }

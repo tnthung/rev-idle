@@ -4,7 +4,7 @@ use tokio::{
     sync::{mpsc, watch},
 };
 
-const USAGE: &str = "commands: load <script-path> | reload | pause | resume | stop";
+const USAGE: &str = "commands: load <script-path> | reload | pause | resume | stop | capture";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ScriptCommand {
@@ -13,6 +13,7 @@ pub enum ScriptCommand {
     Pause,
     Resume,
     Stop,
+    Capture,
     #[allow(dead_code)]
     SetPaused(bool),
 }
@@ -28,6 +29,7 @@ pub fn parse_command(line: &str) -> Result<ScriptCommand, String> {
         "pause" if argument.is_empty() => Ok(ScriptCommand::Pause),
         "resume" if argument.is_empty() => Ok(ScriptCommand::Resume),
         "stop" if argument.is_empty() => Ok(ScriptCommand::Stop),
+        "capture" if argument.is_empty() => Ok(ScriptCommand::Capture),
         "load" => {
             let path = if argument.len() >= 2
                 && argument.starts_with('"')
@@ -90,6 +92,12 @@ mod tests {
         assert_eq!(parse_command(" pause "), Ok(ScriptCommand::Pause));
         assert_eq!(parse_command("resume"), Ok(ScriptCommand::Resume));
         assert_eq!(parse_command("stop"), Ok(ScriptCommand::Stop));
+    }
+
+    #[test]
+    fn parses_mouse_capture_command() {
+        assert_eq!(parse_command("capture"), Ok(ScriptCommand::Capture));
+        assert!(parse_command("capture now").is_err());
     }
 
     #[test]

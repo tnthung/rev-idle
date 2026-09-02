@@ -3,6 +3,7 @@ mod console;
 mod script;
 mod udp;
 mod hotkey;
+mod capture;
 
 use std::{
     io,
@@ -108,9 +109,11 @@ async fn main() -> io::Result<()> {
     let (command_tx, command_rx) = mpsc::channel(32);
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let script_running = Arc::new(AtomicBool::new(false));
+    let capture_state = capture::CaptureState::default();
     let console_commands = command_tx.clone();
     let hotkey = hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx)
         .map_err(io::Error::other)?;
+    let capture = capture::CaptureWorker::start().map_err(io::Error::other)?;
     let local = LocalSet::new();
 
     local
@@ -135,6 +138,7 @@ async fn main() -> io::Result<()> {
                     actions_paused,
                     script_shutdown,
                     script_running_for_task,
+                    capture_state,
                 )
                 .await
                 .map_err(io::Error::other)
@@ -168,8 +172,15 @@ async fn main() -> io::Result<()> {
                 }
             };
 
-            let shutdown = hotkey.shutdown().map_err(io::Error::other);
-            finish_shutdown(result, shutdown)
+            let result = finish_shutdown(result, hotkey.shutdown().map_err(io::Error::other));
+            match (result, capture.shutdown().map_err(io::Error::other)) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), Ok(())) => Err(error),
+                (Ok(()), Err(error)) => Err(error),
+                (Err(error), Err(capture_error)) => Err(io::Error::other(
+                    format!("{error}; mouse capture shutdown failed: {capture_error}"),
+                )),
+            }
         })
         .await
 }

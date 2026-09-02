@@ -57,6 +57,12 @@ impl ClientGeometry {
             .ok_or_else(|| "arithmetic overflow while translating y coordinate".to_string())?;
         Ok((screen_x, screen_y))
     }
+
+    fn screen_to_client(self, screen_x: i32, screen_y: i32) -> Option<(i32, i32)> {
+        let x = screen_x.checked_sub(self.origin_x)?;
+        let y = screen_y.checked_sub(self.origin_y)?;
+        (x >= 0 && y >= 0 && x < self.width && y < self.height).then_some((x, y))
+    }
 }
 
 fn is_game_executable(path: &Path) -> bool {
@@ -184,6 +190,37 @@ fn find_game_window() -> Result<HWND, String> {
     }
 
     require_exactly_one(matches)
+}
+
+pub(crate) fn screen_to_client_position(
+    screen_x: i32,
+    screen_y: i32,
+) -> Result<Option<(i32, i32)>, String> {
+    let hwnd = find_game_window()?;
+    let mut client_rect = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut client_rect) }
+        .map_err(|error| format!("GetClientRect failed: {error}"))?;
+    let width = client_rect
+        .right
+        .checked_sub(client_rect.left)
+        .ok_or_else(|| "arithmetic overflow while reading client width".to_string())?;
+    let height = client_rect
+        .bottom
+        .checked_sub(client_rect.top)
+        .ok_or_else(|| "arithmetic overflow while reading client height".to_string())?;
+
+    let mut origin = POINT { x: 0, y: 0 };
+    if !unsafe { ClientToScreen(hwnd, &mut origin).as_bool() } {
+        return Err("ClientToScreen failed".to_string());
+    }
+
+    Ok((ClientGeometry {
+        origin_x: origin.x,
+        origin_y: origin.y,
+        width,
+        height,
+    })
+    .screen_to_client(screen_x, screen_y))
 }
 
 impl WindowControl for Win32WindowControl {
@@ -356,6 +393,20 @@ mod tests {
         for point in [(-1, 0), (0, -1), (1280, 0), (0, 720)] {
             assert!(geometry.translate(point.0, point.1).is_err());
         }
+    }
+
+    #[test]
+    fn converts_screen_points_to_client_coordinates_only_inside_the_client_area() {
+        let geometry = ClientGeometry {
+            origin_x: -1200,
+            origin_y: 40,
+            width: 1280,
+            height: 720,
+        };
+        assert_eq!(geometry.screen_to_client(-1200, 40), Some((0, 0)));
+        assert_eq!(geometry.screen_to_client(79, 759), Some((1279, 719)));
+        assert_eq!(geometry.screen_to_client(-1201, 40), None);
+        assert_eq!(geometry.screen_to_client(80, 759), None);
     }
 
     #[test]
