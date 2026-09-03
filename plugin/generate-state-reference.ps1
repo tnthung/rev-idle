@@ -66,6 +66,20 @@ function Get-EligibleProperties([Mono.Cecil.TypeDefinition]$type) {
     return @($result)
 }
 
+function Get-EligibleStaticProperties([Mono.Cecil.TypeDefinition]$type) {
+    $result = [System.Collections.Generic.List[object]]::new()
+    $names = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $current = $type
+    while ($null -ne $current -and $current.FullName -notin @('System.Object', 'System.ValueType', 'Il2CppSystem.Object', 'Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase', 'UnityEngine.Object', 'UnityEngine.Events.UnityEventBase', 'Il2CppSystem.Delegate', 'Il2CppSystem.MulticastDelegate', 'System.Delegate', 'System.MulticastDelegate')) {
+        foreach ($property in $current.Properties) {
+            if ($names.Add($property.Name) -and $null -ne $property.GetMethod -and $property.GetMethod.IsPublic -and $property.GetMethod.IsStatic -and $property.Parameters.Count -eq 0 -and -not (Test-ExcludedProperty $property)) { [void]$result.Add($property) }
+        }
+        $current = Get-TypeDefinition $current.BaseType
+    }
+    $result.Sort([Comparison[object]]{ param($left, $right) [StringComparer]::Ordinal.Compare($left.Name, $right.Name) })
+    return @($result)
+}
+
 $primitiveNodeTypes = @('BigDouble')
 
 function Get-GameplayTypes([Mono.Cecil.TypeReference]$reference) {
@@ -124,7 +138,16 @@ while ($pending.Count -gt 0) {
 }
 
 $aliases = [ordered]@{
-    score='score'; income='income'; IP='infinity.IP'; infinities='infinity.infs'; stars='infinity.stars'; stardust='infinity.stardust'; EP='eternity.EP'; eternities='eternity.eters'; DP='eternity.DP'; AP='eternity.AP'; RP='eternity.curRP'; RPMax='eternity.maximumRP'; RPSpent='eternity.spendRP'; unities='unity.unities'; passiveUnities='unity.passiveUnities'; astrodust='unity.astrodust'; singularities='singularity.singularity'; atoms='singularity.atoms'; PlP='plague.PlP'; PlPperPlG='plague.PlPperPlG'; PlG='plague.PlG'; VE='plague.VE'; ViP='plague.ViP'; tarotSwords='tarot.swords'; tarotWands='tarot.wands'; tarotPentacles='tarot.pentacles'; tarotCups='tarot.cups'; goldTarotSwords='tarot.goldSwords'; goldTarotWands='tarot.goldWands'; goldTarotPentacles='tarot.goldPentacles'; goldTarotCups='tarot.goldCups'; tarotDraws='tarot.draws'; timeSinceStart='timeSinceStart'; timeInfinity='timeInf'; timeEternity='timeEtr'; timeUnity='timeUnity'; timeTotal='timeTotal'; DT='eternity.dilationTree'; DTP='eternity.dtpMax'
+    score='score'; income='income'; IP='infinity.IP'; infinities='infinity.infs'; stars='infinity.stars'; stardust='infinity.stardust'; EP='eternity.EP'; eternities='eternity.eters'; DP='eternity.DP'; AP='eternity.AP'; RP='eternity.curRP'; RPMax='eternity.maximumRP'; RPSpent='eternity.spendRP'; unities='unity.unities'; passiveUnities='unity.passiveUnities'; astrodust='unity.astrodust'; singularities='singularity.singularity'; atoms='singularity.atoms'; PlP='plague.PlP'; PlPperPlG='plague.PlPperPlG'; PlG='plague.PlG'; VE='plague.VE'; ViP='plague.ViP'; tarotSwords='tarot.swords'; tarotWands='tarot.wands'; tarotPentacles='tarot.pentacles'; tarotCups='tarot.cups'; goldTarotSwords='tarot.goldSwords'; goldTarotWands='tarot.goldWands'; goldTarotPentacles='tarot.goldPentacles'; goldTarotCups='tarot.goldCups'; tarotDraws='tarot.draws'; timeSinceStart='timeSinceStart'; timeInfinity='timeInf'; timeEternity='timeEtr'; timeUnity='timeUnity'; timeTotal='timeTotal'; DT='eternity.dilationTree'; DTP='eternity.dtpMax'; nextEP='eternityController.EPGain'; nextBrokenEP='eternityController.brokenEPGain'
+}
+
+$extraRootNames = @('Controller', 'AttacksController', 'AutomationController', 'ElementsController', 'EternityController', 'GameController', 'InfinityController', 'MacroController', 'MineralsController', 'PlagueController', 'SaveController', 'SingularityController', 'TarotController', 'UnityController')
+$extraRoots = [System.Collections.Generic.List[object]]::new()
+foreach ($rootName in $extraRootNames) {
+    $rootType = @($module.Types | Where-Object FullName -eq $rootName)[0]
+    if ($null -eq $rootType) { Write-Warning "Extra root type '$rootName' was not found in Assembly-CSharp.dll."; continue }
+    $rootKey = [char]::ToLowerInvariant($rootName[0]) + $rootName.Substring(1)
+    [void]$extraRoots.Add([pscustomobject]@{ Key = $rootKey; Type = $rootType; Properties = @(Get-EligibleStaticProperties $rootType) })
 }
 $lines = [System.Collections.Generic.List[string]]::new()
 $lines.Add('# Complete state path reference')
@@ -146,6 +169,28 @@ $lines.Add('| Alias | Canonical target |')
 $lines.Add('| --- | --- |')
 foreach ($alias in $aliases.GetEnumerator()) { $lines.Add([string]::Format('| `{0}` | `{1}` |', $alias.Key, $alias.Value)) }
 $lines.Add('')
+$lines.Add('## Extra roots (static-only, not reachable from GameData)')
+$lines.Add('')
+$lines.Add('These `*Controller` types are static-only: no property anywhere in the reachable graph below points at them, so no path starting at `GameData` can ever reach them. A request path whose first segment matches one of the keys below resolves the remaining segments against that type''s public static properties instead of `GameData`.')
+$lines.Add('')
+$lines.Add('| Root key | CLR type |')
+$lines.Add('| --- | --- |')
+foreach ($root in $extraRoots) { $lines.Add([string]::Format('| `{0}` | `{1}` |', $root.Key, $root.Type.FullName)) }
+$lines.Add('')
+foreach ($root in $extraRoots) {
+    $lines.Add([string]::Format('### `{0}` (root key `{1}`)', $root.Type.FullName, $root.Key))
+    $lines.Add('')
+    $lines.Add('| Property | CLR type | Collection path extension |')
+    $lines.Add('| --- | --- | --- |')
+    foreach ($property in $root.Properties) {
+        $typeLabel = Get-TypeLabel $property.PropertyType
+        $collection = Get-CollectionDescription $property.PropertyType
+        $dictionary = $property.PropertyType.IsGenericInstance -and $property.PropertyType.Name.StartsWith('Dictionary')
+        $extension = if ($null -eq $collection) { '' } elseif ($dictionary -and -not (Test-SupportedDictionaryKey $property.PropertyType)) { 'whole-property only; not key-addressable' } elseif ($dictionary) { 'append `.<string|integer|enum-key>`' } else { 'append `.<numeric-index>`' }
+        $lines.Add([string]::Format('| `{0}` | `{1}` | {2} {3} |', $property.Name, $typeLabel, $collection, $extension))
+    }
+    $lines.Add('')
+}
 $lines.Add('## Reachable gameplay types')
 $lines.Add('')
 $sortedEntries = [System.Collections.Generic.List[object]]::new()
@@ -195,6 +240,31 @@ foreach ($entry in $reachable.Values) {
     }
 }
 
+# Extra roots are static-only types with no path in from GameData (see
+# plugin/src/ExtraRoots.cs). They're still graph nodes -- their static
+# properties become edges the same way -- but flagged so the viewer knows not
+# to look for (or complain about the absence of) a route from GameData; they
+# are addressed by their root key as the request path's first segment instead.
+foreach ($root in $extraRoots) {
+    [void]$graphNodeNames.Add($root.Type.FullName)
+    foreach ($property in $root.Properties) {
+        $propertyType = $property.PropertyType
+        $collection = Get-CollectionDescription $propertyType
+        $dictionary = $propertyType.IsGenericInstance -and $propertyType.Name.StartsWith('Dictionary')
+        $kind = if ($null -eq $collection) { 'plain' } elseif ($dictionary) { 'dict' } else { 'list' }
+        if ($dictionary -and -not (Test-SupportedDictionaryKey $propertyType)) { $kind = 'dict-unkeyed' }
+        $targets = @(Get-GraphNodeTypes $propertyType)
+        $valueTypeLabel = Get-TypeLabel $propertyType
+        if ($targets.Count -eq 0) {
+            [void]$edges.Add([pscustomobject]@{ From = $root.Type.FullName; To = $null; Property = $property.Name; Kind = $kind; ValueType = $valueTypeLabel })
+        } else {
+            foreach ($target in $targets) {
+                [void]$edges.Add([pscustomobject]@{ From = $root.Type.FullName; To = $target.FullName; Property = $property.Name; Kind = $kind; ValueType = $valueTypeLabel })
+            }
+        }
+    }
+}
+
 function ConvertTo-JsonString([string]$value) {
     if ($null -eq $value) { return 'null' }
     $escaped = $value.Replace('\', '\\').Replace('"', '\"').Replace("`n", '\n').Replace("`r", '')
@@ -224,6 +294,12 @@ $aliasEntries = @($aliases.GetEnumerator())
 for ($i = 0; $i -lt $aliasEntries.Count; $i++) {
     $comma = if ($i -eq $aliasEntries.Count - 1) { '' } else { ',' }
     $jsonLines.Add("    {`"alias`": $(ConvertTo-JsonString $aliasEntries[$i].Key), `"path`": $(ConvertTo-JsonString $aliasEntries[$i].Value)}$comma")
+}
+$jsonLines.Add('  ],')
+$jsonLines.Add('  "extraRoots": [')
+for ($i = 0; $i -lt $extraRoots.Count; $i++) {
+    $comma = if ($i -eq $extraRoots.Count - 1) { '' } else { ',' }
+    $jsonLines.Add("    {`"key`": $(ConvertTo-JsonString $extraRoots[$i].Key), `"node`": $(ConvertTo-JsonString $extraRoots[$i].Type.FullName)}$comma")
 }
 $jsonLines.Add('  ]')
 $jsonLines.Add('}')

@@ -467,11 +467,13 @@
     {"id": "AstroPlanetType"},
     {"id": "AstroSeasonType"},
     {"id": "AstroSignType"},
+    {"id": "AttacksController"},
     {"id": "AttacksData"},
     {"id": "AttacksLevel"},
     {"id": "AttacksRevolution"},
     {"id": "AttacksRevolutionBuyable"},
     {"id": "AutoDisolveERObject"},
+    {"id": "AutomationController"},
     {"id": "AutomationData"},
     {"id": "Block"},
     {"id": "BlockField"},
@@ -483,6 +485,7 @@
     {"id": "BuffPenaltyType"},
     {"id": "Buyable"},
     {"id": "CommonMineral"},
+    {"id": "Controller"},
     {"id": "DevilDebuff"},
     {"id": "DilationTree"},
     {"id": "DilationTreeLoadout"},
@@ -494,19 +497,23 @@
     {"id": "ElementFactor"},
     {"id": "ElementFactorType"},
     {"id": "ElementNode"},
+    {"id": "ElementsController"},
     {"id": "ElementsData"},
     {"id": "EndoplasmicReticulum"},
     {"id": "EndoplasmicReticulumUpgrade"},
     {"id": "EternityChallenge"},
+    {"id": "EternityController"},
     {"id": "EternityData"},
     {"id": "EternityStat"},
     {"id": "EtrDilTreeAxis"},
     {"id": "ExpFactor"},
     {"id": "ExpFactorType"},
     {"id": "GameBananaData"},
+    {"id": "GameController"},
     {"id": "GameData"},
     {"id": "Generator"},
     {"id": "InfinityChallenge"},
+    {"id": "InfinityController"},
     {"id": "InfinityData"},
     {"id": "InfinityStat"},
     {"id": "InventoryData"},
@@ -514,14 +521,17 @@
     {"id": "LabUpgrade"},
     {"id": "LeaderboardData"},
     {"id": "LeaderboardType"},
+    {"id": "MacroController"},
     {"id": "MacroData"},
     {"id": "MacroLoopMode"},
     {"id": "MacroSettingData"},
     {"id": "MacroSlot"},
+    {"id": "MineralsController"},
     {"id": "MineralsData"},
     {"id": "MineralsUpgrade"},
     {"id": "MineralUpgradeType"},
     {"id": "NakamaLeaderboard"},
+    {"id": "PlagueController"},
     {"id": "PlagueData"},
     {"id": "PlagueEndoRarity"},
     {"id": "PlagueEndoType"},
@@ -551,6 +561,7 @@
     {"id": "RuneUpgrade"},
     {"id": "RuneUpgradeType"},
     {"id": "SacriStat"},
+    {"id": "SaveController"},
     {"id": "ShopSlotData"},
     {"id": "SingEffect"},
     {"id": "SingEffectSubtype"},
@@ -560,6 +571,7 @@
     {"id": "SingMilestone"},
     {"id": "SingMilestoneType"},
     {"id": "SingularHouse"},
+    {"id": "SingularityController"},
     {"id": "SingularityData"},
     {"id": "SingularityTreeBonusType"},
     {"id": "SingularityTreeNode"},
@@ -581,6 +593,7 @@
     {"id": "TarotChallenge"},
     {"id": "TarotChallenges"},
     {"id": "TarotChallengeSuit"},
+    {"id": "TarotController"},
     {"id": "TarotData"},
     {"id": "TarotSuit"},
     {"id": "TarotSuitType"},
@@ -590,6 +603,7 @@
     {"id": "ThemeType"},
     {"id": "TrialType"},
     {"id": "UnityBonuses"},
+    {"id": "UnityController"},
     {"id": "UnityData"},
     {"id": "UnityPlanet"},
     {"id": "UnityPlanetShopDonut"},
@@ -2222,7 +2236,146 @@
     {"from": "TarotUpgrade", "to": null, "property": "level", "kind": "plain", "valueType": "BigDouble"},
     {"from": "TarotUpgrade", "to": null, "property": "maxLevel", "kind": "plain", "valueType": "BigDouble"},
     {"from": "TarotUpgrade", "to": null, "property": "reqPrev", "kind": "plain", "valueType": "BigDouble"},
-    {"from": "TarotUpgrade", "to": "TarotSuitType", "property": "type", "kind": "plain", "valueType": "TarotSuitType"}
+    {"from": "TarotUpgrade", "to": "TarotSuitType", "property": "type", "kind": "plain", "valueType": "TarotSuitType"},
+    {"from": "Controller", "to": "SettingsData", "property": "Settings", "kind": "plain", "valueType": "SettingsData"},
+    {"from": "Controller", "to": null, "property": "lastTimeUpdateLeaderboard", "kind": "plain", "valueType": "System.Single"},
+    {"from": "AttacksController", "to": "AttacksData", "property": "Attacks", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "AttacksController", "to": "ElementsData", "property": "Elements", "kind": "plain", "valueType": "ElementsData"},
+    {"from": "AttacksController", "to": "MineralsData", "property": "Minerals", "kind": "plain", "valueType": "MineralsData"},
+    {"from": "AttacksController", "to": "PlagueData", "property": "Plague", "kind": "plain", "valueType": "PlagueData"},
+    {"from": "AttacksController", "to": "SingularityData", "property": "Singularity", "kind": "plain", "valueType": "SingularityData"},
+    {"from": "AttacksController", "to": "TarotData", "property": "Tarot", "kind": "plain", "valueType": "TarotData"},
+    {"from": "AttacksController", "to": "UnityData", "property": "Unity", "kind": "plain", "valueType": "UnityData"},
+    {"from": "AttacksController", "to": null, "property": "lastTimeAsc", "kind": "plain", "valueType": "System.Single"},
+    {"from": "AttacksController", "to": null, "property": "lastTimeBuy", "kind": "plain", "valueType": "System.Single"},
+    {"from": "AutomationController", "to": "AttacksData", "property": "Attacks", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "AutomationController", "to": "AutomationData", "property": "Automation", "kind": "plain", "valueType": "AutomationData"},
+    {"from": "AutomationController", "to": "EternityData", "property": "Eternity", "kind": "plain", "valueType": "EternityData"},
+    {"from": "AutomationController", "to": "InfinityData", "property": "Infinity", "kind": "plain", "valueType": "InfinityData"},
+    {"from": "AutomationController", "to": "MineralsData", "property": "Minerals", "kind": "plain", "valueType": "MineralsData"},
+    {"from": "AutomationController", "to": "PlagueData", "property": "Plague", "kind": "plain", "valueType": "PlagueData"},
+    {"from": "AutomationController", "to": "SingularityData", "property": "Singularity", "kind": "plain", "valueType": "SingularityData"},
+    {"from": "AutomationController", "to": "TarotData", "property": "Tarot", "kind": "plain", "valueType": "TarotData"},
+    {"from": "AutomationController", "to": "UnityData", "property": "Unity", "kind": "plain", "valueType": "UnityData"},
+    {"from": "AutomationController", "to": null, "property": "singularityTime", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "AutomationController", "to": null, "property": "tarotDrawTime", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "ElementsController", "to": "AttacksData", "property": "Attacks", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "ElementsController", "to": "ElementsData", "property": "Elements", "kind": "plain", "valueType": "ElementsData"},
+    {"from": "ElementsController", "to": "InventoryData", "property": "Inventory", "kind": "plain", "valueType": "InventoryData"},
+    {"from": "ElementsController", "to": "MineralsData", "property": "Minerals", "kind": "plain", "valueType": "MineralsData"},
+    {"from": "ElementsController", "to": "SingularityData", "property": "Singularity", "kind": "plain", "valueType": "SingularityData"},
+    {"from": "ElementsController", "to": "TarotData", "property": "Tarot", "kind": "plain", "valueType": "TarotData"},
+    {"from": "EternityController", "to": "AttacksData", "property": "Attacks", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "EternityController", "to": "AutomationData", "property": "Automation", "kind": "plain", "valueType": "AutomationData"},
+    {"from": "EternityController", "to": null, "property": "EPGain", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "EternityController", "to": "ElementsData", "property": "Elements", "kind": "plain", "valueType": "ElementsData"},
+    {"from": "EternityController", "to": "EternityData", "property": "Eternity", "kind": "plain", "valueType": "EternityData"},
+    {"from": "EternityController", "to": "InfinityData", "property": "Infinity", "kind": "plain", "valueType": "InfinityData"},
+    {"from": "EternityController", "to": "InventoryData", "property": "Inventory", "kind": "plain", "valueType": "InventoryData"},
+    {"from": "EternityController", "to": "MineralsData", "property": "Minerals", "kind": "plain", "valueType": "MineralsData"},
+    {"from": "EternityController", "to": "SettingsData", "property": "Settings", "kind": "plain", "valueType": "SettingsData"},
+    {"from": "EternityController", "to": "TarotData", "property": "Tarot", "kind": "plain", "valueType": "TarotData"},
+    {"from": "EternityController", "to": "UnityData", "property": "Unity", "kind": "plain", "valueType": "UnityData"},
+    {"from": "EternityController", "to": null, "property": "brokenEPGain", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "EternityController", "to": null, "property": "eternityGain", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "EternityController", "to": null, "property": "lastEtrTime", "kind": "plain", "valueType": "System.Single"},
+    {"from": "EternityController", "to": null, "property": "processResetEternity", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "GameController", "to": "AttacksData", "property": "Attacks", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "GameController", "to": "AutomationData", "property": "Automation", "kind": "plain", "valueType": "AutomationData"},
+    {"from": "GameController", "to": "EternityData", "property": "Eternity", "kind": "plain", "valueType": "EternityData"},
+    {"from": "GameController", "to": null, "property": "HasInstance", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "GameController", "to": "InfinityData", "property": "Infinity", "kind": "plain", "valueType": "InfinityData"},
+    {"from": "GameController", "to": null, "property": "Instance", "kind": "plain", "valueType": "T"},
+    {"from": "GameController", "to": "LeaderboardData", "property": "Leaderboard", "kind": "plain", "valueType": "LeaderboardData"},
+    {"from": "GameController", "to": null, "property": "LockGame", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "GameController", "to": "UnityData", "property": "Unity", "kind": "plain", "valueType": "UnityData"},
+    {"from": "GameController", "to": null, "property": "_instance", "kind": "plain", "valueType": "T"},
+    {"from": "GameController", "to": null, "property": "baseMult", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "GameController", "to": null, "property": "gameSpeed", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "GameController", "to": "InventoryData", "property": "inventory", "kind": "plain", "valueType": "InventoryData"},
+    {"from": "InfinityController", "to": "AttacksData", "property": "Attacks", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "InfinityController", "to": "AutomationData", "property": "Automation", "kind": "plain", "valueType": "AutomationData"},
+    {"from": "InfinityController", "to": "ElementsData", "property": "Elements", "kind": "plain", "valueType": "ElementsData"},
+    {"from": "InfinityController", "to": "EternityData", "property": "Eternity", "kind": "plain", "valueType": "EternityData"},
+    {"from": "InfinityController", "to": null, "property": "IPGain", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "InfinityController", "to": "InfinityData", "property": "Infinity", "kind": "plain", "valueType": "InfinityData"},
+    {"from": "InfinityController", "to": "InventoryData", "property": "Inventory", "kind": "plain", "valueType": "InventoryData"},
+    {"from": "InfinityController", "to": "MineralsData", "property": "Minerals", "kind": "plain", "valueType": "MineralsData"},
+    {"from": "InfinityController", "to": "SettingsData", "property": "Settings", "kind": "plain", "valueType": "SettingsData"},
+    {"from": "InfinityController", "to": "TarotData", "property": "Tarot", "kind": "plain", "valueType": "TarotData"},
+    {"from": "InfinityController", "to": "UnityData", "property": "Unity", "kind": "plain", "valueType": "UnityData"},
+    {"from": "InfinityController", "to": null, "property": "brokenIPGain", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "InfinityController", "to": null, "property": "infinityCD", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "InfinityController", "to": null, "property": "infinityGain", "kind": "plain", "valueType": "BigDouble"},
+    {"from": "InfinityController", "to": null, "property": "lastInfTime", "kind": "plain", "valueType": "System.Single"},
+    {"from": "InfinityController", "to": null, "property": "processResetInfinity", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "MacroController", "to": null, "property": "AUTO_START_DELAY", "kind": "plain", "valueType": "System.Int32"},
+    {"from": "MacroController", "to": null, "property": "HasInstance", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "MacroController", "to": null, "property": "Instance", "kind": "plain", "valueType": "T"},
+    {"from": "MacroController", "to": null, "property": "LOGS_MAX_LINES", "kind": "plain", "valueType": "System.Int32"},
+    {"from": "MacroController", "to": null, "property": "_instance", "kind": "plain", "valueType": "T"},
+    {"from": "MineralsController", "to": "AttacksData", "property": "Attacks", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "MineralsController", "to": "AutomationData", "property": "Automation", "kind": "plain", "valueType": "AutomationData"},
+    {"from": "MineralsController", "to": "ElementsData", "property": "Elements", "kind": "plain", "valueType": "ElementsData"},
+    {"from": "MineralsController", "to": "EternityData", "property": "Eternity", "kind": "plain", "valueType": "EternityData"},
+    {"from": "MineralsController", "to": "InfinityData", "property": "Infinity", "kind": "plain", "valueType": "InfinityData"},
+    {"from": "MineralsController", "to": "MineralsData", "property": "Minerals", "kind": "plain", "valueType": "MineralsData"},
+    {"from": "MineralsController", "to": "SingularityData", "property": "Singularity", "kind": "plain", "valueType": "SingularityData"},
+    {"from": "MineralsController", "to": "TarotData", "property": "Tarot", "kind": "plain", "valueType": "TarotData"},
+    {"from": "MineralsController", "to": "UnityData", "property": "Unity", "kind": "plain", "valueType": "UnityData"},
+    {"from": "PlagueController", "to": "AttacksData", "property": "Attacks", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "PlagueController", "to": "MineralsData", "property": "Minerals", "kind": "plain", "valueType": "MineralsData"},
+    {"from": "PlagueController", "to": "PlagueData", "property": "Plague", "kind": "plain", "valueType": "PlagueData"},
+    {"from": "PlagueController", "to": "SettingsData", "property": "Settings", "kind": "plain", "valueType": "SettingsData"},
+    {"from": "PlagueController", "to": "SingularityData", "property": "Singularity", "kind": "plain", "valueType": "SingularityData"},
+    {"from": "PlagueController", "to": "TarotData", "property": "Tarot", "kind": "plain", "valueType": "TarotData"},
+    {"from": "SaveController", "to": null, "property": "CurrentDate", "kind": "plain", "valueType": "Nullable<Il2CppSystem.DateTime>"},
+    {"from": "SaveController", "to": null, "property": "HasInstance", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "SaveController", "to": null, "property": "InitialDate", "kind": "plain", "valueType": "Nullable<Il2CppSystem.DateTime>"},
+    {"from": "SaveController", "to": null, "property": "Instance", "kind": "plain", "valueType": "T"},
+    {"from": "SaveController", "to": "InventoryData", "property": "Inventory", "kind": "plain", "valueType": "InventoryData"},
+    {"from": "SaveController", "to": null, "property": "LastDate", "kind": "plain", "valueType": "Nullable<Il2CppSystem.DateTime>"},
+    {"from": "SaveController", "to": null, "property": "LastTFGain", "kind": "plain", "valueType": "System.Double"},
+    {"from": "SaveController", "to": null, "property": "LockSave", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "SaveController", "to": null, "property": "OfflineProgressPending", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "SaveController", "to": null, "property": "SaveLoaded", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "SaveController", "to": "SettingsData", "property": "Settings", "kind": "plain", "valueType": "SettingsData"},
+    {"from": "SaveController", "to": null, "property": "StartDate", "kind": "plain", "valueType": "Nullable<Il2CppSystem.DateTime>"},
+    {"from": "SaveController", "to": null, "property": "StartupEnded", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "SaveController", "to": null, "property": "_instance", "kind": "plain", "valueType": "T"},
+    {"from": "SaveController", "to": null, "property": "isSaving", "kind": "plain", "valueType": "System.Boolean"},
+    {"from": "SaveController", "to": null, "property": "lastSaveRealtime", "kind": "plain", "valueType": "System.Single"},
+    {"from": "SaveController", "to": null, "property": "localSaveInterval", "kind": "plain", "valueType": "System.Single"},
+    {"from": "SaveController", "to": null, "property": "serverSaveInterval", "kind": "plain", "valueType": "System.Single"},
+    {"from": "SaveController", "to": null, "property": "serverSaveIntervalLinked", "kind": "plain", "valueType": "System.Single"},
+    {"from": "SingularityController", "to": "AttacksData", "property": "Attacks", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "SingularityController", "to": "ElementsData", "property": "Elements", "kind": "plain", "valueType": "ElementsData"},
+    {"from": "SingularityController", "to": "InventoryData", "property": "Inventory", "kind": "plain", "valueType": "InventoryData"},
+    {"from": "SingularityController", "to": "MineralsData", "property": "Minerals", "kind": "plain", "valueType": "MineralsData"},
+    {"from": "SingularityController", "to": "PlagueData", "property": "Plague", "kind": "plain", "valueType": "PlagueData"},
+    {"from": "SingularityController", "to": "SingularityData", "property": "Singularity", "kind": "plain", "valueType": "SingularityData"},
+    {"from": "SingularityController", "to": "TarotData", "property": "Tarot", "kind": "plain", "valueType": "TarotData"},
+    {"from": "SingularityController", "to": "UnityData", "property": "Unity", "kind": "plain", "valueType": "UnityData"},
+    {"from": "SingularityController", "to": "BuffPenalty", "property": "atomsGainModifiers", "kind": "list", "valueType": "List<BuffPenalty>"},
+    {"from": "SingularityController", "to": null, "property": "atomsPenaltyThresholds", "kind": "list", "valueType": "Il2CppStructArray<BigDouble>"},
+    {"from": "TarotController", "to": "AttacksData", "property": "Attacks", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "TarotController", "to": "ElementsData", "property": "Elements", "kind": "plain", "valueType": "ElementsData"},
+    {"from": "TarotController", "to": "InventoryData", "property": "Inventory", "kind": "plain", "valueType": "InventoryData"},
+    {"from": "TarotController", "to": "MineralsData", "property": "Minerals", "kind": "plain", "valueType": "MineralsData"},
+    {"from": "TarotController", "to": "TarotCard", "property": "SelectedCard", "kind": "plain", "valueType": "TarotCard"},
+    {"from": "TarotController", "to": "SingularityData", "property": "Singularity", "kind": "plain", "valueType": "SingularityData"},
+    {"from": "TarotController", "to": "TarotData", "property": "Tarot", "kind": "plain", "valueType": "TarotData"},
+    {"from": "TarotController", "to": "UnityData", "property": "Unity", "kind": "plain", "valueType": "UnityData"},
+    {"from": "UnityController", "to": "AttacksData", "property": "AttacksData", "kind": "plain", "valueType": "AttacksData"},
+    {"from": "UnityController", "to": "ElementsData", "property": "ElementsData", "kind": "plain", "valueType": "ElementsData"},
+    {"from": "UnityController", "to": "EternityData", "property": "EternityData", "kind": "plain", "valueType": "EternityData"},
+    {"from": "UnityController", "to": "InfinityData", "property": "InfinityData", "kind": "plain", "valueType": "InfinityData"},
+    {"from": "UnityController", "to": "InventoryData", "property": "InventoryData", "kind": "plain", "valueType": "InventoryData"},
+    {"from": "UnityController", "to": "MineralsData", "property": "MineralsData", "kind": "plain", "valueType": "MineralsData"},
+    {"from": "UnityController", "to": "PlagueData", "property": "PlagueData", "kind": "plain", "valueType": "PlagueData"},
+    {"from": "UnityController", "to": "SingularityData", "property": "Singularity", "kind": "plain", "valueType": "SingularityData"},
+    {"from": "UnityController", "to": "TarotData", "property": "TarotData", "kind": "plain", "valueType": "TarotData"},
+    {"from": "UnityController", "to": "UnityData", "property": "UnityData", "kind": "plain", "valueType": "UnityData"}
   ],
   "aliases": [
     {"alias": "score", "path": "score"},
@@ -2263,7 +2416,25 @@
     {"alias": "timeUnity", "path": "timeUnity"},
     {"alias": "timeTotal", "path": "timeTotal"},
     {"alias": "DT", "path": "eternity.dilationTree"},
-    {"alias": "DTP", "path": "eternity.dtpMax"}
+    {"alias": "DTP", "path": "eternity.dtpMax"},
+    {"alias": "nextEP", "path": "eternityController.EPGain"},
+    {"alias": "nextBrokenEP", "path": "eternityController.brokenEPGain"}
+  ],
+  "extraRoots": [
+    {"key": "controller", "node": "Controller"},
+    {"key": "attacksController", "node": "AttacksController"},
+    {"key": "automationController", "node": "AutomationController"},
+    {"key": "elementsController", "node": "ElementsController"},
+    {"key": "eternityController", "node": "EternityController"},
+    {"key": "gameController", "node": "GameController"},
+    {"key": "infinityController", "node": "InfinityController"},
+    {"key": "macroController", "node": "MacroController"},
+    {"key": "mineralsController", "node": "MineralsController"},
+    {"key": "plagueController", "node": "PlagueController"},
+    {"key": "saveController", "node": "SaveController"},
+    {"key": "singularityController", "node": "SingularityController"},
+    {"key": "tarotController", "node": "TarotController"},
+    {"key": "unityController", "node": "UnityController"}
   ]
 };
 
@@ -2287,6 +2458,14 @@
   document.getElementById('nodeCountStat').textContent = GRAPH.nodes.length;
   document.getElementById('edgeCountStat').textContent = GRAPH.edges.filter(e => e.to).length;
 
+  // Extra roots are static-only types with no path in from GameData (see
+  // plugin/src/ExtraRoots.cs): a request path whose first segment matches
+  // one of these keys resolves against that type's static properties
+  // instead of walking from GameData. Kept as a lookup by both key and node
+  // id so alias resolution and route rendering can special-case them.
+  const extraRootByKey = new Map((GRAPH.extraRoots || []).map(r => [r.key, r.node]));
+  const extraRootNodeIds = new Set((GRAPH.extraRoots || []).map(r => r.node));
+
   // Resolve each compatibility alias's dotted canonical path against the edge
   // graph so it can be surfaced as a shortcut alongside real routes/fields.
   const aliasesByOwner = new Map();   // node id -> [{alias, path, property}]  (alias resolves to a scalar field on that node)
@@ -2294,10 +2473,11 @@
   for (const id of nodeIds) { aliasesByOwner.set(id, []); aliasesByTarget.set(id, []); }
   for (const a of GRAPH.aliases || []) {
     const segments = a.path.split('.');
-    let cur = GRAPH.root;
+    let cur = extraRootByKey.has(segments[0]) ? extraRootByKey.get(segments[0]) : GRAPH.root;
+    const walkSegments = extraRootByKey.has(segments[0]) ? segments.slice(1) : segments;
     let finalEdge = null;
     let ok = true;
-    for (const seg of segments) {
+    for (const seg of walkSegments) {
       const e = (outEdges.get(cur) || []).find(edge => edge.property === seg) ||
                 (leafProps.get(cur) || []).find(edge => edge.property === seg);
       if (!e) { ok = false; break; }
@@ -2368,7 +2548,8 @@
 
     const detail = document.getElementById('detail');
     let html = '';
-    html += '<div class="node-name">' + escapeHtml(nodeId) + '</div>';
+    const extraRootEntry = (GRAPH.extraRoots || []).find(r => r.node === nodeId);
+    html += '<div class="node-name">' + escapeHtml(nodeId) + (extraRootEntry ? ' <span class="alias-badge" title="static-only root, not reachable from GameData">' + escapeHtml(extraRootEntry.key) + '</span>' : '') + '</div>';
     html += '<div class="node-meta">';
     html += '<span><b>' + (currentRoutes.length + nodeAliases.length || (nodeId === GRAPH.root ? 1 : 0)) + '</b> route' + (currentRoutes.length + nodeAliases.length === 1 ? '' : 's') + '</span>';
     html += '<span><b>' + outs.length + '</b> refs out</span>';
@@ -2389,6 +2570,10 @@
     html += '<div class="section-label">Routes from GameData<span class="route-count-badge">' + (currentRoutes.length + nodeAliases.length) + '</span></div>';
     if (nodeId === GRAPH.root) {
       html += '<div class="no-results">This is the root of the state tree.</div>';
+    } else if (extraRootNodeIds.has(nodeId)) {
+      const rootKey = (GRAPH.extraRoots || []).find(r => r.node === nodeId).key;
+      html += '<div class="no-results">Not reachable from GameData &mdash; this is a static-only type with no path in. Request it directly with <code>' + escapeHtml(rootKey) + '</code> as the first path segment.</div>';
+      if (nodeAliases.length) html += '<div class="route-list">' + nodeAliases.map(a => '<div class="route alias-route" data-copy="' + escapeHtml(a.alias) + '"><span class="alias-badge">alias</span><span class="seg">' + escapeHtml(a.alias) + '</span><span class="copy-hint">copied</span></div>').join('') + '</div>';
     } else if (currentRoutes.length === 0 && nodeAliases.length === 0) {
       html += '<div class="no-results">No route found (unexpected).</div>';
     } else {

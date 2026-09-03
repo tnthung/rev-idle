@@ -481,6 +481,14 @@
   document.getElementById('nodeCountStat').textContent = GRAPH.nodes.length;
   document.getElementById('edgeCountStat').textContent = GRAPH.edges.filter(e => e.to).length;
 
+  // Extra roots are static-only types with no path in from GameData (see
+  // plugin/src/ExtraRoots.cs): a request path whose first segment matches
+  // one of these keys resolves against that type's static properties
+  // instead of walking from GameData. Kept as a lookup by both key and node
+  // id so alias resolution and route rendering can special-case them.
+  const extraRootByKey = new Map((GRAPH.extraRoots || []).map(r => [r.key, r.node]));
+  const extraRootNodeIds = new Set((GRAPH.extraRoots || []).map(r => r.node));
+
   // Resolve each compatibility alias's dotted canonical path against the edge
   // graph so it can be surfaced as a shortcut alongside real routes/fields.
   const aliasesByOwner = new Map();   // node id -> [{alias, path, property}]  (alias resolves to a scalar field on that node)
@@ -488,10 +496,11 @@
   for (const id of nodeIds) { aliasesByOwner.set(id, []); aliasesByTarget.set(id, []); }
   for (const a of GRAPH.aliases || []) {
     const segments = a.path.split('.');
-    let cur = GRAPH.root;
+    let cur = extraRootByKey.has(segments[0]) ? extraRootByKey.get(segments[0]) : GRAPH.root;
+    const walkSegments = extraRootByKey.has(segments[0]) ? segments.slice(1) : segments;
     let finalEdge = null;
     let ok = true;
-    for (const seg of segments) {
+    for (const seg of walkSegments) {
       const e = (outEdges.get(cur) || []).find(edge => edge.property === seg) ||
                 (leafProps.get(cur) || []).find(edge => edge.property === seg);
       if (!e) { ok = false; break; }
@@ -562,7 +571,8 @@
 
     const detail = document.getElementById('detail');
     let html = '';
-    html += '<div class="node-name">' + escapeHtml(nodeId) + '</div>';
+    const extraRootEntry = (GRAPH.extraRoots || []).find(r => r.node === nodeId);
+    html += '<div class="node-name">' + escapeHtml(nodeId) + (extraRootEntry ? ' <span class="alias-badge" title="static-only root, not reachable from GameData">' + escapeHtml(extraRootEntry.key) + '</span>' : '') + '</div>';
     html += '<div class="node-meta">';
     html += '<span><b>' + (currentRoutes.length + nodeAliases.length || (nodeId === GRAPH.root ? 1 : 0)) + '</b> route' + (currentRoutes.length + nodeAliases.length === 1 ? '' : 's') + '</span>';
     html += '<span><b>' + outs.length + '</b> refs out</span>';
@@ -583,6 +593,10 @@
     html += '<div class="section-label">Routes from GameData<span class="route-count-badge">' + (currentRoutes.length + nodeAliases.length) + '</span></div>';
     if (nodeId === GRAPH.root) {
       html += '<div class="no-results">This is the root of the state tree.</div>';
+    } else if (extraRootNodeIds.has(nodeId)) {
+      const rootKey = (GRAPH.extraRoots || []).find(r => r.node === nodeId).key;
+      html += '<div class="no-results">Not reachable from GameData &mdash; this is a static-only type with no path in. Request it directly with <code>' + escapeHtml(rootKey) + '</code> as the first path segment.</div>';
+      if (nodeAliases.length) html += '<div class="route-list">' + nodeAliases.map(a => '<div class="route alias-route" data-copy="' + escapeHtml(a.alias) + '"><span class="alias-badge">alias</span><span class="seg">' + escapeHtml(a.alias) + '</span><span class="copy-hint">copied</span></div>').join('') + '</div>';
     } else if (currentRoutes.length === 0 && nodeAliases.length === 0) {
       html += '<div class="no-results">No route found (unexpected).</div>';
     } else {

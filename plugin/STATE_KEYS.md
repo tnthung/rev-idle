@@ -52,6 +52,238 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `timeTotal` | `timeTotal` |
 | `DT` | `eternity.dilationTree` |
 | `DTP` | `eternity.dtpMax` |
+| `nextEP` | `eternityController.EPGain` |
+| `nextBrokenEP` | `eternityController.brokenEPGain` |
+
+## Extra roots (static-only, not reachable from GameData)
+
+These `*Controller` types are static-only: no property anywhere in the reachable graph below points at them, so no path starting at `GameData` can ever reach them. A request path whose first segment matches one of the keys below resolves the remaining segments against that type's public static properties instead of `GameData`.
+
+| Root key | CLR type |
+| --- | --- |
+| `controller` | `Controller` |
+| `attacksController` | `AttacksController` |
+| `automationController` | `AutomationController` |
+| `elementsController` | `ElementsController` |
+| `eternityController` | `EternityController` |
+| `gameController` | `GameController` |
+| `infinityController` | `InfinityController` |
+| `macroController` | `MacroController` |
+| `mineralsController` | `MineralsController` |
+| `plagueController` | `PlagueController` |
+| `saveController` | `SaveController` |
+| `singularityController` | `SingularityController` |
+| `tarotController` | `TarotController` |
+| `unityController` | `UnityController` |
+
+### `Controller` (root key `controller`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Settings` | `SettingsData` |   |
+| `lastTimeUpdateLeaderboard` | `System.Single` |   |
+
+### `AttacksController` (root key `attacksController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `Elements` | `ElementsData` |   |
+| `Minerals` | `MineralsData` |   |
+| `Plague` | `PlagueData` |   |
+| `Singularity` | `SingularityData` |   |
+| `Tarot` | `TarotData` |   |
+| `Unity` | `UnityData` |   |
+| `lastTimeAsc` | `System.Single` |   |
+| `lastTimeBuy` | `System.Single` |   |
+
+### `AutomationController` (root key `automationController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `Automation` | `AutomationData` |   |
+| `Eternity` | `EternityData` |   |
+| `Infinity` | `InfinityData` |   |
+| `Minerals` | `MineralsData` |   |
+| `Plague` | `PlagueData` |   |
+| `Singularity` | `SingularityData` |   |
+| `Tarot` | `TarotData` |   |
+| `Unity` | `UnityData` |   |
+| `singularityTime` | `BigDouble` |   |
+| `tarotDrawTime` | `BigDouble` |   |
+
+### `ElementsController` (root key `elementsController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `Elements` | `ElementsData` |   |
+| `Inventory` | `InventoryData` |   |
+| `Minerals` | `MineralsData` |   |
+| `Singularity` | `SingularityData` |   |
+| `Tarot` | `TarotData` |   |
+
+### `EternityController` (root key `eternityController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `Automation` | `AutomationData` |   |
+| `EPGain` | `BigDouble` |   |
+| `Elements` | `ElementsData` |   |
+| `Eternity` | `EternityData` |   |
+| `Infinity` | `InfinityData` |   |
+| `Inventory` | `InventoryData` |   |
+| `Minerals` | `MineralsData` |   |
+| `Settings` | `SettingsData` |   |
+| `Tarot` | `TarotData` |   |
+| `Unity` | `UnityData` |   |
+| `brokenEPGain` | `BigDouble` |   |
+| `eternityGain` | `BigDouble` |   |
+| `lastEtrTime` | `System.Single` |   |
+| `processResetEternity` | `System.Boolean` |   |
+
+### `GameController` (root key `gameController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `Automation` | `AutomationData` |   |
+| `Eternity` | `EternityData` |   |
+| `HasInstance` | `System.Boolean` |   |
+| `Infinity` | `InfinityData` |   |
+| `Instance` | `T` |   |
+| `Leaderboard` | `LeaderboardData` |   |
+| `LockGame` | `System.Boolean` |   |
+| `Unity` | `UnityData` |   |
+| `_instance` | `T` |   |
+| `baseMult` | `BigDouble` |   |
+| `gameSpeed` | `BigDouble` |   |
+| `inventory` | `InventoryData` |   |
+
+### `InfinityController` (root key `infinityController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `Automation` | `AutomationData` |   |
+| `Elements` | `ElementsData` |   |
+| `Eternity` | `EternityData` |   |
+| `IPGain` | `BigDouble` |   |
+| `Infinity` | `InfinityData` |   |
+| `Inventory` | `InventoryData` |   |
+| `Minerals` | `MineralsData` |   |
+| `Settings` | `SettingsData` |   |
+| `Tarot` | `TarotData` |   |
+| `Unity` | `UnityData` |   |
+| `brokenIPGain` | `BigDouble` |   |
+| `infinityCD` | `BigDouble` |   |
+| `infinityGain` | `BigDouble` |   |
+| `lastInfTime` | `System.Single` |   |
+| `processResetInfinity` | `System.Boolean` |   |
+
+### `MacroController` (root key `macroController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `AUTO_START_DELAY` | `System.Int32` |   |
+| `HasInstance` | `System.Boolean` |   |
+| `Instance` | `T` |   |
+| `LOGS_MAX_LINES` | `System.Int32` |   |
+| `_instance` | `T` |   |
+
+### `MineralsController` (root key `mineralsController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `Automation` | `AutomationData` |   |
+| `Elements` | `ElementsData` |   |
+| `Eternity` | `EternityData` |   |
+| `Infinity` | `InfinityData` |   |
+| `Minerals` | `MineralsData` |   |
+| `Singularity` | `SingularityData` |   |
+| `Tarot` | `TarotData` |   |
+| `Unity` | `UnityData` |   |
+
+### `PlagueController` (root key `plagueController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `Minerals` | `MineralsData` |   |
+| `Plague` | `PlagueData` |   |
+| `Settings` | `SettingsData` |   |
+| `Singularity` | `SingularityData` |   |
+| `Tarot` | `TarotData` |   |
+
+### `SaveController` (root key `saveController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `CurrentDate` | `Nullable<Il2CppSystem.DateTime>` |   |
+| `HasInstance` | `System.Boolean` |   |
+| `InitialDate` | `Nullable<Il2CppSystem.DateTime>` |   |
+| `Instance` | `T` |   |
+| `Inventory` | `InventoryData` |   |
+| `LastDate` | `Nullable<Il2CppSystem.DateTime>` |   |
+| `LastTFGain` | `System.Double` |   |
+| `LockSave` | `System.Boolean` |   |
+| `OfflineProgressPending` | `System.Boolean` |   |
+| `SaveLoaded` | `System.Boolean` |   |
+| `Settings` | `SettingsData` |   |
+| `StartDate` | `Nullable<Il2CppSystem.DateTime>` |   |
+| `StartupEnded` | `System.Boolean` |   |
+| `_instance` | `T` |   |
+| `isSaving` | `System.Boolean` |   |
+| `lastSaveRealtime` | `System.Single` |   |
+| `localSaveInterval` | `System.Single` |   |
+| `serverSaveInterval` | `System.Single` |   |
+| `serverSaveIntervalLinked` | `System.Single` |   |
+
+### `SingularityController` (root key `singularityController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `Elements` | `ElementsData` |   |
+| `Inventory` | `InventoryData` |   |
+| `Minerals` | `MineralsData` |   |
+| `Plague` | `PlagueData` |   |
+| `Singularity` | `SingularityData` |   |
+| `Tarot` | `TarotData` |   |
+| `Unity` | `UnityData` |   |
+| `atomsGainModifiers` | `List<BuffPenalty>` | list/array of BuffPenalty append `.<numeric-index>` |
+| `atomsPenaltyThresholds` | `Il2CppStructArray<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
+
+### `TarotController` (root key `tarotController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `Elements` | `ElementsData` |   |
+| `Inventory` | `InventoryData` |   |
+| `Minerals` | `MineralsData` |   |
+| `SelectedCard` | `TarotCard` |   |
+| `Singularity` | `SingularityData` |   |
+| `Tarot` | `TarotData` |   |
+| `Unity` | `UnityData` |   |
+
+### `UnityController` (root key `unityController`)
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `AttacksData` | `AttacksData` |   |
+| `ElementsData` | `ElementsData` |   |
+| `EternityData` | `EternityData` |   |
+| `InfinityData` | `InfinityData` |   |
+| `InventoryData` | `InventoryData` |   |
+| `MineralsData` | `MineralsData` |   |
+| `PlagueData` | `PlagueData` |   |
+| `Singularity` | `SingularityData` |   |
+| `TarotData` | `TarotData` |   |
+| `UnityData` | `UnityData` |   |
 
 ## Reachable gameplay types
 

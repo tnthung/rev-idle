@@ -74,8 +74,19 @@ internal static class StatePayload
             return false;
         }
 
-        value = data;
-        foreach (string segment in ResolveAlias(path).Split('.'))
+        string[] segments = ResolveAlias(path).Split('.');
+        int startIndex = 0;
+        if (ExtraRoots.TryGet(segments[0], out object? extraRoot))
+        {
+            value = extraRoot;
+            startIndex = 1;
+        }
+        else
+        {
+            value = data;
+        }
+
+        foreach (string segment in segments.Skip(startIndex))
         {
             if (value is null || segment.Length == 0 || IsExcludedType(value.GetType()))
                 return false;
@@ -113,9 +124,20 @@ internal static class StatePayload
             PropertyInfo? property = GetProperties(type).FirstOrDefault(property => property.Name == segment);
             if (property is null)
                 return false;
-            value = property.GetValue(value);
+            value = TryGetPropertyValue(property, value);
         }
         return value is null || !IsExcludedType(value.GetType());
+    }
+
+    // Some IL2CPP-backed getters throw instead of returning null for an
+    // unset value (GameData.DateOFFull does this for its Nullable<DateTime>
+    // whenever it has never been set), which would otherwise fail an entire
+    // request over one unrelated, optional field. Treat that one property as
+    // absent rather than letting its exception abort serialization.
+    private static object? TryGetPropertyValue(PropertyInfo property, object instance)
+    {
+        try { return property.GetValue(instance); }
+        catch { return null; }
     }
 
     private static string ResolveAlias(string path) => path switch
@@ -159,6 +181,11 @@ internal static class StatePayload
         "timeTotal" => "timeTotal",
         "DT" => "eternity.dilationTree",
         "DTP" => "eternity.dtpMax",
+        // EternityController is a static-only type with no path in from
+        // GameData (see ExtraRoots); these are the EP amounts a break would
+        // currently grant, not eternity.EP's already-banked total.
+        "nextEP" => "eternityController.EPGain",
+        "nextBrokenEP" => "eternityController.brokenEPGain",
         _ => path
     };
 
@@ -348,7 +375,7 @@ internal static class StatePayload
         writer.WriteStartObject();
         foreach (PropertyInfo property in GetProperties(type))
         {
-            object? propertyValue = property.GetValue(value);
+            object? propertyValue = TryGetPropertyValue(property, value);
             if (IsExcludedType(propertyValue?.GetType()))
                 continue;
             if (propertyValue is not null && IsTrackable(propertyValue.GetType()) && IsVisited(propertyValue, references, pointers))

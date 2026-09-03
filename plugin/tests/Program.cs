@@ -134,7 +134,10 @@ static async Task ServerReturnsSerializationFailureStatus()
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
     await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    await CompletePluginPendingUntil(server, static () => new GetterFailureFixture());
+    // A throwing getter no longer fails the whole request (see
+    // StatePayloadDistinguishesInvalidPathsAndGetterFailures), so this uses
+    // runaway traversal instead as a case that genuinely cannot serialize.
+    await CompletePluginPendingUntil(server, static () => new SelfReturningValueFixture());
     HttpResponse response = await new ResponseReader(stream).ReadResponse();
     Equal(500, response.StatusCode, nameof(ServerReturnsSerializationFailureStatus));
     Equal(0, response.Body.Length, nameof(ServerReturnsSerializationFailureStatus));
@@ -241,8 +244,15 @@ static void StatePayloadDistinguishesInvalidPathsAndGetterFailures()
     Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "rows.1.Value" }, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
     Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "numbers.3" }, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
     Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "" }, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
-    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(new GetterFailureFixture(), Array.Empty<string>(), out byte[] failurePayload), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
-    Equal(0, failurePayload.Length, nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
+
+    // A throwing getter serializes as null for that one property rather than
+    // failing the whole request: some real IL2CPP getters (GameData.DateOFFull,
+    // a Nullable<DateTime> that was never set) always throw, and one such
+    // property must not take down every other value in the same graph.
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(new GetterFailureFixture(), Array.Empty<string>(), out byte[] canonicalPayload), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
+    Equal("{\"Value\":null}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(new GetterFailureFixture(), new[] { "Value" }, out byte[] selectedPayload), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
+    Equal("{\"Value\":null}", Encoding.UTF8.GetString(selectedPayload), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
 }
 
 static void StatePayloadPreservesCollectionIndexesAcrossCycles()
