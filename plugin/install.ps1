@@ -350,6 +350,25 @@ function Install-PluginDll {
     return $installedDll
 }
 
+function Select-TestTargetFramework {
+    $supportedFrameworks = @("net8.0", "net9.0")
+
+    $installedMajors = @(
+        & dotnet --list-runtimes 2>$null |
+            ForEach-Object { if ($_ -match '^Microsoft\.NETCore\.App (\d+)\.') { $Matches[1] } } |
+            Sort-Object -Unique
+    )
+
+    foreach ($framework in $supportedFrameworks) {
+        $frameworkMajor = $framework.Substring(3, $framework.Length - 5)
+        if ($installedMajors -contains $frameworkMajor) {
+            return $framework
+        }
+    }
+
+    throw "No installed .NET runtime satisfies the test project (needs one of: $($supportedFrameworks -join ', '))."
+}
+
 function Invoke-ScoreTelemetryInstall {
     param([string]$RequestedInstallationFolder)
 
@@ -361,6 +380,8 @@ function Invoke-ScoreTelemetryInstall {
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
         throw "The .NET SDK is required. Install .NET SDK 8 or newer and retry."
     }
+
+    $testTargetFramework = Select-TestTargetFramework
 
     switch (Get-BepInExState $gameDirectory) {
         "Missing" { Install-BepInEx $gameDirectory }
@@ -376,7 +397,7 @@ function Invoke-ScoreTelemetryInstall {
     $testProject = Join-Path $repositoryRoot "plugin\tests\RevIdle.ScoreTelemetry.Tests.csproj"
     $pluginProject = Join-Path $repositoryRoot "plugin\src\RevolutionIdle.ScoreTelemetry.csproj"
     $builtDll = Join-Path $repositoryRoot "plugin\src\bin\Release\RevIdle.ScoreTelemetry.dll"
-    Invoke-CheckedProcess "dotnet" @("run", "--project", $testProject, "-p:GameDir=$gameDirectory") "Plugin tests failed."
+    Invoke-CheckedProcess "dotnet" @("run", "--project", $testProject, "-f", $testTargetFramework, "-p:GameDir=$gameDirectory") "Plugin tests failed."
     Invoke-CheckedProcess "dotnet" @("build", $pluginProject, "-c", "Release", "-warnaserror", "-p:GameDir=$gameDirectory") "Plugin build failed."
 
     $installedDll = Install-PluginDll $builtDll $gameDirectory
