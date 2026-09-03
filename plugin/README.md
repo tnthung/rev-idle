@@ -85,29 +85,23 @@ const state = await rev.state("score", "IP");
 
 Each call fetches fresh values on demand. The returned object is frozen. Requests reuse one HTTP client and its keep-alive connection when possible. HTTP or response errors reject the promise.
 
-All values are BigDouble strings. Supported keys:
+The complete nested state is documented in the generated [state path reference](STATE_KEYS.md). It includes every reachable gameplay property, collection element/value types, and all compatibility aliases. Regenerate it after an interop assembly change:
 
-| Key | GameData mapping | Key | GameData mapping |
-| --- | --- | --- | --- |
-| `score` | `score` | `income` | `income` |
-| `IP` | `infinity.IP` | `infinities` | `infinity.infs` |
-| `stars` | `infinity.stars` | `stardust` | `infinity.stardust` |
-| `EP` | `eternity.EP` | `eternities` | `eternity.eters` |
-| `DP` | `eternity.DP` | `AP` | `eternity.AP` |
-| `RP` | `eternity.curRP` | `RPMax` | `eternity.maximumRP` |
-| `RPSpent` | `eternity.spendRP` | `unities` | `unity.unities` |
-| `passiveUnities` | `unity.passiveUnities` | `astrodust` | `unity.astrodust` |
-| `singularities` | `singularity.singularity` | `atoms` | `singularity.atoms` |
-| `PlP` | `plague.PlP` | `PlPperPlG` | `plague.PlPperPlG` |
-| `PlG` | `plague.PlG` | `VE` | `plague.VE` |
-| `ViP` | `plague.ViP` | `tarotSwords` | `tarot.swords` |
-| `tarotWands` | `tarot.wands` | `tarotPentacles` | `tarot.pentacles` |
-| `tarotCups` | `tarot.cups` | `goldTarotSwords` | `tarot.goldSwords` |
-| `goldTarotWands` | `tarot.goldWands` | `goldTarotPentacles` | `tarot.goldPentacles` |
-| `goldTarotCups` | `tarot.goldCups` | `tarotDraws` | `tarot.draws` |
-| `timeSinceStart` | `timeSinceStart` | `timeInfinity` | `timeInf` |
-| `timeEternity` | `timeEtr` | `timeUnity` | `timeUnity` |
-| `timeTotal` | `timeTotal` |  |  |
+```powershell
+.\plugin\generate-state-reference.ps1
+```
+
+With no arguments, the generator reads `E:\SteamLibrary\steamapps\common\Revolution Idle`.
+
+Paths are case-sensitive property names separated by `.`, starting at `GameData`. Numeric segments index arrays/lists; dictionary segments use string, integer, or enum keys. For example:
+
+```javascript
+const full = await rev.state();
+const selected = await rev.state("score", "eternity.dtpSpent", "eternity.dilationTree.top.0.level");
+const aliases = await rev.state("DT", "DTP");
+```
+
+The JSON response preserves mixed types: BigDouble and integers outside JavaScript's safe range are strings, while safe numbers, booleans, strings, enums, dates, arrays, dictionaries, and nested gameplay objects use their native JSON representation.
 
 ## Uninstall
 
