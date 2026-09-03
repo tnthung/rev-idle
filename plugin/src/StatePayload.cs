@@ -24,6 +24,15 @@ internal static class StatePayload
 
     internal static StatePayloadStatus Encode(object data, IReadOnlyList<string> paths, out byte[] payload)
     {
+        // There is no implicit or default root: every path must name one of
+        // ExtraRoots' keys (GameData included) as its first segment, so a
+        // keyless request has no root to resolve against and is rejected
+        // rather than falling back to an implicit whole-GameData dump.
+        if (paths.Count == 0)
+        {
+            payload = Array.Empty<byte>();
+            return StatePayloadStatus.InvalidPath;
+        }
         try
         {
             List<(string Path, object? Value)> values = new(paths.Count);
@@ -43,18 +52,13 @@ internal static class StatePayload
             using MemoryStream stream = new();
             using (var writer = new Utf8JsonWriter(stream))
             {
-                if (paths.Count == 0)
-                    WriteValue(writer, data, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0);
-                else
+                writer.WriteStartObject();
+                foreach ((string path, object? value) in values)
                 {
-                    writer.WriteStartObject();
-                    foreach ((string path, object? value) in values)
-                    {
-                        writer.WritePropertyName(path);
-                        WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0);
-                    }
-                    writer.WriteEndObject();
+                    writer.WritePropertyName(path);
+                    WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0);
                 }
+                writer.WriteEndObject();
             }
             payload = stream.ToArray();
             return StatePayloadStatus.Success;
@@ -75,18 +79,14 @@ internal static class StatePayload
         }
 
         string[] segments = ResolveAlias(path).Split('.');
-        int startIndex = 0;
-        if (ExtraRoots.TryGet(segments[0], out object? extraRoot))
+        if (!ExtraRoots.TryGet(segments[0], data, out object? root))
         {
-            value = extraRoot;
-            startIndex = 1;
+            value = null;
+            return false;
         }
-        else
-        {
-            value = data;
-        }
+        value = root;
 
-        foreach (string segment in segments.Skip(startIndex))
+        foreach (string segment in segments.Skip(1))
         {
             if (value is null || segment.Length == 0 || IsExcludedType(value.GetType()))
                 return false;
@@ -140,47 +140,51 @@ internal static class StatePayload
         catch { return null; }
     }
 
+    // Every alias expands to a path that already names its root explicitly
+    // (see ExtraRoots) -- there is no implicit or default root, GameData
+    // included, so a raw path with no root segment (the "_ => path"
+    // fallback) is left as-is and simply fails to resolve.
     private static string ResolveAlias(string path) => path switch
     {
-        "score" => "score",
-        "income" => "income",
-        "IP" => "infinity.IP",
-        "infinities" => "infinity.infs",
-        "stars" => "infinity.stars",
-        "stardust" => "infinity.stardust",
-        "EP" => "eternity.EP",
-        "eternities" => "eternity.eters",
-        "DP" => "eternity.DP",
-        "AP" => "eternity.AP",
-        "RP" => "eternity.curRP",
-        "RPMax" => "eternity.maximumRP",
-        "RPSpent" => "eternity.spendRP",
-        "unities" => "unity.unities",
-        "passiveUnities" => "unity.passiveUnities",
-        "astrodust" => "unity.astrodust",
-        "singularities" => "singularity.singularity",
-        "atoms" => "singularity.atoms",
-        "PlP" => "plague.PlP",
-        "PlPperPlG" => "plague.PlPperPlG",
-        "PlG" => "plague.PlG",
-        "VE" => "plague.VE",
-        "ViP" => "plague.ViP",
-        "tarotSwords" => "tarot.swords",
-        "tarotWands" => "tarot.wands",
-        "tarotPentacles" => "tarot.pentacles",
-        "tarotCups" => "tarot.cups",
-        "goldTarotSwords" => "tarot.goldSwords",
-        "goldTarotWands" => "tarot.goldWands",
-        "goldTarotPentacles" => "tarot.goldPentacles",
-        "goldTarotCups" => "tarot.goldCups",
-        "tarotDraws" => "tarot.draws",
-        "timeSinceStart" => "timeSinceStart",
-        "timeInfinity" => "timeInf",
-        "timeEternity" => "timeEtr",
-        "timeUnity" => "timeUnity",
-        "timeTotal" => "timeTotal",
-        "DT" => "eternity.dilationTree",
-        "DTP" => "eternity.dtpMax",
+        "score" => "gameData.score",
+        "income" => "gameData.income",
+        "IP" => "gameData.infinity.IP",
+        "infinities" => "gameData.infinity.infs",
+        "stars" => "gameData.infinity.stars",
+        "stardust" => "gameData.infinity.stardust",
+        "EP" => "gameData.eternity.EP",
+        "eternities" => "gameData.eternity.eters",
+        "DP" => "gameData.eternity.DP",
+        "AP" => "gameData.eternity.AP",
+        "RP" => "gameData.eternity.curRP",
+        "RPMax" => "gameData.eternity.maximumRP",
+        "RPSpent" => "gameData.eternity.spendRP",
+        "unities" => "gameData.unity.unities",
+        "passiveUnities" => "gameData.unity.passiveUnities",
+        "astrodust" => "gameData.unity.astrodust",
+        "singularities" => "gameData.singularity.singularity",
+        "atoms" => "gameData.singularity.atoms",
+        "PlP" => "gameData.plague.PlP",
+        "PlPperPlG" => "gameData.plague.PlPperPlG",
+        "PlG" => "gameData.plague.PlG",
+        "VE" => "gameData.plague.VE",
+        "ViP" => "gameData.plague.ViP",
+        "tarotSwords" => "gameData.tarot.swords",
+        "tarotWands" => "gameData.tarot.wands",
+        "tarotPentacles" => "gameData.tarot.pentacles",
+        "tarotCups" => "gameData.tarot.cups",
+        "goldTarotSwords" => "gameData.tarot.goldSwords",
+        "goldTarotWands" => "gameData.tarot.goldWands",
+        "goldTarotPentacles" => "gameData.tarot.goldPentacles",
+        "goldTarotCups" => "gameData.tarot.goldCups",
+        "tarotDraws" => "gameData.tarot.draws",
+        "timeSinceStart" => "gameData.timeSinceStart",
+        "timeInfinity" => "gameData.timeInf",
+        "timeEternity" => "gameData.timeEtr",
+        "timeUnity" => "gameData.timeUnity",
+        "timeTotal" => "gameData.timeTotal",
+        "DT" => "gameData.eternity.dilationTree",
+        "DTP" => "gameData.eternity.dtpMax",
         // EternityController is a static-only type with no path in from
         // GameData (see ExtraRoots); these are the EP amounts a break would
         // currently grant, not eternity.EP's already-banked total.

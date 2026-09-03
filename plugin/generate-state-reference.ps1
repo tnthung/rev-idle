@@ -138,7 +138,7 @@ while ($pending.Count -gt 0) {
 }
 
 $aliases = [ordered]@{
-    score='score'; income='income'; IP='infinity.IP'; infinities='infinity.infs'; stars='infinity.stars'; stardust='infinity.stardust'; EP='eternity.EP'; eternities='eternity.eters'; DP='eternity.DP'; AP='eternity.AP'; RP='eternity.curRP'; RPMax='eternity.maximumRP'; RPSpent='eternity.spendRP'; unities='unity.unities'; passiveUnities='unity.passiveUnities'; astrodust='unity.astrodust'; singularities='singularity.singularity'; atoms='singularity.atoms'; PlP='plague.PlP'; PlPperPlG='plague.PlPperPlG'; PlG='plague.PlG'; VE='plague.VE'; ViP='plague.ViP'; tarotSwords='tarot.swords'; tarotWands='tarot.wands'; tarotPentacles='tarot.pentacles'; tarotCups='tarot.cups'; goldTarotSwords='tarot.goldSwords'; goldTarotWands='tarot.goldWands'; goldTarotPentacles='tarot.goldPentacles'; goldTarotCups='tarot.goldCups'; tarotDraws='tarot.draws'; timeSinceStart='timeSinceStart'; timeInfinity='timeInf'; timeEternity='timeEtr'; timeUnity='timeUnity'; timeTotal='timeTotal'; DT='eternity.dilationTree'; DTP='eternity.dtpMax'; nextEP='eternityController.EPGain'; nextBrokenEP='eternityController.brokenEPGain'
+    score='gameData.score'; income='gameData.income'; IP='gameData.infinity.IP'; infinities='gameData.infinity.infs'; stars='gameData.infinity.stars'; stardust='gameData.infinity.stardust'; EP='gameData.eternity.EP'; eternities='gameData.eternity.eters'; DP='gameData.eternity.DP'; AP='gameData.eternity.AP'; RP='gameData.eternity.curRP'; RPMax='gameData.eternity.maximumRP'; RPSpent='gameData.eternity.spendRP'; unities='gameData.unity.unities'; passiveUnities='gameData.unity.passiveUnities'; astrodust='gameData.unity.astrodust'; singularities='gameData.singularity.singularity'; atoms='gameData.singularity.atoms'; PlP='gameData.plague.PlP'; PlPperPlG='gameData.plague.PlPperPlG'; PlG='gameData.plague.PlG'; VE='gameData.plague.VE'; ViP='gameData.plague.ViP'; tarotSwords='gameData.tarot.swords'; tarotWands='gameData.tarot.wands'; tarotPentacles='gameData.tarot.pentacles'; tarotCups='gameData.tarot.cups'; goldTarotSwords='gameData.tarot.goldSwords'; goldTarotWands='gameData.tarot.goldWands'; goldTarotPentacles='gameData.tarot.goldPentacles'; goldTarotCups='gameData.tarot.goldCups'; tarotDraws='gameData.tarot.draws'; timeSinceStart='gameData.timeSinceStart'; timeInfinity='gameData.timeInf'; timeEternity='gameData.timeEtr'; timeUnity='gameData.timeUnity'; timeTotal='gameData.timeTotal'; DT='gameData.eternity.dilationTree'; DTP='gameData.eternity.dtpMax'; nextEP='eternityController.EPGain'; nextBrokenEP='eternityController.brokenEPGain'
 }
 
 $extraRootNames = @('Controller', 'AttacksController', 'AutomationController', 'ElementsController', 'EternityController', 'GameController', 'InfinityController', 'MacroController', 'MineralsController', 'PlagueController', 'SaveController', 'SingularityController', 'TarotController', 'UnityController')
@@ -149,6 +149,13 @@ foreach ($rootName in $extraRootNames) {
     $rootKey = [char]::ToLowerInvariant($rootName[0]) + $rootName.Substring(1)
     [void]$extraRoots.Add([pscustomobject]@{ Key = $rootKey; Type = $rootType; Properties = @(Get-EligibleStaticProperties $rootType) })
 }
+
+# GameData is not an implicit or default root: like every *Controller extra
+# root, it is only reachable by naming its key ("gameData") as a request
+# path's first segment (see plugin/src/ExtraRoots.cs).
+$allRoots = [System.Collections.Generic.List[object]]::new()
+[void]$allRoots.Add([pscustomobject]@{ Key = 'gameData'; Type = $gameData; Properties = @(Get-EligibleProperties $gameData) })
+foreach ($root in $extraRoots) { [void]$allRoots.Add($root) }
 $lines = [System.Collections.Generic.List[string]]::new()
 $lines.Add('# Complete state path reference')
 $lines.Add('')
@@ -159,7 +166,7 @@ $lines.Add("Reachable gameplay types: **$($reachable.Count)**. Properties: **$pr
 $lines.Add('')
 $lines.Add('## Path grammar and JSON behavior')
 $lines.Add('')
-$lines.Add('Paths are case-sensitive public property names separated by `.`, starting at `GameData`. Numeric segments index arrays/lists; dictionary segments resolve string, integer, or enum keys. Collections are documented below each property. A no-argument request returns the complete nested graph; selected requests return a flat object keyed by the requested path.')
+$lines.Add('There is no implicit or default root. Every path is case-sensitive public property names separated by `.`, and the first segment must always name one of the root keys below -- `gameData` included, the same as any `*Controller` root. Numeric segments index arrays/lists; dictionary segments resolve string, integer, or enum keys. Collections are documented below each property. A keyless request is rejected; selected requests return a flat object keyed by the requested path.')
 $lines.Add('')
 $lines.Add('JSON follows the serializer policy: BigDouble and large integers are strings; safe integers, finite floating-point values, booleans, strings, enums, dates, arrays/lists, dictionaries, and gameplay objects use their native JSON forms. Non-finite floating-point values are `"NaN"`, `"Infinity"`, or `"-Infinity"`; repeated collection objects serialize as `null` to preserve indexes.')
 $lines.Add('')
@@ -169,13 +176,13 @@ $lines.Add('| Alias | Canonical target |')
 $lines.Add('| --- | --- |')
 foreach ($alias in $aliases.GetEnumerator()) { $lines.Add([string]::Format('| `{0}` | `{1}` |', $alias.Key, $alias.Value)) }
 $lines.Add('')
-$lines.Add('## Extra roots (static-only, not reachable from GameData)')
+$lines.Add('## Roots')
 $lines.Add('')
-$lines.Add('These `*Controller` types are static-only: no property anywhere in the reachable graph below points at them, so no path starting at `GameData` can ever reach them. A request path whose first segment matches one of the keys below resolves the remaining segments against that type''s public static properties instead of `GameData`.')
+$lines.Add('`gameData` is the game''s main save-data graph (detailed in Reachable gameplay types below); the `*Controller` keys are static-only types with no property anywhere in that graph pointing at them, so they are otherwise unreachable no matter how deep a path goes. Every root is addressed the same way: name its key as the request path''s first segment.')
 $lines.Add('')
 $lines.Add('| Root key | CLR type |')
 $lines.Add('| --- | --- |')
-foreach ($root in $extraRoots) { $lines.Add([string]::Format('| `{0}` | `{1}` |', $root.Key, $root.Type.FullName)) }
+foreach ($root in $allRoots) { $lines.Add([string]::Format('| `{0}` | `{1}` |', $root.Key, $root.Type.FullName)) }
 $lines.Add('')
 foreach ($root in $extraRoots) {
     $lines.Add([string]::Format('### `{0}` (root key `{1}`)', $root.Type.FullName, $root.Key))
@@ -273,7 +280,6 @@ function ConvertTo-JsonString([string]$value) {
 
 $jsonLines = [System.Collections.Generic.List[string]]::new()
 $jsonLines.Add('{')
-$jsonLines.Add('  "root": "GameData",')
 $jsonLines.Add('  "nodes": [')
 $sortedNodeNames = @($graphNodeNames) | Sort-Object
 for ($i = 0; $i -lt $sortedNodeNames.Count; $i++) {
@@ -296,10 +302,10 @@ for ($i = 0; $i -lt $aliasEntries.Count; $i++) {
     $jsonLines.Add("    {`"alias`": $(ConvertTo-JsonString $aliasEntries[$i].Key), `"path`": $(ConvertTo-JsonString $aliasEntries[$i].Value)}$comma")
 }
 $jsonLines.Add('  ],')
-$jsonLines.Add('  "extraRoots": [')
-for ($i = 0; $i -lt $extraRoots.Count; $i++) {
-    $comma = if ($i -eq $extraRoots.Count - 1) { '' } else { ',' }
-    $jsonLines.Add("    {`"key`": $(ConvertTo-JsonString $extraRoots[$i].Key), `"node`": $(ConvertTo-JsonString $extraRoots[$i].Type.FullName)}$comma")
+$jsonLines.Add('  "roots": [')
+for ($i = 0; $i -lt $allRoots.Count; $i++) {
+    $comma = if ($i -eq $allRoots.Count - 1) { '' } else { ',' }
+    $jsonLines.Add("    {`"key`": $(ConvertTo-JsonString $allRoots[$i].Key), `"node`": $(ConvertTo-JsonString $allRoots[$i].Type.FullName)}$comma")
 }
 $jsonLines.Add('  ]')
 $jsonLines.Add('}')

@@ -33,18 +33,18 @@ internal static class StaticPropertySnapshot
 }
 
 /// <summary>
-/// Top-level roots reachable alongside GameData, for state that lives on
-/// static-only *Controller types. Each game system has one (EternityController,
+/// Every top-level root a state path can be addressed against: GameData
+/// itself, plus the static-only *Controller types (EternityController,
 /// InfinityController, UnityController, ...) holding computed values -- like
 /// the EP a break would currently grant -- that nothing on GameData ever
 /// references, so no dotted path from GameData can reach them no matter how
-/// deep. A request path whose first segment matches a key here resolves the
-/// remaining segments against that controller's static properties instead.
+/// deep. There is no implicit or default root: a request path's first
+/// segment must always name one of these keys, GameData included.
 /// </summary>
 internal static class ExtraRoots
 {
     // First letter of each type name lowercased: EternityController -> "eternityController".
-    private static readonly IReadOnlyDictionary<string, Type> Roots = new[]
+    private static readonly IReadOnlyDictionary<string, Type> ControllerRoots = new[]
     {
         typeof(Controller),
         typeof(AttacksController),
@@ -62,9 +62,19 @@ internal static class ExtraRoots
         typeof(UnityController),
     }.ToDictionary(type => char.ToLowerInvariant(type.Name[0]) + type.Name[1..], StringComparer.Ordinal);
 
-    public static bool TryGet(string firstSegment, out object? root)
+    public const string GameDataKey = "gameData";
+
+    // The root object passed into StatePayload.Encode is addressed by
+    // GameDataKey regardless of its static type, so unit tests can stand in
+    // arbitrary fixtures for it without depending on the real GameData type.
+    public static bool TryGet(string firstSegment, object data, out object? root)
     {
-        if (Roots.TryGetValue(firstSegment, out Type? type))
+        if (firstSegment == GameDataKey)
+        {
+            root = data;
+            return true;
+        }
+        if (ControllerRoots.TryGetValue(firstSegment, out Type? type))
         {
             root = StaticPropertySnapshot.Capture(type);
             return true;

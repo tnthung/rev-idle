@@ -354,7 +354,7 @@
     font-weight: 600;
     letter-spacing: 0.01em;
   }
-  .prop-name .alias-badge { margin-left: 7px; }
+  .prop-name .alias-badge, .node-name .alias-badge { margin-left: 7px; }
 
   .prop-list {
     display: flex;
@@ -448,7 +448,7 @@
 
   <div id="detail">
     <div class="empty-state" id="emptyState">
-      Search for a gameplay type, a field name, or a compatibility alias to see every path from <code>GameData</code> that reaches it.
+      Search for a gameplay type, a field name, or a compatibility alias to see every path from a root (<code>gameData</code>, or a static-only <code>*Controller</code>) that reaches it. There is no implicit or default root &mdash; every path names one explicitly.
     </div>
   </div>
 </div>
@@ -481,26 +481,27 @@
   document.getElementById('nodeCountStat').textContent = GRAPH.nodes.length;
   document.getElementById('edgeCountStat').textContent = GRAPH.edges.filter(e => e.to).length;
 
-  // Extra roots are static-only types with no path in from GameData (see
-  // plugin/src/ExtraRoots.cs): a request path whose first segment matches
-  // one of these keys resolves against that type's static properties
-  // instead of walking from GameData. Kept as a lookup by both key and node
-  // id so alias resolution and route rendering can special-case them.
-  const extraRootByKey = new Map((GRAPH.extraRoots || []).map(r => [r.key, r.node]));
-  const extraRootNodeIds = new Set((GRAPH.extraRoots || []).map(r => r.node));
+  // There is no implicit or default root: every root (GameData included,
+  // key "gameData") is addressed by a request path whose first segment names
+  // its key -- see plugin/src/ExtraRoots.cs. Kept as lookups by both key and
+  // node id so alias resolution and route rendering treat every root alike.
+  const rootByKey = new Map((GRAPH.roots || []).map(r => [r.key, r.node]));
+  const rootNodeIds = new Set((GRAPH.roots || []).map(r => r.node));
+  const rootKeyByNodeId = new Map((GRAPH.roots || []).map(r => [r.node, r.key]));
 
   // Resolve each compatibility alias's dotted canonical path against the edge
   // graph so it can be surfaced as a shortcut alongside real routes/fields.
+  // Every alias's path already names its root as the first segment.
   const aliasesByOwner = new Map();   // node id -> [{alias, path, property}]  (alias resolves to a scalar field on that node)
   const aliasesByTarget = new Map();  // node id -> [{alias, path}]            (alias resolves straight to that node)
   for (const id of nodeIds) { aliasesByOwner.set(id, []); aliasesByTarget.set(id, []); }
   for (const a of GRAPH.aliases || []) {
     const segments = a.path.split('.');
-    let cur = extraRootByKey.has(segments[0]) ? extraRootByKey.get(segments[0]) : GRAPH.root;
-    const walkSegments = extraRootByKey.has(segments[0]) ? segments.slice(1) : segments;
+    if (!rootByKey.has(segments[0])) continue;
+    let cur = rootByKey.get(segments[0]);
     let finalEdge = null;
     let ok = true;
-    for (const seg of walkSegments) {
+    for (const seg of segments.slice(1)) {
       const e = (outEdges.get(cur) || []).find(edge => edge.property === seg) ||
                 (leafProps.get(cur) || []).find(edge => edge.property === seg);
       if (!e) { ok = false; break; }
@@ -522,31 +523,36 @@
     return edge.property;
   }
 
-  // Enumerate every simple path GameData -> target, stopping a branch the moment
-  // it revisits a type already on that branch (cycles terminate, don't loop forever).
+  // Enumerate every simple path root -> target across every root (GameData
+  // and each *Controller extra root -- a node can be reachable from more
+  // than one), stopping a branch the moment it revisits a type already on
+  // that branch (cycles terminate, don't loop forever). Each route carries
+  // the key of the root it starts from, "" for GameData.
   function findAllRoutes(targetId) {
     const routes = [];
-    const chain = new Set();
-    function walk(nodeId, path) {
-      if (nodeId === targetId && path.length > 0) {
-        routes.push(path.slice());
-        return;
+    for (const [rootKey, rootNode] of rootByKey) {
+      const chain = new Set();
+      function walk(nodeId, path) {
+        if (nodeId === targetId && path.length > 0) {
+          routes.push({ rootKey, segments: path.slice() });
+          return;
+        }
+        if (chain.has(nodeId)) return;
+        chain.add(nodeId);
+        for (const e of outEdges.get(nodeId) || []) {
+          path.push(e);
+          walk(e.to, path);
+          path.pop();
+        }
+        chain.delete(nodeId);
       }
-      if (chain.has(nodeId)) return;
-      chain.add(nodeId);
-      for (const e of outEdges.get(nodeId) || []) {
-        path.push(e);
-        walk(e.to, path);
-        path.pop();
-      }
-      chain.delete(nodeId);
+      walk(rootNode, []);
     }
-    walk(GRAPH.root, []);
     return routes;
   }
 
   function routeKey(route) {
-    return route.map(collectionSegment).join('.');
+    return route.rootKey + '.' + route.segments.map(collectionSegment).join('.');
   }
 
   function routeHtml(route) {
@@ -560,7 +566,7 @@
 
   function renderDetail(nodeId, initialTab, focusField) {
     initialTab = initialTab === 'fields' ? 'fields' : 'routes';
-    const currentRoutes = findAllRoutes(nodeId).sort((a, b) => a.length - b.length);
+    const currentRoutes = findAllRoutes(nodeId).sort((a, b) => a.segments.length - b.segments.length);
 
     const outs = (outEdges.get(nodeId) || []).slice().sort((a, b) => a.property.localeCompare(b.property));
     const ins = (inEdges.get(nodeId) || []).slice().sort((a, b) => a.from.localeCompare(b.from) || a.property.localeCompare(b.property));
@@ -571,10 +577,11 @@
 
     const detail = document.getElementById('detail');
     let html = '';
-    const extraRootEntry = (GRAPH.extraRoots || []).find(r => r.node === nodeId);
-    html += '<div class="node-name">' + escapeHtml(nodeId) + (extraRootEntry ? ' <span class="alias-badge" title="static-only root, not reachable from GameData">' + escapeHtml(extraRootEntry.key) + '</span>' : '') + '</div>';
+    const isRoot = rootNodeIds.has(nodeId);
+    const rootKeyHere = rootKeyByNodeId.get(nodeId);
+    html += '<div class="node-name">' + escapeHtml(nodeId) + (isRoot ? '<span class="alias-badge" data-copy="' + escapeHtml(rootKeyHere) + '" title="root, click to copy root key">' + escapeHtml(rootKeyHere) + '</span>' : '') + '</div>';
     html += '<div class="node-meta">';
-    html += '<span><b>' + (currentRoutes.length + nodeAliases.length || (nodeId === GRAPH.root ? 1 : 0)) + '</b> route' + (currentRoutes.length + nodeAliases.length === 1 ? '' : 's') + '</span>';
+    html += '<span><b>' + (currentRoutes.length + nodeAliases.length + (isRoot ? 1 : 0)) + '</b> route' + (currentRoutes.length + nodeAliases.length + (isRoot ? 1 : 0) === 1 ? '' : 's') + '</span>';
     html += '<span><b>' + outs.length + '</b> refs out</span>';
     html += '<span><b>' + ins.length + '</b> refs in</span>';
     html += '<span><b>' + leaves.length + '</b> scalar fields</span>';
@@ -590,13 +597,13 @@
     // Routes / keys
     html += '<div class="detail-col detail-col-routes">';
     html += '<div class="detail-col-body">';
-    html += '<div class="section-label">Routes from GameData<span class="route-count-badge">' + (currentRoutes.length + nodeAliases.length) + '</span></div>';
-    if (nodeId === GRAPH.root) {
-      html += '<div class="no-results">This is the root of the state tree.</div>';
-    } else if (extraRootNodeIds.has(nodeId)) {
-      const rootKey = (GRAPH.extraRoots || []).find(r => r.node === nodeId).key;
-      html += '<div class="no-results">Not reachable from GameData &mdash; this is a static-only type with no path in. Request it directly with <code>' + escapeHtml(rootKey) + '</code> as the first path segment.</div>';
-      if (nodeAliases.length) html += '<div class="route-list">' + nodeAliases.map(a => '<div class="route alias-route" data-copy="' + escapeHtml(a.alias) + '"><span class="alias-badge">alias</span><span class="seg">' + escapeHtml(a.alias) + '</span><span class="copy-hint">copied</span></div>').join('') + '</div>';
+    html += '<div class="section-label">Routes<span class="route-count-badge">' + (currentRoutes.length + nodeAliases.length + (isRoot ? 1 : 0)) + '</span></div>';
+    if (isRoot) {
+      html += '<div class="no-results">There is no implicit or default root &mdash; request this directly with the root key below.</div>';
+      let rootRoutesHtml = '<div class="route alias-route" data-copy="' + escapeHtml(rootKeyHere) + '"><span class="alias-badge">root</span><span class="seg">' + escapeHtml(rootKeyHere) + '</span><span class="copy-hint">copied</span></div>';
+      rootRoutesHtml += nodeAliases.map(a => '<div class="route alias-route" data-copy="' + escapeHtml(a.alias) + '"><span class="alias-badge">alias</span><span class="seg">' + escapeHtml(a.alias) + '</span><span class="copy-hint">copied</span></div>').join('');
+      rootRoutesHtml += currentRoutes.map(routeHtml).join('');
+      if (rootRoutesHtml) html += '<div class="route-list">' + rootRoutesHtml + '</div>';
     } else if (currentRoutes.length === 0 && nodeAliases.length === 0) {
       html += '<div class="no-results">No route found (unexpected).</div>';
     } else {
@@ -616,7 +623,7 @@
     if (leaves.length) {
       html += '<div class="prop-list">' + leaves.map(e => {
         const alias = fieldAliasByProperty.get(e.property);
-        const aliasBadge = alias ? '<span class="alias-badge" title="shortcut for ' + escapeHtml(e.property) + '">' + escapeHtml(alias.alias) + '</span>' : '';
+        const aliasBadge = alias ? '<span class="alias-badge" data-copy="' + escapeHtml(alias.alias) + '" title="shortcut for ' + escapeHtml(e.property) + ', click to copy alias">' + escapeHtml(alias.alias) + '</span>' : '';
         return '<div class="prop-row" data-copy="' + escapeHtml(e.property) + '" data-field="' + escapeHtml(e.property) + '"><span class="prop-name">' + escapeHtml(e.property) + aliasBadge + '<span class="copy-hint">copied</span></span><span class="prop-type">' + escapeHtml(e.valueType) + '</span></div>';
       }).join('') + '</div>';
     } else {
@@ -650,6 +657,15 @@
     detail.querySelectorAll('[data-copy]').forEach(el => {
       el.addEventListener('click', evt => {
         if (evt.target.closest('.linked')) return;
+        const aliasBadge = evt.target.closest('.alias-badge[data-copy]');
+        if (aliasBadge && aliasBadge !== el) return;
+        copyToClipboard(el.getAttribute('data-copy'), el);
+      });
+    });
+
+    detail.querySelectorAll('.alias-badge[data-copy]').forEach(el => {
+      el.addEventListener('click', evt => {
+        evt.stopPropagation();
         copyToClipboard(el.getAttribute('data-copy'), el);
       });
     });

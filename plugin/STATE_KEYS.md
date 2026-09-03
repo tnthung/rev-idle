@@ -5,7 +5,7 @@ Reachable gameplay types: **140**. Properties: **1596**.
 
 ## Path grammar and JSON behavior
 
-Paths are case-sensitive public property names separated by `.`, starting at `GameData`. Numeric segments index arrays/lists; dictionary segments resolve string, integer, or enum keys. Collections are documented below each property. A no-argument request returns the complete nested graph; selected requests return a flat object keyed by the requested path.
+There is no implicit or default root. Every path is case-sensitive public property names separated by `.`, and the first segment must always name one of the root keys below -- `gameData` included, the same as any `*Controller` root. Numeric segments index arrays/lists; dictionary segments resolve string, integer, or enum keys. Collections are documented below each property. A keyless request is rejected; selected requests return a flat object keyed by the requested path.
 
 JSON follows the serializer policy: BigDouble and large integers are strings; safe integers, finite floating-point values, booleans, strings, enums, dates, arrays/lists, dictionaries, and gameplay objects use their native JSON forms. Non-finite floating-point values are `"NaN"`, `"Infinity"`, or `"-Infinity"`; repeated collection objects serialize as `null` to preserve indexes.
 
@@ -13,54 +13,55 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Alias | Canonical target |
 | --- | --- |
-| `score` | `score` |
-| `income` | `income` |
-| `IP` | `infinity.IP` |
-| `infinities` | `infinity.infs` |
-| `stars` | `infinity.stars` |
-| `stardust` | `infinity.stardust` |
-| `EP` | `eternity.EP` |
-| `eternities` | `eternity.eters` |
-| `DP` | `eternity.DP` |
-| `AP` | `eternity.AP` |
-| `RP` | `eternity.curRP` |
-| `RPMax` | `eternity.maximumRP` |
-| `RPSpent` | `eternity.spendRP` |
-| `unities` | `unity.unities` |
-| `passiveUnities` | `unity.passiveUnities` |
-| `astrodust` | `unity.astrodust` |
-| `singularities` | `singularity.singularity` |
-| `atoms` | `singularity.atoms` |
-| `PlP` | `plague.PlP` |
-| `PlPperPlG` | `plague.PlPperPlG` |
-| `PlG` | `plague.PlG` |
-| `VE` | `plague.VE` |
-| `ViP` | `plague.ViP` |
-| `tarotSwords` | `tarot.swords` |
-| `tarotWands` | `tarot.wands` |
-| `tarotPentacles` | `tarot.pentacles` |
-| `tarotCups` | `tarot.cups` |
-| `goldTarotSwords` | `tarot.goldSwords` |
-| `goldTarotWands` | `tarot.goldWands` |
-| `goldTarotPentacles` | `tarot.goldPentacles` |
-| `goldTarotCups` | `tarot.goldCups` |
-| `tarotDraws` | `tarot.draws` |
-| `timeSinceStart` | `timeSinceStart` |
-| `timeInfinity` | `timeInf` |
-| `timeEternity` | `timeEtr` |
-| `timeUnity` | `timeUnity` |
-| `timeTotal` | `timeTotal` |
-| `DT` | `eternity.dilationTree` |
-| `DTP` | `eternity.dtpMax` |
+| `score` | `gameData.score` |
+| `income` | `gameData.income` |
+| `IP` | `gameData.infinity.IP` |
+| `infinities` | `gameData.infinity.infs` |
+| `stars` | `gameData.infinity.stars` |
+| `stardust` | `gameData.infinity.stardust` |
+| `EP` | `gameData.eternity.EP` |
+| `eternities` | `gameData.eternity.eters` |
+| `DP` | `gameData.eternity.DP` |
+| `AP` | `gameData.eternity.AP` |
+| `RP` | `gameData.eternity.curRP` |
+| `RPMax` | `gameData.eternity.maximumRP` |
+| `RPSpent` | `gameData.eternity.spendRP` |
+| `unities` | `gameData.unity.unities` |
+| `passiveUnities` | `gameData.unity.passiveUnities` |
+| `astrodust` | `gameData.unity.astrodust` |
+| `singularities` | `gameData.singularity.singularity` |
+| `atoms` | `gameData.singularity.atoms` |
+| `PlP` | `gameData.plague.PlP` |
+| `PlPperPlG` | `gameData.plague.PlPperPlG` |
+| `PlG` | `gameData.plague.PlG` |
+| `VE` | `gameData.plague.VE` |
+| `ViP` | `gameData.plague.ViP` |
+| `tarotSwords` | `gameData.tarot.swords` |
+| `tarotWands` | `gameData.tarot.wands` |
+| `tarotPentacles` | `gameData.tarot.pentacles` |
+| `tarotCups` | `gameData.tarot.cups` |
+| `goldTarotSwords` | `gameData.tarot.goldSwords` |
+| `goldTarotWands` | `gameData.tarot.goldWands` |
+| `goldTarotPentacles` | `gameData.tarot.goldPentacles` |
+| `goldTarotCups` | `gameData.tarot.goldCups` |
+| `tarotDraws` | `gameData.tarot.draws` |
+| `timeSinceStart` | `gameData.timeSinceStart` |
+| `timeInfinity` | `gameData.timeInf` |
+| `timeEternity` | `gameData.timeEtr` |
+| `timeUnity` | `gameData.timeUnity` |
+| `timeTotal` | `gameData.timeTotal` |
+| `DT` | `gameData.eternity.dilationTree` |
+| `DTP` | `gameData.eternity.dtpMax` |
 | `nextEP` | `eternityController.EPGain` |
 | `nextBrokenEP` | `eternityController.brokenEPGain` |
 
-## Extra roots (static-only, not reachable from GameData)
+## Roots
 
-These `*Controller` types are static-only: no property anywhere in the reachable graph below points at them, so no path starting at `GameData` can ever reach them. A request path whose first segment matches one of the keys below resolves the remaining segments against that type's public static properties instead of `GameData`.
+`gameData` is the game's main save-data graph (detailed in Reachable gameplay types below); the `*Controller` keys are static-only types with no property anywhere in that graph pointing at them, so they are otherwise unreachable no matter how deep a path goes. Every root is addressed the same way: name its key as the request path's first segment.
 
 | Root key | CLR type |
 | --- | --- |
+| `gameData` | `GameData` |
 | `controller` | `Controller` |
 | `attacksController` | `AttacksController` |
 | `automationController` | `AutomationController` |
