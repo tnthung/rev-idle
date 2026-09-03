@@ -14,6 +14,7 @@ await ServerMatchesExactRoutes();
 await ServerReturnsMethodNotAllowed();
 await ServerReturnsUnavailableState();
 await ServerReturnsSerializationFailureStatus();
+await ServerReturnsDataAccessorFailureStatus();
 await KeepAliveRequestsUseContentLength();
 StatePayloadFormatsBigDoubleValues();
 StatePayloadSerializesCompleteGraph();
@@ -39,7 +40,7 @@ ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
 ScrollProtocolRejectsZeroRequestId();
 ScrollQueuePreservesOrderAndRejectsDuplicates();
 DispatcherFindsFirstScrollableRaycast();
-System.Console.WriteLine("33 tests passed.");
+System.Console.WriteLine("34 tests passed.");
 
 static void InvalidPortsDisableServer()
 {
@@ -89,7 +90,7 @@ static async Task ServerReturnsInvalidPathStatus()
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
     await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    await CompletePluginPendingUntil(server, new PathFixture());
+    await CompletePluginPendingUntil(server, static () => new PathFixture());
     HttpResponse response = await new ResponseReader(stream).ReadResponse();
     Equal(400, response.StatusCode, nameof(ServerReturnsInvalidPathStatus));
     Equal(0, response.Body.Length, nameof(ServerReturnsInvalidPathStatus));
@@ -116,7 +117,7 @@ static async Task ServerReturnsUnavailableState()
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
     await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    await CompletePluginPendingUntil(server, null);
+    await CompletePluginPendingUntil(server, static () => null);
     HttpResponse response = await new ResponseReader(stream).ReadResponse();
     Equal(503, response.StatusCode, nameof(ServerReturnsUnavailableState));
     Equal(0, response.Body.Length, nameof(ServerReturnsUnavailableState));
@@ -129,10 +130,23 @@ static async Task ServerReturnsSerializationFailureStatus()
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
     await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    await CompletePluginPendingUntil(server, new GetterFailureFixture());
+    await CompletePluginPendingUntil(server, static () => new GetterFailureFixture());
     HttpResponse response = await new ResponseReader(stream).ReadResponse();
     Equal(500, response.StatusCode, nameof(ServerReturnsSerializationFailureStatus));
     Equal(0, response.Body.Length, nameof(ServerReturnsSerializationFailureStatus));
+}
+
+static async Task ServerReturnsDataAccessorFailureStatus()
+{
+    using HttpScoreServer server = CreateServer();
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    await CompletePluginPendingUntil(server, static () => throw new InvalidOperationException("data accessor failed"));
+    HttpResponse response = await new ResponseReader(stream).ReadResponse();
+    Equal(500, response.StatusCode, nameof(ServerReturnsDataAccessorFailureStatus));
+    Equal(0, response.Body.Length, nameof(ServerReturnsDataAccessorFailureStatus));
 }
 
 static async Task KeepAliveRequestsUseContentLength()
@@ -450,12 +464,12 @@ static async Task<IReadOnlyList<string>> CompletePendingUntil(HttpScoreServer se
     throw new InvalidOperationException("timed out waiting for a pending request");
 }
 
-static async Task CompletePluginPendingUntil(HttpScoreServer server, object? data)
+static async Task CompletePluginPendingUntil(HttpScoreServer server, Func<object?> getData)
 {
     DateTime deadline = DateTime.UtcNow.AddSeconds(4);
     while (DateTime.UtcNow < deadline)
     {
-        if (Plugin.CompletePending(server, data))
+        if (Plugin.CompletePending(server, getData))
             return;
         await Task.Delay(10);
     }

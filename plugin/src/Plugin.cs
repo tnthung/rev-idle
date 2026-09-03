@@ -39,7 +39,7 @@ public sealed class Plugin : BasePlugin
         {
             if (_server is null)
                 return;
-            CompletePending(_server, GameController.data);
+            CompletePending(_server, static () => GameController.data);
         }
         catch (Exception exception)
         {
@@ -47,8 +47,15 @@ public sealed class Plugin : BasePlugin
         }
     }
 
-    internal static bool CompletePending(HttpScoreServer server, object? data) => server.CompletePending(keys =>
+    internal static bool CompletePending(HttpScoreServer server, Func<object?> getData) => server.CompletePending(keys =>
     {
+        object? data;
+        try { data = getData(); }
+        catch (Exception exception)
+        {
+            _logger?.LogError($"State data access failed: {exception}");
+            return (500, Array.Empty<byte>());
+        }
         if (data is null)
             return (503, Array.Empty<byte>());
         StatePayloadStatus status = StatePayload.Encode(data, keys, out byte[] payload);
