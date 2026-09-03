@@ -6,6 +6,8 @@
 <title>State Graph Explorer</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
 <style>
   :root {
     color-scheme: dark;
@@ -128,18 +130,6 @@
     pointer-events: auto;
   }
   .stat-pill b { color: var(--text); font-weight: 600; }
-
-  .focus-toggle {
-    font-family: 'Inter', sans-serif;
-    cursor: pointer;
-    transition: background-color 120ms, color 120ms, border-color 120ms;
-  }
-  .focus-toggle:hover { border-color: var(--accent-dim); }
-  .focus-toggle.active {
-    background: var(--accent-soft);
-    color: var(--accent);
-    border-color: var(--accent-dim);
-  }
 
   #sidebar {
     background: var(--surface);
@@ -424,7 +414,6 @@
   <div id="cy"></div>
   <div class="top-bar">
     <div class="stat-pill"><b id="nodeCountStat">0</b> types &middot; <b id="edgeCountStat">0</b> links</div>
-    <button id="focusToggle" class="stat-pill focus-toggle" type="button" title="Arrange nodes in rings by distance from the selected node">Focus layout: off</button>
   </div>
   <div class="legend">
     <div class="legend-row"><span class="legend-dot" style="background:var(--accent)"></span>gameplay type</div>
@@ -459,6 +448,10 @@
 
 <script>
 (function () {
+  if (typeof cytoscape.use === 'function' && typeof cytoscapeDagre !== 'undefined') {
+    cytoscape.use(cytoscapeDagre);
+  }
+
   const GRAPH = {
   "root": "GameData",
   "nodes": [
@@ -2486,7 +2479,24 @@
         visible.merge(edgeEls).merge(targetNode);
       }
     }
-    cy.animate({ fit: { eles: visible, padding: 70 } }, { duration: 300 });
+    // GameData has no incoming edge within this isolated subgraph, and the
+    // selected node is its unique sink, so a left-to-right dagre layout on
+    // just the visible elements naturally pins them at opposite ends with
+    // every intermediate node column-ordered by its distance from GameData,
+    // and parallel routes fanned out as separate horizontal lanes between.
+    activeLayout?.stop();
+    activeLayout = visible.layout({
+      name: 'dagre',
+      rankDir: 'LR',
+      nodeSep: 36,
+      rankSep: 130,
+      edgeSep: 18,
+      fit: true,
+      padding: 70,
+      animate: true,
+      animationDuration: 300
+    });
+    activeLayout.run();
   }
 
   function renderRouteInGraph(route) {
@@ -2589,100 +2599,14 @@
       clearHighlight();
       const rootEl = cy.getElementById(GRAPH.root);
       rootEl.addClass('selected');
-      if (!focusMode) cy.animate({ center: { eles: rootEl }, zoom: Math.max(cy.zoom(), 1.1) }, { duration: 260 });
+      cy.animate({ center: { eles: rootEl }, zoom: Math.max(cy.zoom(), 1.1) }, { duration: 260 });
     }
   }
-
-  // Undirected BFS distance and parent tree from a node, used both to arrange
-  // the graph by relevance (distance -> ring) and to order nodes within each
-  // ring by their parent's position (subtree stays in one angular wedge
-  // instead of scattering, which is what was crossing every unrelated edge).
-  function bfsTree(startId) {
-    const dist = new Map([[startId, 0]]);
-    const parent = new Map([[startId, null]]);
-    const queue = [startId];
-    while (queue.length) {
-      const cur = queue.shift();
-      const d = dist.get(cur);
-      const neighbors = [
-        ...(outEdges.get(cur) || []).map(e => e.to),
-        ...(inEdges.get(cur) || []).map(e => e.from)
-      ];
-      for (const next of neighbors) {
-        if (next && !dist.has(next)) {
-          dist.set(next, d + 1);
-          parent.set(next, cur);
-          queue.push(next);
-        }
-      }
-    }
-    return { dist, parent };
-  }
-
-  // Depth-first order of the BFS tree so every subtree occupies a contiguous
-  // run: sorting nodes within a concentric ring by this index keeps related
-  // nodes angularly adjacent instead of scattered around the ring.
-  function subtreeOrder(startId, parent) {
-    const children = new Map();
-    for (const [node, p] of parent) {
-      if (p === null) continue;
-      if (!children.has(p)) children.set(p, []);
-      children.get(p).push(node);
-    }
-    const order = new Map();
-    let seq = 0;
-    (function walk(node) {
-      order.set(node, seq++);
-      for (const child of children.get(node) || []) walk(child);
-    })(startId);
-    return order;
-  }
-
-  let focusMode = false;
-  const focusToggle = document.getElementById('focusToggle');
 
   let activeLayout = null;
 
-  // `fitView` controls whether this layout owns the viewport transition itself.
-  // When a route-isolation fit is about to follow right after (the normal
-  // selectNode -> renderDetail flow), that call should own the single camera
-  // animation instead, so pass false to avoid two competing transitions.
-  function runFocusLayout(nodeId, fitView) {
-    const { dist, parent } = bfsTree(nodeId);
-    const order = subtreeOrder(nodeId, parent);
-    let maxDist = 0;
-    for (const d of dist.values()) maxDist = Math.max(maxDist, d);
-    cy.nodes().forEach(n => {
-      const d = dist.has(n.id()) ? dist.get(n.id()) : maxDist + 2;
-      n.data('concentric', -d);
-    });
-    // Sort the collection handed to the layout by subtree order so each
-    // branch stays in one contiguous angular wedge per ring, instead of the
-    // layout's default insertion order scattering related nodes around the
-    // ring and crossing every edge between them.
-    const orderedNodes = cy.nodes().sort((a, b) => {
-      const oa = order.has(a.id()) ? order.get(a.id()) : Infinity;
-      const ob = order.has(b.id()) ? order.get(b.id()) : Infinity;
-      return oa - ob;
-    });
-    const orderedEles = orderedNodes.union(cy.edges());
-    activeLayout?.stop();
-    activeLayout = orderedEles.layout({
-      name: 'concentric',
-      concentric: n => n.data('concentric'),
-      levelWidth: () => 1,
-      minNodeSpacing: 40,
-      fit: fitView,
-      padding: 60,
-      animate: fitView,
-      animationDuration: 400
-    });
-    activeLayout.run();
-  }
-
   function selectNode(nodeId) {
     cy.elements().unselect();
-    if (focusMode) runFocusLayout(nodeId, nodeId === GRAPH.root);
     renderDetail(nodeId);
   }
 
@@ -2691,6 +2615,9 @@
     activeRouteIdx = -1;
     currentRoutes = [];
     clearHighlight();
+    activeLayout?.stop();
+    activeLayout = cy.layout(COSE_LAYOUT);
+    activeLayout.run();
     document.getElementById('detail').innerHTML =
       '<div class="empty-state" id="emptyState">Click a node in the graph, or search above, to see every path from <code>GameData</code> that reaches it.</div>';
   }
@@ -2698,18 +2625,6 @@
   cy.on('tap', 'node', evt => selectNode(evt.target.id()));
   cy.on('tap', evt => { if (evt.target === cy) deselectAll(); });
 
-  focusToggle.addEventListener('click', () => {
-    focusMode = !focusMode;
-    focusToggle.classList.toggle('active', focusMode);
-    focusToggle.textContent = 'Focus layout: ' + (focusMode ? 'on' : 'off');
-    if (focusMode && selectedId) {
-      runFocusLayout(selectedId, true);
-    } else if (!focusMode) {
-      activeLayout?.stop();
-      activeLayout = cy.layout(COSE_LAYOUT);
-      activeLayout.run();
-    }
-  });
 
   // Search
   const searchInput = document.getElementById('searchInput');
