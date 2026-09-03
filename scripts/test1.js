@@ -40,6 +40,14 @@ function passThrough(v) {
 function mantissa(v) { return Number(v.split('e')[0]); }
 function exponent(v) { return BigInt(v.split('e')[1]); }
 
+async function wait_for(conditionFn, interval = 500) {
+  do { await rev.sleep(interval) } while (!await conditionFn());
+}
+
+async function wait_for_exponent(key, target, interval = 500) {
+  await wait_for(async () => exponent(await rev.state(key)) >= target, interval);
+}
+
 
 class DT {
   static applicationSteps = new ClickSteps()
@@ -174,19 +182,22 @@ let initialized = false;
     initialized = true;
   }
 
+  // bootstrap the unity
   if (await rev.state("EP") === "0e0") {
-    await rev.sleep(5000);
-    await ClickSteps.claimIP.execute();
+    for (let i=0; i<2; i++) {
+      await wait_for_exponent("infinityController.IPGain", 300n);
+      await ClickSteps.claimIP.execute();
+    }
+
     await rev.sleep(1000);
-    await ClickSteps.claimIP.execute();
-
-    await rev.sleep(3000);
     await ClickSteps.claimEP.execute();
 
-    while (exponent(await rev.state("nextEP")) < 15n)
-      await rev.sleep(500);
+    for (let i=1; i<4; i++) {
+      await wait_for_exponent("eternityController.EPGain", 15n * BigInt(i));
+      await ClickSteps.claimEP.execute();
+    }
 
-    await ClickSteps.claimEP.execute();
+    return;
   }
 
   // console.log('Applying DT steps');
