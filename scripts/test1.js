@@ -1,3 +1,5 @@
+
+
 class ClickSteps {
   constructor() {
     this.steps = [];
@@ -8,13 +10,35 @@ class ClickSteps {
     return this;
   }
 
-  async apply() {
+  async execute() {
     for (const step of this.steps) {
       rev.click(step.x, step.y);
-      await rev.sleep(100);
+      await rev.sleep(10);
     }
   }
+
+  static claimIP = new ClickSteps()
+    .add(1188, 87)
+    .add(550, 520);
+
+  static claimEP = new ClickSteps()
+    .add(1188, 87)
+    .add(550, 500);
+
+  static resetUnity = new ClickSteps()
+    .add(1155, 205)
+    .add(214, 82)
+    .add(1087, 134);
 }
+
+
+function passThrough(v) {
+  console.log(v);
+  return v;
+}
+
+function mantissa(v) { return passThrough(Number(passThrough(v).split('e')[0])); }
+function exponent(v) { return passThrough(BigInt(passThrough(v).split('e')[1])); }
 
 
 class DT {
@@ -121,7 +145,7 @@ class DT {
   async apply() {
     rev.write_clipboard(this.string);
     console.log(`Applied DT steps with string: ${this.string}`);
-    await DT.applicationSteps.apply();
+    await DT.applicationSteps.execute();
   }
 }
 
@@ -146,11 +170,27 @@ let initialized = false;
 (async () => {
   if (!initialized) {
     rev.resize(1270, 600);
+    await ClickSteps.resetUnity.execute();
     initialized = true;
+  }
+
+  if (await rev.state("EP") === "0e0") {
+    await rev.sleep(3000);
+    await ClickSteps.claimIP.execute();
+    await rev.sleep(500);
+    await ClickSteps.claimIP.execute();
+
+    await rev.sleep(3000);
+    await ClickSteps.claimEP.execute();
+
+    while (exponent(await rev.state("automation.etrEpGain")) < 15n)
+      await rev.sleep(500);
+
+    await ClickSteps.claimEP.execute();
   }
 
   // console.log('Applying DT steps');
   // await new DT().ctr(1).top(1, 2, 3, 4).apply();
-  console.log(JSON.stringify((await rev.state("DTP")), null, 2));
+  // console.log(JSON.stringify((await rev.state("eternity.dilationTree.bot.1")), null, 2));
   rev.stop();
 })
