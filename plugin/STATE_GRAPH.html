@@ -229,6 +229,9 @@
   }
   .route.alias-route .seg { color: var(--accent); font-weight: 600; }
 
+  [data-copy] { cursor: copy; }
+  [data-copy]:hover { background: var(--accent-soft) !important; }
+
   .alias-badge {
     display: inline-block;
     background: var(--accent-soft);
@@ -261,7 +264,6 @@
     align-items: baseline;
   }
   .prop-row.linked { cursor: pointer; }
-  .prop-row.linked:hover { background: var(--accent-soft); }
 
   .prop-name { color: var(--text); flex: none; }
   .prop-type {
