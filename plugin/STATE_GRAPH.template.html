@@ -34,6 +34,10 @@
     padding: 0;
   }
 
+  :root {
+    --sidebar-width: 380px;
+  }
+
   body {
     background: var(--bg);
     color: var(--text);
@@ -41,7 +45,28 @@
     height: 100vh;
     overflow: hidden;
     display: grid;
-    grid-template-columns: 1fr 380px;
+    grid-template-columns: 1fr 6px var(--sidebar-width);
+  }
+
+  #resizer {
+    position: relative;
+    cursor: col-resize;
+    background: var(--border);
+  }
+  #resizer::after {
+    content: '';
+    position: absolute;
+    inset: 0 -3px;
+  }
+  #resizer:hover, #resizer.dragging {
+    background: var(--accent-dim);
+  }
+  body.resizing {
+    cursor: col-resize;
+    user-select: none;
+  }
+  body.resizing #cy {
+    pointer-events: none;
   }
 
   ::-webkit-scrollbar { width: 9px; height: 9px; }
@@ -346,6 +371,8 @@
     <div class="legend-row"><span class="legend-line" style="border-color:var(--focus)"></span>list / dictionary</div>
   </div>
 </div>
+
+<div id="resizer" title="Drag to resize"></div>
 
 <div id="sidebar">
   <div class="sidebar-head">
@@ -762,6 +789,44 @@
 
   cy.ready(() => {
     selectNode(GRAPH.root);
+  });
+
+  // Sidebar resize
+  const resizer = document.getElementById('resizer');
+  const MIN_SIDEBAR = 260;
+  const MAX_SIDEBAR = 720;
+
+  function setSidebarWidth(px) {
+    const clamped = Math.max(MIN_SIDEBAR, Math.min(MAX_SIDEBAR, px));
+    document.documentElement.style.setProperty('--sidebar-width', clamped + 'px');
+    return clamped;
+  }
+
+  try {
+    const saved = parseInt(localStorage.getItem('stateGraphSidebarWidth'), 10);
+    if (Number.isFinite(saved)) setSidebarWidth(saved);
+  } catch {}
+
+  resizer.addEventListener('pointerdown', evt => {
+    evt.preventDefault();
+    resizer.classList.add('dragging');
+    document.body.classList.add('resizing');
+    resizer.setPointerCapture(evt.pointerId);
+
+    const onMove = moveEvt => {
+      const width = setSidebarWidth(window.innerWidth - moveEvt.clientX);
+      try { localStorage.setItem('stateGraphSidebarWidth', String(width)); } catch {}
+      cy.resize();
+    };
+    const onUp = () => {
+      resizer.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      resizer.removeEventListener('pointermove', onMove);
+      resizer.removeEventListener('pointerup', onUp);
+      cy.resize();
+    };
+    resizer.addEventListener('pointermove', onMove);
+    resizer.addEventListener('pointerup', onUp);
   });
 })();
 </script>
