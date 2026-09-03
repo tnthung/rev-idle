@@ -36,17 +36,78 @@
     color: var(--text);
     font-family: 'Inter', system-ui, sans-serif;
     min-height: 100vh;
+    user-select: none;
+  }
+
+  .search-box input {
+    user-select: text;
   }
 
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
 
+  /* Page chrome (search, tabs, node header) stays fixed; only the active
+     tab's/column's own body scrolls, in both narrow and wide layouts. */
+  html, body { height: 100vh; overflow: hidden; }
   .page {
     max-width: 860px;
     margin: 0 auto;
-    padding: 48px 24px 80px;
+    padding: 32px 24px 24px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
+  .page-head, .search-box, .search-results, .node-name, .node-meta, .detail-tabs {
+    flex: none;
+  }
+  #detail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .detail-columns {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin-top: 8px;
+  }
+  .detail-col {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .detail-col .section-label { flex: none; }
+  .detail-col .section-label:first-of-type { margin-top: 0; }
+  .detail-col-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  /* Narrow layout only: two tabs (Keys | Fields) switch which detail-col is
+     shown, since there's no room for the wide layout's side-by-side columns. */
+  .detail-tabs {
+    display: flex;
+    gap: 4px;
+    margin-top: 28px;
+    border-bottom: 1px solid var(--border);
+  }
+  .detail-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-faint);
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 8px 4px 10px;
+    margin-bottom: -1px;
+    cursor: pointer;
+  }
+  .detail-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .detail-columns[data-active-tab="routes"] .detail-col-fields { display: none; }
+  .detail-columns[data-active-tab="fields"] .detail-col-routes { display: none; }
 
   #scrollTop {
     position: fixed;
@@ -77,44 +138,18 @@
   #scrollTop:hover { color: var(--accent); border-color: var(--accent-dim); }
   #scrollTop svg { width: 18px; height: 18px; }
 
-  /* Wide layout: whole page pinned to 100vh, two independently scrolling
-     columns (Fields | Routes) instead of the page itself scrolling. There is
-     no page-level scroll here, so the scroll-to-top button stays hidden. */
+  /* Wide layout: tabs give way to two side-by-side columns, each still
+     scrolling within its own bounded body (set up in the base rules above).
+     No single "current tab" exists to scroll to top, so the button hides. */
   @media (min-width: 1100px) {
     #scrollTop { display: none; }
-    html, body { height: 100vh; overflow: hidden; }
-    .page {
-      max-width: none;
-      height: 100vh;
-      padding: 32px 64px 24px;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-    .page-head, .search-box, .search-results, .node-name, .node-meta {
-      flex: none;
-    }
-    #detail { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .detail-tabs { display: none; }
+    .detail-columns .detail-col { display: flex !important; }
+    .page { max-width: none; padding: 32px 64px 24px; }
     .detail-columns {
-      flex: 1;
-      min-height: 0;
       display: grid;
       grid-template-columns: 7fr 3fr;
       gap: 24px;
-      margin-top: 8px;
-    }
-    .detail-col {
-      min-height: 0;
-      display: flex;
-      flex-direction: column;
-    }
-    .detail-col .section-label { flex: none; }
-    .detail-col .section-label:first-of-type { margin-top: 0; }
-    .detail-col-body {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      padding-right: 4px;
     }
   }
 
@@ -2313,6 +2348,7 @@
     const currentRoutes = findAllRoutes(nodeId).sort((a, b) => a.length - b.length);
 
     const outs = (outEdges.get(nodeId) || []).slice().sort((a, b) => a.property.localeCompare(b.property));
+    const ins = (inEdges.get(nodeId) || []).slice().sort((a, b) => a.from.localeCompare(b.from) || a.property.localeCompare(b.property));
     const leaves = (leafProps.get(nodeId) || []).slice().sort((a, b) => a.property.localeCompare(b.property));
     const nodeAliases = (aliasesByTarget.get(nodeId) || []).slice().sort((a, b) => a.alias.localeCompare(b.alias));
     const fieldAliasByProperty = new Map();
@@ -2324,10 +2360,16 @@
     html += '<div class="node-meta">';
     html += '<span><b>' + (currentRoutes.length + nodeAliases.length || (nodeId === GRAPH.root ? 1 : 0)) + '</b> route' + (currentRoutes.length + nodeAliases.length === 1 ? '' : 's') + '</span>';
     html += '<span><b>' + outs.length + '</b> refs out</span>';
+    html += '<span><b>' + ins.length + '</b> refs in</span>';
     html += '<span><b>' + leaves.length + '</b> scalar fields</span>';
     html += '</div>';
 
-    html += '<div class="detail-columns">';
+    html += '<div class="detail-tabs">';
+    html += '<button type="button" class="detail-tab active" data-tab="routes">Keys</button>';
+    html += '<button type="button" class="detail-tab" data-tab="fields">Fields</button>';
+    html += '</div>';
+
+    html += '<div class="detail-columns" data-active-tab="routes">';
 
     // Routes / keys
     html += '<div class="detail-col detail-col-routes">';
@@ -2369,6 +2411,16 @@
     } else {
       html += '<div class="no-results">None</div>';
     }
+    html += '<div class="section-label">References in</div>';
+    if (ins.length) {
+      html += '<div class="prop-list">' + ins.map(e => {
+        const seg = collectionSegment(e);
+        const fullPath = e.from + '.' + seg;
+        return '<div class="prop-row" data-copy="' + escapeHtml(fullPath) + '"><span class="prop-name">' + escapeHtml(seg) + '<span class="copy-hint">copied</span></span><span class="prop-type node linked" data-target="' + escapeHtml(e.from) + '">' + escapeHtml(e.from) + '</span></div>';
+      }).join('') + '</div>';
+    } else {
+      html += '<div class="no-results">None</div>';
+    }
     html += '</div></div>';
 
     html += '</div>';
@@ -2386,6 +2438,16 @@
       el.addEventListener('click', evt => {
         evt.stopPropagation();
         selectNode(el.getAttribute('data-target'));
+      });
+    });
+
+    detail.querySelectorAll('.detail-tab').forEach(el => {
+      el.addEventListener('click', () => {
+        const tab = el.getAttribute('data-tab');
+        detail.querySelectorAll('.detail-tab').forEach(t => t.classList.toggle('active', t === el));
+        detail.querySelector('.detail-columns').setAttribute('data-active-tab', tab);
+        const active = visibleColBody();
+        scrollTopBtn.classList.toggle('visible', !!active && active.scrollTop > 400);
       });
     });
 
@@ -2551,14 +2613,27 @@
   const preselect = new URLSearchParams(location.search).get('select');
   if (preselect && nodeIds.has(preselect)) selectNode(preselect);
 
-  // Scroll-to-top (narrow single-column layout only; wide mode has no
-  // page-level scroll, so the button is hidden entirely there via CSS).
+  // Scroll-to-top (narrow layout only; hidden entirely in wide mode via CSS,
+  // where two columns scroll independently with no single "current" one).
+  // The page itself never scrolls now -- only the active tab's own body
+  // does -- so this tracks whichever .detail-col-body is visible and not
+  // display:none, rebinding via delegation since renderDetail replaces the
+  // whole #detail subtree (and its scroll containers) on every selection.
   const scrollTopBtn = document.getElementById('scrollTop');
-  window.addEventListener('scroll', () => {
-    scrollTopBtn.classList.toggle('visible', window.scrollY > 400);
-  }, { passive: true });
+
+  function visibleColBody() {
+    return [...document.querySelectorAll('.detail-col-body')]
+      .find(el => el.offsetParent !== null);
+  }
+
+  document.getElementById('detail').addEventListener('scroll', evt => {
+    if (!evt.target.classList || !evt.target.classList.contains('detail-col-body')) return;
+    scrollTopBtn.classList.toggle('visible', evt.target.scrollTop > 400);
+  }, { passive: true, capture: true });
+
   scrollTopBtn.addEventListener('click', () => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const el = visibleColBody();
+    if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
   });
 })();
 </script>
