@@ -2587,14 +2587,19 @@
     if (nodeId !== GRAPH.root) highlightAllRoutes(currentRoutes);
     else {
       clearHighlight();
-      cy.getElementById(GRAPH.root).addClass('selected');
+      const rootEl = cy.getElementById(GRAPH.root);
+      rootEl.addClass('selected');
+      if (!focusMode) cy.animate({ center: { eles: rootEl }, zoom: Math.max(cy.zoom(), 1.1) }, { duration: 260 });
     }
   }
 
-  // Undirected BFS distance from a node, used to arrange the graph by
-  // relevance (graph distance) to the current selection in focus mode.
-  function bfsDistances(startId) {
+  // Undirected BFS distance and parent tree from a node, used both to arrange
+  // the graph by relevance (distance -> ring) and to order nodes within each
+  // ring by their parent's position (subtree stays in one angular wedge
+  // instead of scattering, which is what was crossing every unrelated edge).
+  function bfsTree(startId) {
     const dist = new Map([[startId, 0]]);
+    const parent = new Map([[startId, null]]);
     const queue = [startId];
     while (queue.length) {
       const cur = queue.shift();
@@ -2606,11 +2611,31 @@
       for (const next of neighbors) {
         if (next && !dist.has(next)) {
           dist.set(next, d + 1);
+          parent.set(next, cur);
           queue.push(next);
         }
       }
     }
-    return dist;
+    return { dist, parent };
+  }
+
+  // Depth-first order of the BFS tree so every subtree occupies a contiguous
+  // run: sorting nodes within a concentric ring by this index keeps related
+  // nodes angularly adjacent instead of scattered around the ring.
+  function subtreeOrder(startId, parent) {
+    const children = new Map();
+    for (const [node, p] of parent) {
+      if (p === null) continue;
+      if (!children.has(p)) children.set(p, []);
+      children.get(p).push(node);
+    }
+    const order = new Map();
+    let seq = 0;
+    (function walk(node) {
+      order.set(node, seq++);
+      for (const child of children.get(node) || []) walk(child);
+    })(startId);
+    return order;
   }
 
   let focusMode = false;
@@ -2618,23 +2643,38 @@
 
   let activeLayout = null;
 
-  function runFocusLayout(nodeId) {
-    const dist = bfsDistances(nodeId);
+  // `fitView` controls whether this layout owns the viewport transition itself.
+  // When a route-isolation fit is about to follow right after (the normal
+  // selectNode -> renderDetail flow), that call should own the single camera
+  // animation instead, so pass false to avoid two competing transitions.
+  function runFocusLayout(nodeId, fitView) {
+    const { dist, parent } = bfsTree(nodeId);
+    const order = subtreeOrder(nodeId, parent);
     let maxDist = 0;
     for (const d of dist.values()) maxDist = Math.max(maxDist, d);
     cy.nodes().forEach(n => {
       const d = dist.has(n.id()) ? dist.get(n.id()) : maxDist + 2;
       n.data('concentric', -d);
     });
+    // Sort the collection handed to the layout by subtree order so each
+    // branch stays in one contiguous angular wedge per ring, instead of the
+    // layout's default insertion order scattering related nodes around the
+    // ring and crossing every edge between them.
+    const orderedNodes = cy.nodes().sort((a, b) => {
+      const oa = order.has(a.id()) ? order.get(a.id()) : Infinity;
+      const ob = order.has(b.id()) ? order.get(b.id()) : Infinity;
+      return oa - ob;
+    });
+    const orderedEles = orderedNodes.union(cy.edges());
     activeLayout?.stop();
-    activeLayout = cy.layout({
+    activeLayout = orderedEles.layout({
       name: 'concentric',
       concentric: n => n.data('concentric'),
       levelWidth: () => 1,
       minNodeSpacing: 40,
-      fit: true,
+      fit: fitView,
       padding: 60,
-      animate: true,
+      animate: fitView,
       animationDuration: 400
     });
     activeLayout.run();
@@ -2642,14 +2682,7 @@
 
   function selectNode(nodeId) {
     cy.elements().unselect();
-    if (focusMode) {
-      runFocusLayout(nodeId);
-    } else {
-      const el = cy.getElementById(nodeId);
-      if (el.length) {
-        cy.animate({ center: { eles: el }, zoom: Math.max(cy.zoom(), 1.1) }, { duration: 260 });
-      }
-    }
+    if (focusMode) runFocusLayout(nodeId, nodeId === GRAPH.root);
     renderDetail(nodeId);
   }
 
@@ -2670,7 +2703,7 @@
     focusToggle.classList.toggle('active', focusMode);
     focusToggle.textContent = 'Focus layout: ' + (focusMode ? 'on' : 'off');
     if (focusMode && selectedId) {
-      runFocusLayout(selectedId);
+      runFocusLayout(selectedId, true);
     } else if (!focusMode) {
       activeLayout?.stop();
       activeLayout = cy.layout(COSE_LAYOUT);
