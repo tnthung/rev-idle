@@ -37,8 +37,8 @@ function passThrough(v) {
   return v;
 }
 
-function mantissa(v) { return passThrough(Number(passThrough(v).split('e')[0])); }
-function exponent(v) { return passThrough(BigInt(passThrough(v).split('e')[1])); }
+function mantissa(v) { return Number(v.split('e')[0]); }
+function exponent(v) { return BigInt(v.split('e')[1]); }
 
 
 class DT {
@@ -175,15 +175,15 @@ let initialized = false;
   }
 
   if (await rev.state("EP") === "0e0") {
-    await rev.sleep(3000);
+    await rev.sleep(5000);
     await ClickSteps.claimIP.execute();
-    await rev.sleep(500);
+    await rev.sleep(1000);
     await ClickSteps.claimIP.execute();
 
     await rev.sleep(3000);
     await ClickSteps.claimEP.execute();
 
-    while (exponent(await rev.state("automation.etrEpGain")) < 15n)
+    while (exponent(await rev.state("nextEP")) < 15n)
       await rev.sleep(500);
 
     await ClickSteps.claimEP.execute();
