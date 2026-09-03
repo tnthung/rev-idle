@@ -210,6 +210,11 @@
     letter-spacing: 0.04em;
     flex: none;
   }
+  .search-result mark {
+    background: none;
+    color: var(--accent);
+    font-weight: 700;
+  }
 
   #detail {
     flex: 1;
@@ -757,23 +762,62 @@
   }
   const searchIndex = buildSearchIndex();
 
+  // Fuzzy subsequence match: every query character must appear in the label
+  // in order, not necessarily contiguous ("UniZod" matches "UnityZodiac").
+  // Returns null on no match, or a score (lower is better) plus matched index
+  // positions so the UI can highlight them.
+  function fuzzyMatch(label, query) {
+    const text = label.toLowerCase();
+    let ti = 0;
+    const positions = [];
+    let gapPenalty = 0;
+    let lastMatch = -1;
+    for (let qi = 0; qi < query.length; qi++) {
+      const ch = query[qi];
+      const idx = text.indexOf(ch, ti);
+      if (idx === -1) return null;
+      if (lastMatch !== -1) gapPenalty += idx - lastMatch - 1;
+      positions.push(idx);
+      lastMatch = idx;
+      ti = idx + 1;
+    }
+    const score = gapPenalty * 10 + positions[0] + (label.length - query.length) * 0.1;
+    return { score, positions };
+  }
+
+  function highlightMatch(label, positions) {
+    const posSet = new Set(positions);
+    let html = '';
+    for (let i = 0; i < label.length; i++) {
+      const ch = escapeHtml(label[i]);
+      html += posSet.has(i) ? '<mark>' + ch + '</mark>' : ch;
+    }
+    return html;
+  }
+
   function runSearch(query) {
     const q = query.trim().toLowerCase();
     if (!q) { searchResults.classList.remove('open'); searchResults.innerHTML = ''; return; }
-    const matches = searchIndex.filter(item => item.label.toLowerCase().includes(q)).slice(0, 40);
+    const scored = [];
+    for (const item of searchIndex) {
+      const m = fuzzyMatch(item.label, q);
+      if (m) scored.push({ item, score: m.score, positions: m.positions });
+    }
+    scored.sort((a, b) => a.score - b.score);
+    const matches = scored.slice(0, 40);
     if (!matches.length) {
       searchResults.innerHTML = '<div class="no-results">No matches</div>';
       searchResults.classList.add('open');
       return;
     }
-    searchResults.innerHTML = matches.map((m, i) => {
-      const tag = m.isAlias ? 'alias for ' + m.sub : m.isField ? 'field on ' + m.sub : 'type';
-      return '<div class="search-result" data-idx="' + i + '"><span>' + escapeHtml(m.label) + '</span><span class="kind-tag">' + escapeHtml(tag) + '</span></div>';
+    searchResults.innerHTML = matches.map(({ item, positions }, i) => {
+      const tag = item.isAlias ? 'alias for ' + item.sub : item.isField ? 'field on ' + item.sub : 'type';
+      return '<div class="search-result" data-idx="' + i + '"><span>' + highlightMatch(item.label, positions) + '</span><span class="kind-tag">' + escapeHtml(tag) + '</span></div>';
     }).join('');
     searchResults.classList.add('open');
     searchResults.querySelectorAll('.search-result').forEach((el, i) => {
       el.addEventListener('click', () => {
-        const m = matches[i];
+        const m = matches[i].item;
         searchInput.value = m.label;
         searchResults.classList.remove('open');
         selectNode(m.isField ? m.fieldOwner : m.target);
