@@ -1,7 +1,7 @@
 # Complete state path reference
 
 Generated deterministically from `BepInEx/interop/Assembly-CSharp.dll` by `generate-state-reference.ps1`.
-Reachable gameplay types: **132**. Properties: **1617**.
+Reachable gameplay types: **140**. Properties: **1591**.
 
 ## Path grammar and JSON behavior
 
@@ -59,15 +59,10 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `buyRevo` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `buyRevo` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `exitCount` | `System.Int32` |   |
 | `prestige` | `System.Boolean` |   |
 | `showHelp` | `System.Boolean` |   |
-
-### `AnimationOption`
-
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
 
 ### `AstroElementType`
 
@@ -122,8 +117,8 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `prestigeMultsGainNext` | `BigDouble` |   |
 | `prestigeMultsGainNow` | `BigDouble` |   |
 | `relicLevelsSum` | `BigDouble` |   |
-| `relics` | `List`1<Relic>` | list of Relic append `.<numeric-index>` |
-| `revolutions` | `List`1<AttacksRevolution>` | list of AttacksRevolution append `.<numeric-index>` |
+| `relics` | `List<Relic>` | list/array of Relic append `.<numeric-index>` |
+| `revolutions` | `List<AttacksRevolution>` | list/array of AttacksRevolution append `.<numeric-index>` |
 | `scoreToAtkBase` | `BigDouble` |   |
 | `scoreToAtkDivider` | `BigDouble` |   |
 | `scoreToAtkLogBase` | `BigDouble` |   |
@@ -162,7 +157,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `baseSpeed` | `System.Double` |   |
 | `damage` | `BigDouble` |   |
 | `dmgBaseMult` | `BigDouble` |   |
-| `dmgBaseMults` | `Il2CppStructArray`1<BigDouble>` |   |
+| `dmgBaseMults` | `Il2CppStructArray<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
 | `dmgInitMult` | `BigDouble` |   |
 | `got` | `System.Double` |   |
 | `mult` | `BigDouble` |   |
@@ -180,7 +175,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `allCost` | `BigDouble` |   |
 | `amount` | `System.Int32` |   |
 | `baseCost` | `BigDouble` |   |
-| `baseCosts` | `Il2CppStructArray`1<BigDouble>` |   |
 | `buyAmount` | `System.Double` |   |
 | `costInc` | `BigDouble` |   |
 | `maxAmount` | `System.Int32` |   |
@@ -193,10 +187,10 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 | `enabled` | `System.Boolean` |   |
-| `maxLevel` | `Nullable`1<BigDouble>` |   |
+| `maxLevel` | `Nullable<BigDouble>` |   |
 | `minLevel` | `BigDouble` |   |
-| `rarities` | `List`1<PlagueEndoRarity>` | list of PlagueEndoRarity append `.<numeric-index>` |
-| `types` | `List`1<PlagueEndoType>` | list of PlagueEndoType append `.<numeric-index>` |
+| `rarities` | `List<PlagueEndoRarity>` | list/array of PlagueEndoRarity append `.<numeric-index>` |
+| `types` | `List<PlagueEndoType>` | list/array of PlagueEndoType append `.<numeric-index>` |
 
 ### `AutomationData`
 
@@ -245,12 +239,12 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `HasAutoTarotUpgrades` | `System.Boolean` |   |
 | `HasAutoUnity` | `System.Boolean` |   |
 | `activePromotion` | `System.Int32` |   |
-| `animals` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `animalsOrder` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `animals` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `animalsOrder` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `anlWait` | `System.Boolean` |   |
-| `artifacts` | `Dictionary`2<TarotSuitType, ValueTuple`2<System.Boolean, System.Single>>` | dictionary keyed by TarotSuitType, values ValueTuple`2<System.Boolean, System.Single> append `.<string|integer|enum-key>` |
-| `ascends` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `ascendsAttacks` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `artifacts` | `Dictionary<TarotSuitType, ValueTuple<System.Boolean, System.Single>>` | dictionary keyed by TarotSuitType, values ValueTuple<System.Boolean, System.Single> append `.<string|integer|enum-key>` |
+| `ascends` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `ascendsAttacks` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `autoAll` | `System.Boolean` |   |
 | `autoAnimals` | `System.Boolean` |   |
 | `autoBuyArtifacts` | `System.Boolean` |   |
@@ -280,114 +274,92 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `autoSupernova` | `System.Boolean` |   |
 | `autoTarotDraw` | `System.Boolean` |   |
 | `autoUnity` | `System.Boolean` |   |
-| `buyAP` | `List`1<System.Boolean>` | list of System.Boolean append `.<numeric-index>` |
-| `buyArtifacts` | `Dictionary`2<TarotSuitType, List`1<System.Int32>>` | dictionary keyed by TarotSuitType, values List`1<System.Int32> append `.<string|integer|enum-key>` |
-| `buyDTPLimit` | `Nullable`1<BigDouble>` |   |
-| `buySMP` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `buyables` | `List`1<System.Double>` | list of System.Double append `.<numeric-index>` |
-| `buyablesAttacks` | `List`1<System.Double>` | list of System.Double append `.<numeric-index>` |
+| `buyAP` | `List<System.Boolean>` | list/array of System.Boolean append `.<numeric-index>` |
+| `buyArtifacts` | `Dictionary<TarotSuitType, List<System.Int32>>` | dictionary keyed by TarotSuitType, values List<System.Int32> append `.<string|integer|enum-key>` |
+| `buyDTPLimit` | `Nullable<BigDouble>` |   |
+| `buySMP` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `buyables` | `List<System.Double>` | list/array of System.Double append `.<numeric-index>` |
+| `buyablesAttacks` | `List<System.Double>` | list/array of System.Double append `.<numeric-index>` |
 | `craftERFlushed` | `System.Single` |   |
-| `craftERMaxLvl` | `Nullable`1<BigDouble>` |   |
-| `craftERMinPlP` | `Nullable`1<BigDouble>` |   |
-| `delMinFromCurMaxLvl` | `Nullable`1<BigDouble>` |   |
-| `delMinMaxLvl` | `Nullable`1<BigDouble>` |   |
-| `dilUp` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `disolveER` | `List`1<AutoDisolveERObject>` | list of AutoDisolveERObject append `.<numeric-index>` |
+| `craftERMaxLvl` | `Nullable<BigDouble>` |   |
+| `craftERMinPlP` | `Nullable<BigDouble>` |   |
+| `delMinFromCurMaxLvl` | `Nullable<BigDouble>` |   |
+| `delMinMaxLvl` | `Nullable<BigDouble>` |   |
+| `dilUp` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `disolveER` | `List<AutoDisolveERObject>` | list/array of AutoDisolveERObject append `.<numeric-index>` |
 | `etrEpGain` | `BigDouble` |   |
 | `etrTimeWait` | `System.Double` |   |
-| `generators` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `generators` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `infIpGain` | `BigDouble` |   |
 | `infTimeWait` | `System.Double` |   |
 | `ipMultGain` | `BigDouble` |   |
-| `labUp` | `List`1<System.Boolean>` | list of System.Boolean append `.<numeric-index>` |
+| `labUp` | `List<System.Boolean>` | list/array of System.Boolean append `.<numeric-index>` |
 | `lockNewZodiac` | `System.Boolean` |   |
-| `minPolish` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `minUpgrades` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `moonRunes` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `polishEnhance` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `minPolish` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `minUpgrades` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `moonRunes` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `polishEnhance` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `prestigeMinExpGain` | `System.Double` |   |
 | `prestigeMinMultGain` | `BigDouble` |   |
 | `prestigeMinTime` | `System.Double` |   |
-| `promotions` | `List`1<PromoteObject>` | list of PromoteObject append `.<numeric-index>` |
-| `relics` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `relicsOrder` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `rpDistr` | `List`1<System.Single>` | list of System.Single append `.<numeric-index>` |
-| `sellZodiacImmortalMax` | `Nullable`1<BigDouble>` |   |
-| `sellZodiacImmortalMin` | `Nullable`1<BigDouble>` |   |
-| `sellZodiacLevelMax` | `Nullable`1<BigDouble>` |   |
-| `sellZodiacLevelMin` | `Nullable`1<BigDouble>` |   |
-| `sellZodiacQualityMax` | `Nullable`1<BigDouble>` |   |
-| `sellZodiacQualityMin` | `Nullable`1<BigDouble>` |   |
-| `sellZodiacRarity` | `List`1<ZodiacRarityType>` | list of ZodiacRarityType append `.<numeric-index>` |
-| `sellZodiacSign` | `List`1<AstroSignType>` | list of AstroSignType append `.<numeric-index>` |
-| `singMinAtoms` | `Nullable`1<BigDouble>` |   |
-| `singMinMultGain` | `Nullable`1<BigDouble>` |   |
-| `singMinTime` | `Nullable`1<BigDouble>` |   |
+| `promotions` | `List<PromoteObject>` | list/array of PromoteObject append `.<numeric-index>` |
+| `relics` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `relicsOrder` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `rpDistr` | `List<System.Single>` | list/array of System.Single append `.<numeric-index>` |
+| `sellZodiacImmortalMax` | `Nullable<BigDouble>` |   |
+| `sellZodiacImmortalMin` | `Nullable<BigDouble>` |   |
+| `sellZodiacLevelMax` | `Nullable<BigDouble>` |   |
+| `sellZodiacLevelMin` | `Nullable<BigDouble>` |   |
+| `sellZodiacQualityMax` | `Nullable<BigDouble>` |   |
+| `sellZodiacQualityMin` | `Nullable<BigDouble>` |   |
+| `sellZodiacRarity` | `List<ZodiacRarityType>` | list/array of ZodiacRarityType append `.<numeric-index>` |
+| `sellZodiacSign` | `List<AstroSignType>` | list/array of AstroSignType append `.<numeric-index>` |
+| `singMinAtoms` | `Nullable<BigDouble>` |   |
+| `singMinMultGain` | `Nullable<BigDouble>` |   |
+| `singMinTime` | `Nullable<BigDouble>` |   |
 | `singWaitUntilReady` | `System.Boolean` |   |
 | `slowdownMult` | `System.Double` |   |
-| `spawnSmCostMax` | `Nullable`1<BigDouble>` |   |
-| `spawnSmCostMaxBaseCost` | `Nullable`1<BigDouble>` |   |
-| `spawnSmCostMaxPlusBase` | `Nullable`1<BigDouble>` |   |
-| `spawnSmCostSpawnedFactor` | `Nullable`1<BigDouble>` |   |
-| `speMinMerge` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `stars` | `List`1<System.Boolean>` | list of System.Boolean append `.<numeric-index>` |
-| `sunRunes` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `tarotDrawMinDraw` | `Nullable`1<BigDouble>` |   |
-| `tarotDrawMinTime` | `Nullable`1<BigDouble>` |   |
+| `spawnSmCostMax` | `Nullable<BigDouble>` |   |
+| `spawnSmCostMaxBaseCost` | `Nullable<BigDouble>` |   |
+| `spawnSmCostMaxPlusBase` | `Nullable<BigDouble>` |   |
+| `spawnSmCostSpawnedFactor` | `Nullable<BigDouble>` |   |
+| `speMinMerge` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `stars` | `List<System.Boolean>` | list/array of System.Boolean append `.<numeric-index>` |
+| `sunRunes` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `tarotDrawMinDraw` | `Nullable<BigDouble>` |   |
+| `tarotDrawMinTime` | `Nullable<BigDouble>` |   |
 | `tarotDrawPercent` | `System.Single` |   |
-| `tarotUpgrades` | `Dictionary`2<TarotSuitType, List`1<System.Int32>>` | dictionary keyed by TarotSuitType, values List`1<System.Int32> append `.<string|integer|enum-key>` |
-| `uniAttackLevel` | `Nullable`1<BigDouble>` |   |
-| `uniEP` | `Nullable`1<BigDouble>` |   |
-| `uniElements` | `List`1<AstroElementType>` | list of AstroElementType append `.<numeric-index>` |
-| `uniGoldAfter` | `Nullable`1<BigDouble>` |   |
-| `uniPriority` | `List`1<Nullable`1<System.Int32>>` | list of Nullable`1<System.Int32> append `.<numeric-index>` |
-| `uniSeasons` | `List`1<AstroSeasonType>` | list of AstroSeasonType append `.<numeric-index>` |
-| `uniStats` | `List`1<ZodiacStats>` | list of ZodiacStats append `.<numeric-index>` |
-| `uniZodiacLvl` | `Nullable`1<BigDouble>` |   |
-| `uniZodiacSign` | `List`1<AstroSignType>` | list of AstroSignType append `.<numeric-index>` |
+| `tarotUpgrades` | `Dictionary<TarotSuitType, List<System.Int32>>` | dictionary keyed by TarotSuitType, values List<System.Int32> append `.<string|integer|enum-key>` |
+| `uniAttackLevel` | `Nullable<BigDouble>` |   |
+| `uniEP` | `Nullable<BigDouble>` |   |
+| `uniElements` | `List<AstroElementType>` | list/array of AstroElementType append `.<numeric-index>` |
+| `uniGoldAfter` | `Nullable<BigDouble>` |   |
+| `uniPriority` | `List<Nullable<System.Int32>>` | list/array of Nullable<System.Int32> append `.<numeric-index>` |
+| `uniSeasons` | `List<AstroSeasonType>` | list/array of AstroSeasonType append `.<numeric-index>` |
+| `uniStats` | `List<ZodiacStats>` | list/array of ZodiacStats append `.<numeric-index>` |
+| `uniZodiacLvl` | `Nullable<BigDouble>` |   |
+| `uniZodiacSign` | `List<AstroSignType>` | list/array of AstroSignType append `.<numeric-index>` |
 
 ### `BigDouble`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `DoubleExpMax` | `System.Int64` |   |
-| `DoubleExpMin` | `System.Int64` |   |
-| `ExpLimit` | `System.Double` |   |
 | `Exponent` | `System.Double` |   |
 | `Mantissa` | `System.Double` |   |
-| `MaxSignificantDigits` | `System.Int32` |   |
-| `MaxValue` | `BigDouble` |   |
-| `MinValue` | `BigDouble` |   |
-| `NaN` | `BigDouble` |   |
-| `NegativeInfinity` | `BigDouble` |   |
-| `One` | `BigDouble` |   |
-| `PositiveInfinity` | `BigDouble` |   |
-| `Tolerance` | `System.Double` |   |
-| `Zero` | `BigDouble` |   |
 
 ### `Block`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `BgBody` | `UnityEngine.UI.Image` |   |
-| `BgHeader` | `UnityEngine.UI.Image` |   |
-| `BodyColor` | `UnityEngine.Color` |   |
-| `Container` | `UnityEngine.RectTransform` |   |
-| `ContainerElif` | `UnityEngine.RectTransform` |   |
 | `Depth` | `System.Int32` |   |
-| `HeaderColor` | `UnityEngine.Color` |   |
 | `Index` | `System.Int32` |   |
 | `Initialized` | `System.Boolean` |   |
-| `Instance` | `UnityEngine.RectTransform` |   |
 | `IsFirst` | `System.Boolean` |   |
 | `IsLast` | `System.Boolean` |   |
-| `LabelId` | `TMPro.TMP_Text` |   |
 | `Progress` | `System.Single` |   |
-| `Scope` | `List`1<Block>` | list of Block append `.<numeric-index>` |
+| `Scope` | `List<Block>` | list/array of Block append `.<numeric-index>` |
 | `State` | `BlockStateType` |   |
-| `bodyColor` | `UnityEngine.Color` |   |
-| `fields` | `List`1<BlockField>` | list of BlockField append `.<numeric-index>` |
-| `headerColor` | `UnityEngine.Color` |   |
+| `fields` | `List<BlockField>` | list/array of BlockField append `.<numeric-index>` |
 | `progress` | `System.Single` |   |
 | `state` | `BlockStateType` |   |
 | `type` | `BlockType` |   |
@@ -396,30 +368,21 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `BigRange` | `Nullable`1<ValueTuple`2<BigDouble, BigDouble>>` |   |
-| `EnumProvider` | `Func`1<List`1<Il2CppSystem.Enum>>` |   |
-| `Instance` | `UnityEngine.RectTransform` |   |
+| `BigRange` | `Nullable<ValueTuple<BigDouble, BigDouble>>` |   |
 | `KeyDrpPlaceholder` | `System.String` |   |
 | `KeyDrpSelect` | `System.String` |   |
 | `KeyName` | `System.String` |   |
 | `Name` | `System.String` |   |
-| `OptionProvider` | `Func`1<List`1<System.String>>` |   |
-| `Options` | `List`1<System.String>` | list of System.String append `.<numeric-index>` |
-| `Range` | `Nullable`1<ValueTuple`2<System.Single, System.Single>>` |   |
+| `Options` | `List<System.String>` | list/array of System.String append `.<numeric-index>` |
+| `Range` | `Nullable<ValueTuple<System.Single, System.Single>>` |   |
 | `RefreshFields` | `System.Boolean` |   |
 | `StartRange` | `System.Int32` |   |
-| `TypeMap` | `Dictionary`2<System.String, Il2CppSystem.Type>` | dictionary keyed by System.String, values Il2CppSystem.Type append `.<string|integer|enum-key>` |
 | `type` | `BlockFieldType` |   |
 | `val` | `Il2CppSystem.Object` |   |
 | `valType` | `System.String` |   |
 | `value` | `Il2CppSystem.Object` |   |
 
 ### `BlockFieldType`
-
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
-
-### `BlockMenuType`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
@@ -498,11 +461,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 
-### `DialogConfirmationType`
-
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
-
 ### `DilUpgradeCost`
 
 | Property | CLR type | Collection path extension |
@@ -515,10 +473,10 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 | `TotalDTP` | `System.Int32` |   |
-| `bot` | `List`1<DilationTreeUpgrade>` | list of DilationTreeUpgrade append `.<numeric-index>` |
+| `bot` | `List<DilationTreeUpgrade>` | list/array of DilationTreeUpgrade append `.<numeric-index>` |
 | `center` | `DilationTreeUpgrade` |   |
-| `mid` | `List`1<DilationTreeUpgrade>` | list of DilationTreeUpgrade append `.<numeric-index>` |
-| `top` | `List`1<DilationTreeUpgrade>` | list of DilationTreeUpgrade append `.<numeric-index>` |
+| `mid` | `List<DilationTreeUpgrade>` | list/array of DilationTreeUpgrade append `.<numeric-index>` |
+| `top` | `List<DilationTreeUpgrade>` | list/array of DilationTreeUpgrade append `.<numeric-index>` |
 
 ### `DilationTreeLoadout`
 
@@ -562,23 +520,11 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `level` | `BigDouble` |   |
 | `num` | `System.Int32` |   |
 
-### `DoubleClickOption`
-
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
-
 ### `Element`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
 | `BindedLoadout` | `PlanetLoadoutSlot` |   |
-| `Elements` | `ElementsData` |   |
-| `Minerals` | `MineralsData` |   |
-| `Plague` | `PlagueData` |   |
-| `Singularity` | `SingularityData` |   |
-| `Tarot` | `TarotData` |   |
-| `Unity` | `UnityData` |   |
 | `amount` | `BigDouble` |   |
 | `bindedLoadoutId` | `System.Int32` |   |
 | `factor1` | `ElementFactor` |   |
@@ -605,20 +551,15 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
 | `CanBuy` | `System.Boolean` |   |
-| `Elements` | `ElementsData` |   |
-| `Minerals` | `MineralsData` |   |
-| `Next` | `List`1<ElementNode>` | list of ElementNode append `.<numeric-index>` |
-| `Prev` | `List`1<ElementNode>` | list of ElementNode append `.<numeric-index>` |
-| `Singularity` | `SingularityData` |   |
-| `Tarot` | `TarotData` |   |
+| `Next` | `List<ElementNode>` | list/array of ElementNode append `.<numeric-index>` |
+| `Prev` | `List<ElementNode>` | list/array of ElementNode append `.<numeric-index>` |
 | `bought` | `System.Boolean` |   |
 | `cost` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
 | `id` | `System.Int32` |   |
-| `next` | `Il2CppStructArray`1<System.Int32>` |   |
-| `prev` | `Il2CppStructArray`1<System.Int32>` |   |
+| `next` | `Il2CppStructArray<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `prev` | `Il2CppStructArray<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `type` | `AstroElementType` |   |
 | `unlocked` | `System.Boolean` |   |
 
@@ -628,14 +569,13 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | --- | --- | --- |
 | `BindLoadoutUnlocked` | `System.Boolean` |   |
 | `ElementTreeUnlocked` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
 | `Unlocked` | `System.Boolean` |   |
 | `curGeneratingElement` | `AstroElementType` |   |
 | `earth` | `Element` |   |
-| `elemNodesEarth` | `Dictionary`2<System.Int32, ElementNode>` | dictionary keyed by System.Int32, values ElementNode append `.<string|integer|enum-key>` |
-| `elemNodesFire` | `Dictionary`2<System.Int32, ElementNode>` | dictionary keyed by System.Int32, values ElementNode append `.<string|integer|enum-key>` |
-| `elemNodesWater` | `Dictionary`2<System.Int32, ElementNode>` | dictionary keyed by System.Int32, values ElementNode append `.<string|integer|enum-key>` |
-| `elemNodesWind` | `Dictionary`2<System.Int32, ElementNode>` | dictionary keyed by System.Int32, values ElementNode append `.<string|integer|enum-key>` |
+| `elemNodesEarth` | `Dictionary<System.Int32, ElementNode>` | dictionary keyed by System.Int32, values ElementNode append `.<string|integer|enum-key>` |
+| `elemNodesFire` | `Dictionary<System.Int32, ElementNode>` | dictionary keyed by System.Int32, values ElementNode append `.<string|integer|enum-key>` |
+| `elemNodesWater` | `Dictionary<System.Int32, ElementNode>` | dictionary keyed by System.Int32, values ElementNode append `.<string|integer|enum-key>` |
+| `elemNodesWind` | `Dictionary<System.Int32, ElementNode>` | dictionary keyed by System.Int32, values ElementNode append `.<string|integer|enum-key>` |
 | `fire` | `Element` |   |
 | `globalGenMult` | `BigDouble` |   |
 | `localSpeed` | `BigDouble` |   |
@@ -648,7 +588,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Plague` | `PlagueData` |   |
 | `baseInfectivity` | `BigDouble` |   |
 | `baseSpreadPower` | `BigDouble` |   |
 | `baseStealth` | `BigDouble` |   |
@@ -668,7 +607,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `KeyDesc` | `System.String` |   |
 | `KeyName` | `System.String` |   |
 | `Maxed` | `System.Boolean` |   |
-| `Plague` | `PlagueData` |   |
 | `cost` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
 | `effectNext` | `BigDouble` |   |
@@ -725,8 +663,8 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `ChallengesUnlocked` | `System.Boolean` |   |
 | `DP` | `BigDouble` |   |
 | `DPIncome` | `BigDouble` |   |
-| `DTPScalings` | `List`1<DTPScaling>` | list of DTPScaling append `.<numeric-index>` |
-| `DilUpgradeCosts` | `List`1<DilUpgradeCost>` | list of DilUpgradeCost append `.<numeric-index>` |
+| `DTPScalings` | `List<DTPScaling>` | list/array of DTPScaling append `.<numeric-index>` |
+| `DilUpgradeCosts` | `List<DilUpgradeCost>` | list/array of DilUpgradeCost append `.<numeric-index>` |
 | `DilationTreeUnlocked` | `System.Boolean` |   |
 | `DilationTreeUnlockedPerm` | `System.Boolean` |   |
 | `DilationUnlocked` | `System.Boolean` |   |
@@ -735,23 +673,23 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `LabPermUnlocked` | `System.Boolean` |   |
 | `LabUnlocked` | `System.Boolean` |   |
 | `OwnedAnimalsCount` | `System.Int32` |   |
-| `RsPUpgrades` | `List`1<RPUpgrade>` | list of RPUpgrade append `.<numeric-index>` |
+| `RsPUpgrades` | `List<RPUpgrade>` | list/array of RPUpgrade append `.<numeric-index>` |
 | `SupernovaUnlocked` | `System.Boolean` |   |
-| `animalMilestones` | `List`1<System.Boolean>` | list of System.Boolean append `.<numeric-index>` |
+| `animalMilestones` | `List<System.Boolean>` | list/array of System.Boolean append `.<numeric-index>` |
 | `animalMilestonesAmo` | `System.Int32` |   |
-| `bonus` | `List`1<BigDouble>` | list of BigDouble append `.<numeric-index>` |
+| `bonus` | `List<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
 | `buyAmoAPEP` | `System.Int32` |   |
 | `buyAmoAPIP` | `System.Int32` |   |
 | `buyAmoAPSC` | `System.Int32` |   |
 | `buyAmoDilation` | `System.Int32` |   |
 | `buyAmoDtp` | `System.Int32` |   |
 | `buyAmoLab` | `System.Int32` |   |
-| `challengeMilestones` | `List`1<System.Boolean>` | list of System.Boolean append `.<numeric-index>` |
+| `challengeMilestones` | `List<System.Boolean>` | list/array of System.Boolean append `.<numeric-index>` |
 | `challengeMilestonesAmo` | `System.Int32` |   |
-| `challenges` | `List`1<EternityChallenge>` | list of EternityChallenge append `.<numeric-index>` |
+| `challenges` | `List<EternityChallenge>` | list/array of EternityChallenge append `.<numeric-index>` |
 | `compChallenges` | `System.Int64` |   |
 | `curRP` | `BigDouble` |   |
-| `currentAnimalOrder` | `List`1<System.String>` | list of System.String append `.<numeric-index>` |
+| `currentAnimalOrder` | `List<System.String>` | list/array of System.String append `.<numeric-index>` |
 | `dilationAscendPenalty` | `System.Double` |   |
 | `dilationGenExpPenalty` | `System.Double` |   |
 | `dilationIPGainPenalty` | `System.Double` |   |
@@ -762,37 +700,37 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `dilationPowerPenalty` | `System.Double` |   |
 | `dilationStarExpPenalty` | `System.Double` |   |
 | `dilationTree` | `DilationTree` |   |
-| `dilationUpgrades` | `List`1<DilationUpgrade>` | list of DilationUpgrade append `.<numeric-index>` |
+| `dilationUpgrades` | `List<DilationUpgrade>` | list/array of DilationUpgrade append `.<numeric-index>` |
 | `dtpBought` | `System.Int32` |   |
 | `dtpFree` | `System.Int32` |   |
 | `dtpMax` | `System.Int32` |   |
 | `dtpSpent` | `System.Int32` |   |
-| `dtuLoadouts` | `List`1<DilationTreeLoadout>` | list of DilationTreeLoadout append `.<numeric-index>` |
-| `eternityMilestones` | `List`1<System.Boolean>` | list of System.Boolean append `.<numeric-index>` |
+| `dtuLoadouts` | `List<DilationTreeLoadout>` | list/array of DilationTreeLoadout append `.<numeric-index>` |
+| `eternityMilestones` | `List<System.Boolean>` | list/array of System.Boolean append `.<numeric-index>` |
 | `eternityMilestonesAmo` | `System.Int32` |   |
 | `eters` | `BigDouble` |   |
 | `inDilation` | `System.Boolean` |   |
 | `labPtsIncome` | `BigDouble` |   |
 | `labPtsNext` | `BigDouble` |   |
 | `labPtsNow` | `BigDouble` |   |
-| `labPtsScalings` | `List`1<LabPtsScaling>` | list of LabPtsScaling append `.<numeric-index>` |
-| `laboratoryUpgrades` | `List`1<LabUpgrade>` | list of LabUpgrade append `.<numeric-index>` |
+| `labPtsScalings` | `List<LabPtsScaling>` | list/array of LabPtsScaling append `.<numeric-index>` |
+| `laboratoryUpgrades` | `List<LabUpgrade>` | list/array of LabUpgrade append `.<numeric-index>` |
 | `lastRPAmount` | `System.Double` |   |
 | `maxChalDiff` | `System.Int32` |   |
 | `maxDP` | `BigDouble` |   |
 | `maxOwnedAnimalsCount` | `System.Int32` |   |
 | `maximumRP` | `BigDouble` |   |
 | `nextDtpCost` | `BigDouble` |   |
-| `ownedAnimals` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `ownedAnimals` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `passiveEterProg` | `BigDouble` |   |
 | `rp6softcap` | `System.Boolean` |   |
-| `rpFreeLevels` | `List`1<BigDouble>` | list of BigDouble append `.<numeric-index>` |
+| `rpFreeLevels` | `List<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
 | `slowdown` | `System.Int32` |   |
 | `spendRP` | `BigDouble` |   |
 | `stateEternateSafety` | `System.Boolean` |   |
-| `stats` | `List`1<EternityStat>` | list of EternityStat append `.<numeric-index>` |
-| `supernovaBonuses` | `Il2CppStructArray`1<BigDouble>` |   |
-| `supernovaBonusesNext` | `Il2CppStructArray`1<BigDouble>` |   |
+| `stats` | `List<EternityStat>` | list/array of EternityStat append `.<numeric-index>` |
+| `supernovaBonuses` | `Il2CppStructArray<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
+| `supernovaBonusesNext` | `Il2CppStructArray<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
 | `supernovaLv` | `System.Int32` |   |
 | `supernovaReq` | `BigDouble` |   |
 
@@ -809,6 +747,14 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
+
+### `ExpFactor`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Unlocked` | `System.Boolean` |   |
+| `factor` | `BigDouble` |   |
+| `type` | `ExpFactorType` |   |
 
 ### `ExpFactorType`
 
@@ -833,8 +779,8 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `Cheater` | `System.Boolean` |   |
 | `CountUnlockedAch` | `System.Int32` |   |
 | `CountUnlockedAchSecret` | `System.Int32` |   |
-| `DateOFFull` | `Nullable`1<Il2CppSystem.DateTime>` |   |
-| `DateTFFull` | `Nullable`1<Il2CppSystem.DateTime>` |   |
+| `DateOFFull` | `Nullable<Il2CppSystem.DateTime>` |   |
+| `DateTFFull` | `Nullable<Il2CppSystem.DateTime>` |   |
 | `EternityUnlocked` | `System.Boolean` |   |
 | `InfinityUnlocked` | `System.Boolean` |   |
 | `LeaderboardUnlocked` | `System.Boolean` |   |
@@ -857,11 +803,11 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `TotalHoursUnscaled` | `System.Double` |   |
 | `TotalMinutesUnscaled` | `System.Double` |   |
 | `UnityUnlocked` | `System.Boolean` |   |
-| `achArtifact` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
-| `achByte` | `Il2CppStructArray`1<System.Byte>` |   |
-| `achDate` | `Dictionary`2<System.Int32, System.Double>` | dictionary keyed by System.Int32, values System.Double append `.<string|integer|enum-key>` |
+| `achArtifact` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `achByte` | `Il2CppStructArray<System.Byte>` | list/array of System.Byte append `.<numeric-index>` |
+| `achDate` | `Dictionary<System.Int32, System.Double>` | dictionary keyed by System.Int32, values System.Double append `.<string|integer|enum-key>` |
 | `adsLastTime` | `System.Double` |   |
-| `adsTime` | `List`1<System.Double>` | list of System.Double append `.<numeric-index>` |
+| `adsTime` | `List<System.Double>` | list/array of System.Double append `.<numeric-index>` |
 | `analytics` | `AnalyticsMetaData` |   |
 | `attacks` | `AttacksData` |   |
 | `automation` | `AutomationData` |   |
@@ -869,7 +815,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `bestEPs` | `BigDouble` |   |
 | `bestIPs` | `BigDouble` |   |
 | `buyAmmoBuyable` | `System.Int32` |   |
-| `checkpoints` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `checkpoints` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `creatorCode` | `System.String` |   |
 | `elements` | `ElementsData` |   |
 | `eterBroken` | `System.Boolean` |   |
@@ -890,7 +836,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `lastRealtimeEternity` | `System.Double` |   |
 | `lastRealtimeInfinity` | `System.Double` |   |
 | `lastRealtimeUnity` | `System.Double` |   |
-| `lastServerDate` | `Nullable`1<Il2CppSystem.DateTime>` |   |
+| `lastServerDate` | `Nullable<Il2CppSystem.DateTime>` |   |
 | `lastSession` | `Il2CppSystem.DateTime` |   |
 | `lastStreakDate` | `Il2CppSystem.DateTime` |   |
 | `lastTimeEternity` | `BigDouble` |   |
@@ -901,7 +847,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `lastUseTF` | `Il2CppSystem.DateTime` |   |
 | `leaderboard` | `LeaderboardData` |   |
 | `macro` | `MacroData` |   |
-| `minTrashed` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `minTrashed` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `minerals` | `MineralsData` |   |
 | `ofAuto` | `System.Boolean` |   |
 | `ofCapacityLevel` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
@@ -910,16 +856,16 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `pMult` | `BigDouble` |   |
 | `plague` | `PlagueData` |   |
 | `playerId` | `System.String` |   |
-| `prestigeExp` | `Il2CppStructArray`1<System.Double>` |   |
-| `prestigeMult` | `Il2CppStructArray`1<BigDouble>` |   |
+| `prestigeExp` | `Il2CppStructArray<System.Double>` | list/array of System.Double append `.<numeric-index>` |
+| `prestigeMult` | `Il2CppStructArray<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
 | `profile` | `ProfileData` |   |
-| `promotions` | `Il2CppReferenceArray`1<Promotion>` |   |
+| `promotions` | `Il2CppReferenceArray<Promotion>` | list/array of Promotion append `.<numeric-index>` |
 | `promotionsInf` | `System.Int32` |   |
 | `realTimeEquality` | `System.Double` |   |
 | `realTimeEtr` | `System.Double` |   |
 | `realTimeInf` | `System.Double` |   |
 | `realTimeUnity` | `System.Double` |   |
-| `revolutions` | `List`1<Revolution>` | list of Revolution append `.<numeric-index>` |
+| `revolutions` | `List<Revolution>` | list/array of Revolution append `.<numeric-index>` |
 | `saveId` | `System.Int32` |   |
 | `score` | `BigDouble` |   |
 | `scoreEquality` | `BigDouble` |   |
@@ -935,7 +881,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `tfConvertedPercent` | `System.Single` |   |
 | `tfCustomSpeed` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `tfGainLevel` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
-| `theme` | `Nullable`1<ThemeType>` |   |
+| `theme` | `Nullable<ThemeType>` |   |
 | `timeEquality` | `BigDouble` |   |
 | `timeEqualityUnscaled` | `System.Double` |   |
 | `timeEtr` | `BigDouble` |   |
@@ -952,7 +898,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `timeUnityUnscaled` | `System.Double` |   |
 | `unity` | `UnityData` |   |
 | `unityBroken` | `System.Boolean` |   |
-| `unlockedAch` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `unlockedAch` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `version` | `System.Int32` |   |
 
 ### `Generator`
@@ -1002,25 +948,25 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `TotalChallengesMult` | `BigDouble` |   |
 | `baseStarBase` | `BigDouble` |   |
 | `buyAmmoGen` | `System.Int32` |   |
-| `challenges` | `Il2CppReferenceArray`1<InfinityChallenge>` |   |
+| `challenges` | `Il2CppReferenceArray<InfinityChallenge>` | list/array of InfinityChallenge append `.<numeric-index>` |
 | `dustPerSec` | `BigDouble` |   |
 | `genExp` | `System.Double` |   |
 | `genMult` | `BigDouble` |   |
 | `genPower` | `BigDouble` |   |
-| `generators` | `List`1<Generator>` | list of Generator append `.<numeric-index>` |
+| `generators` | `List<Generator>` | list/array of Generator append `.<numeric-index>` |
 | `infs` | `BigDouble` |   |
 | `maxIPUnity` | `BigDouble` |   |
 | `maxInfsUnity` | `BigDouble` |   |
-| `ownedInfUpgrades` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `ownedInfUpgrades` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `starCost` | `BigDouble` |   |
 | `starExp` | `System.Double` |   |
-| `starUpgrades` | `List`1<StarUpgrade>` | list of StarUpgrade append `.<numeric-index>` |
+| `starUpgrades` | `List<StarUpgrade>` | list/array of StarUpgrade append `.<numeric-index>` |
 | `stardust` | `BigDouble` |   |
 | `stardustEffect` | `BigDouble` |   |
-| `stardustUpgrades` | `List`1<StardustUpgrade>` | list of StardustUpgrade append `.<numeric-index>` |
+| `stardustUpgrades` | `List<StardustUpgrade>` | list/array of StardustUpgrade append `.<numeric-index>` |
 | `stars` | `BigDouble` |   |
 | `stateInfiniteSafety` | `System.Boolean` |   |
-| `stats` | `List`1<InfinityStat>` | list of InfinityStat append `.<numeric-index>` |
+| `stats` | `List<InfinityStat>` | list/array of InfinityStat append `.<numeric-index>` |
 | `totalStarBase` | `BigDouble` |   |
 | `totalStarBaseNext` | `BigDouble` |   |
 
@@ -1092,11 +1038,11 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `VEGain` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `adsClicked` | `System.Int32` |   |
 | `adsRewarded` | `System.Int32` |   |
-| `amountRewarded` | `Dictionary`2<System.Int32, System.Int32>` | dictionary keyed by System.Int32, values System.Int32 append `.<string|integer|enum-key>` |
+| `amountRewarded` | `Dictionary<System.Int32, System.Int32>` | dictionary keyed by System.Int32, values System.Int32 append `.<string|integer|enum-key>` |
 | `artifactLocalSpeed` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `attacksLaps` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `blackGemEff` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
-| `blocks` | `List`1<BlockType>` | list of BlockType append `.<numeric-index>` |
+| `blocks` | `List<BlockType>` | list/array of BlockType append `.<numeric-index>` |
 | `boostAscPower` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `boostFallSpeed` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `boostMagnetChance` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
@@ -1122,16 +1068,16 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `boostZodiacSellCost` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `boughtSoul` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `dailyRewardDay` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
-| `dailyRewarded` | `List`1<System.Int32>` | list of System.Int32 append `.<numeric-index>` |
+| `dailyRewarded` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `dtuSlotsCount` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `endoCraftingMastery` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `globalElemMult` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `labPointsGain` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
-| `lastRewardDate` | `Nullable`1<Il2CppSystem.DateTime>` |   |
+| `lastRewardDate` | `Nullable<Il2CppSystem.DateTime>` |   |
 | `lastStreakDate` | `Il2CppSystem.DateTime` |   |
 | `luckTotalPower` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `moonRuneSpeed` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
-| `nextZodiacs` | `List`1<UnityZodiac>` | list of UnityZodiac append `.<numeric-index>` |
+| `nextZodiacs` | `List<UnityZodiac>` | list/array of UnityZodiac append `.<numeric-index>` |
 | `noAds` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredBool` |   |
 | `plagueLocalSpeed` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `playerId` | `System.String` |   |
@@ -1139,7 +1085,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `saveId` | `System.Int32` |   |
 | `singLocalSpeed` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `singMultGain` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
-| `skins` | `List`1<RevolutionSkin>` | list of RevolutionSkin append `.<numeric-index>` |
+| `skins` | `List<RevolutionSkin>` | list/array of RevolutionSkin append `.<numeric-index>` |
 | `slotBlock` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `slotMacro` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `slotPlagueInventory` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
@@ -1148,7 +1094,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `slotZodiac` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `smSacriDustGain` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `soul` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
-| `specialPack` | `List`1<SpecialPackType>` | list of SpecialPackType append `.<numeric-index>` |
+| `specialPack` | `List<SpecialPackType>` | list/array of SpecialPackType append `.<numeric-index>` |
 | `spendedSoul` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `startPack1` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredBool` |   |
 | `sunRuneSpeed` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
@@ -1156,7 +1102,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `tarotLocalSpeed` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `tarotResourcesGenMult` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
 | `unityRerolls` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
-| `usedPromotions` | `List`1<System.String>` | list of System.String append `.<numeric-index>` |
+| `usedPromotions` | `List<System.String>` | list/array of System.String append `.<numeric-index>` |
 | `version` | `System.Int32` |   |
 
 ### `LabPtsScaling`
@@ -1184,7 +1130,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `leaderboards` | `Dictionary`2<LeaderboardType, NakamaLeaderboard>` | dictionary keyed by LeaderboardType, values NakamaLeaderboard append `.<string|integer|enum-key>` |
+| `leaderboards` | `Dictionary<LeaderboardType, NakamaLeaderboard>` | dictionary keyed by LeaderboardType, values NakamaLeaderboard append `.<string|integer|enum-key>` |
 | `maxAnimals` | `BigDouble` |   |
 | `maxAtoms` | `BigDouble` |   |
 | `maxAttackLevel` | `BigDouble` |   |
@@ -1216,11 +1162,11 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Blocks` | `List`1<Block>` | list of Block append `.<numeric-index>` |
+| `Blocks` | `List<Block>` | list/array of Block append `.<numeric-index>` |
 | `Slot` | `MacroSlot` |   |
 | `selectedId` | `System.Int32` |   |
 | `settings` | `MacroSettingData` |   |
-| `slots` | `List`1<MacroSlot>` | list of MacroSlot append `.<numeric-index>` |
+| `slots` | `List<MacroSlot>` | list/array of MacroSlot append `.<numeric-index>` |
 
 ### `MacroLoopMode`
 
@@ -1244,7 +1190,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `blocks` | `List`1<Block>` | list of Block append `.<numeric-index>` |
+| `blocks` | `List<Block>` | list/array of Block append `.<numeric-index>` |
 | `logs` | `System.Boolean` |   |
 | `loopMode` | `MacroLoopMode` |   |
 | `name` | `System.String` |   |
@@ -1294,7 +1240,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `buyAmmoRefineNode` | `System.Int32` |   |
 | `buyAmmoRunes` | `System.Int32` |   |
 | `buyAmmoSMP` | `System.Int32` |   |
-| `commonMinerals` | `Dictionary`2<System.Int32, CommonMineral>` | dictionary keyed by System.Int32, values CommonMineral append `.<string|integer|enum-key>` |
+| `commonMinerals` | `Dictionary<System.Int32, CommonMineral>` | dictionary keyed by System.Int32, values CommonMineral append `.<string|integer|enum-key>` |
 | `curMineralCost` | `BigDouble` |   |
 | `curMineralLevel` | `BigDouble` |   |
 | `curSpecialMineralCost` | `BigDouble` |   |
@@ -1332,14 +1278,12 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `mineralMult` | `BigDouble` |   |
 | `moonRuneProgress` | `BigDouble` |   |
 | `moonRunes` | `BigDouble` |   |
-| `moonRunesUpgrades` | `Dictionary`2<RuneUpgradeType, RuneUpgrade>` | dictionary keyed by RuneUpgradeType, values RuneUpgrade append `.<string|integer|enum-key>` |
-| `onCommonMineralChanged` | `UnityEngine.Events.UnityEvent` |   |
-| `onSpecialMineralChanged` | `UnityEngine.Events.UnityEvent` |   |
-| `polishEnchanceUpgrades` | `Dictionary`2<PolishUpgradeType, PolishEnchanceUpgrade>` | dictionary keyed by PolishUpgradeType, values PolishEnchanceUpgrade append `.<string|integer|enum-key>` |
+| `moonRunesUpgrades` | `Dictionary<RuneUpgradeType, RuneUpgrade>` | dictionary keyed by RuneUpgradeType, values RuneUpgrade append `.<string|integer|enum-key>` |
+| `polishEnchanceUpgrades` | `Dictionary<PolishUpgradeType, PolishEnchanceUpgrade>` | dictionary keyed by PolishUpgradeType, values PolishEnchanceUpgrade append `.<string|integer|enum-key>` |
 | `polishPoints` | `BigDouble` |   |
 | `polishPointsNext` | `BigDouble` |   |
-| `polishUpgrades` | `Dictionary`2<PolishUpgradeType, PolishUpgrade>` | dictionary keyed by PolishUpgradeType, values PolishUpgrade append `.<string|integer|enum-key>` |
-| `refineNodes` | `Dictionary`2<System.Int32, RefineNode>` | dictionary keyed by System.Int32, values RefineNode append `.<string|integer|enum-key>` |
+| `polishUpgrades` | `Dictionary<PolishUpgradeType, PolishUpgrade>` | dictionary keyed by PolishUpgradeType, values PolishUpgrade append `.<string|integer|enum-key>` |
+| `refineNodes` | `Dictionary<System.Int32, RefineNode>` | dictionary keyed by System.Int32, values RefineNode append `.<string|integer|enum-key>` |
 | `refinePoints` | `BigDouble` |   |
 | `refinePointsNext` | `BigDouble` |   |
 | `sacriDust` | `BigDouble` |   |
@@ -1347,47 +1291,64 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `sacriDustGainMult` | `BigDouble` |   |
 | `selectedPolishUpgrade` | `PolishUpgradeType` |   |
 | `smmf` | `BigDouble` |   |
-| `smpSacri` | `Dictionary`2<SpecialMineralType, SpecialMineralSacrifice>` | dictionary keyed by SpecialMineralType, values SpecialMineralSacrifice append `.<string|integer|enum-key>` |
-| `smpUpgrades` | `Dictionary`2<SpecialMineralType, SpecialMineralProgression>` | dictionary keyed by SpecialMineralType, values SpecialMineralProgression append `.<string|integer|enum-key>` |
+| `smpSacri` | `Dictionary<SpecialMineralType, SpecialMineralSacrifice>` | dictionary keyed by SpecialMineralType, values SpecialMineralSacrifice append `.<string|integer|enum-key>` |
+| `smpUpgrades` | `Dictionary<SpecialMineralType, SpecialMineralProgression>` | dictionary keyed by SpecialMineralType, values SpecialMineralProgression append `.<string|integer|enum-key>` |
 | `smsChariotReduction` | `BigDouble` |   |
 | `specialMineralCostDecrease` | `BigDouble` |   |
 | `specialMineralCostIncrement` | `BigDouble` |   |
-| `specialMineralEffects` | `Dictionary`2<SpecialMineralType, BigDouble>` | dictionary keyed by SpecialMineralType, values BigDouble append `.<string|integer|enum-key>` |
-| `specialMinerals` | `Dictionary`2<System.Int32, SpecialMineral>` | dictionary keyed by System.Int32, values SpecialMineral append `.<string|integer|enum-key>` |
+| `specialMineralEffects` | `Dictionary<SpecialMineralType, BigDouble>` | dictionary keyed by SpecialMineralType, values BigDouble append `.<string|integer|enum-key>` |
+| `specialMinerals` | `Dictionary<System.Int32, SpecialMineral>` | dictionary keyed by System.Int32, values SpecialMineral append `.<string|integer|enum-key>` |
 | `specialMineralsSpawned` | `BigDouble` |   |
 | `specialsSacrificed` | `System.Int32` |   |
 | `sunRuneProgress` | `BigDouble` |   |
 | `sunRunes` | `BigDouble` |   |
-| `sunRunesUpgrades` | `Dictionary`2<RuneUpgradeType, RuneUpgrade>` | dictionary keyed by RuneUpgradeType, values RuneUpgrade append `.<string|integer|enum-key>` |
+| `sunRunesUpgrades` | `Dictionary<RuneUpgradeType, RuneUpgrade>` | dictionary keyed by RuneUpgradeType, values RuneUpgrade append `.<string|integer|enum-key>` |
 | `totalSacriExp` | `BigDouble` |   |
 | `trashSpecialConfirm` | `System.Boolean` |   |
-| `upgrades` | `Dictionary`2<MineralUpgradeType, MineralsUpgrade>` | dictionary keyed by MineralUpgradeType, values MineralsUpgrade append `.<string|integer|enum-key>` |
+| `upgrades` | `Dictionary<MineralUpgradeType, MineralsUpgrade>` | dictionary keyed by MineralUpgradeType, values MineralsUpgrade append `.<string|integer|enum-key>` |
 | `valuePoints` | `BigDouble` |   |
 | `valuePointsMaxPolish` | `BigDouble` |   |
 | `valuePointsMaxRefine` | `BigDouble` |   |
 | `valuePointsMaxTotal` | `BigDouble` |   |
 | `windCostDivider` | `BigDouble` |   |
 
-### `NotationEnum`
+### `MineralsUpgrade`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
+| `Maxed` | `System.Boolean` |   |
+| `Minerals` | `MineralsData` |   |
+| `Singularity` | `SingularityData` |   |
+| `Tarot` | `TarotData` |   |
+| `Unlocked` | `System.Boolean` |   |
+| `buyAmount` | `BigDouble` |   |
+| `canBuy` | `System.Boolean` |   |
+| `cost` | `BigDouble` |   |
+| `effect` | `BigDouble` |   |
+| `effectNext` | `BigDouble` |   |
+| `income` | `BigDouble` |   |
+| `level` | `BigDouble` |   |
+| `maxLevel` | `BigDouble` |   |
+| `type` | `MineralUpgradeType` |   |
 
-### `NotificationType`
+### `NakamaLeaderboard`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-
-### `OneClickOption`
-
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| `Enabled` | `System.Boolean` |   |
+| `HasRank` | `System.Boolean` |   |
+| `Id` | `System.String` |   |
+| `Rank` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
+| `Score` | `System.Int32` |   |
+| `Subscore` | `System.Int32` |   |
+| `lastSyncDate` | `Nullable<Il2CppSystem.DateTime>` |   |
+| `rank` | `CodeStage.AntiCheat.ObscuredTypes.ObscuredInt` |   |
+| `type` | `LeaderboardType` |   |
 
 ### `PlagueData`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
 | `CureNerf` | `BigDouble` |   |
 | `CureProgress` | `BigDouble` |   |
 | `CureReady` | `System.Boolean` |   |
@@ -1395,13 +1356,10 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `EndoplasmicUnlocked` | `System.Boolean` |   |
 | `GlobalStage` | `PlagueGlobalStage` |   |
 | `IsCrafting` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
 | `PlG` | `BigDouble` |   |
 | `PlP` | `BigDouble` |   |
 | `PlPperPlG` | `BigDouble` |   |
-| `Singularity` | `SingularityData` |   |
 | `SlotsBought` | `System.Int32` |   |
-| `Tarot` | `TarotData` |   |
 | `Unlocked` | `System.Boolean` |   |
 | `VE` | `BigDouble` |   |
 | `ViP` | `BigDouble` |   |
@@ -1415,7 +1373,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `craftEST` | `BigDouble` |   |
 | `craftInfectivity` | `BigDouble` |   |
 | `craftLvl` | `BigDouble` |   |
-| `craftMastery` | `Dictionary`2<PlagueEndoRarity, BigDouble>` | dictionary keyed by PlagueEndoRarity, values BigDouble append `.<string|integer|enum-key>` |
+| `craftMastery` | `Dictionary<PlagueEndoRarity, BigDouble>` | dictionary keyed by PlagueEndoRarity, values BigDouble append `.<string|integer|enum-key>` |
 | `craftMaxLvl` | `BigDouble` |   |
 | `craftPlPFlushed` | `BigDouble` |   |
 | `craftSpreadPower` | `BigDouble` |   |
@@ -1423,16 +1381,16 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `cureProgMax` | `BigDouble` |   |
 | `cureProgValue` | `BigDouble` |   |
 | `cureWasReady` | `System.Boolean` |   |
-| `endoInventory` | `List`1<EndoplasmicReticulum>` | list of EndoplasmicReticulum append `.<numeric-index>` |
-| `endoUpgrades` | `List`1<EndoplasmicReticulumUpgrade>` | list of EndoplasmicReticulumUpgrade append `.<numeric-index>` |
+| `endoInventory` | `List<EndoplasmicReticulum>` | list/array of EndoplasmicReticulum append `.<numeric-index>` |
+| `endoUpgrades` | `List<EndoplasmicReticulumUpgrade>` | list/array of EndoplasmicReticulumUpgrade append `.<numeric-index>` |
 | `flushCraftAmo` | `System.Int32` |   |
-| `globalStages` | `Dictionary`2<PlagueStageType, PlagueGlobalStage>` | dictionary keyed by PlagueStageType, values PlagueGlobalStage append `.<string|integer|enum-key>` |
+| `globalStages` | `Dictionary<PlagueStageType, PlagueGlobalStage>` | dictionary keyed by PlagueStageType, values PlagueGlobalStage append `.<string|integer|enum-key>` |
 | `infection` | `System.Boolean` |   |
 | `localSpeed` | `BigDouble` |   |
 | `localSpeedBonus` | `BigDouble` |   |
 | `localSpeedPow` | `BigDouble` |   |
 | `maxStage` | `System.Int32` |   |
-| `plagueStats` | `Dictionary`2<PlagueStatType, PlagueStat>` | dictionary keyed by PlagueStatType, values PlagueStat append `.<string|integer|enum-key>` |
+| `plagueStats` | `Dictionary<PlagueStatType, PlagueStat>` | dictionary keyed by PlagueStatType, values PlagueStat append `.<string|integer|enum-key>` |
 | `queuedId` | `System.Int32` |   |
 | `selectedStageType` | `PlagueStageType` |   |
 | `spreadSpeed` | `BigDouble` |   |
@@ -1455,7 +1413,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | --- | --- | --- |
 | `Selected` | `PlagueStage` |   |
 | `selectedId` | `System.Int32` |   |
-| `stages` | `List`1<PlagueStage>` | list of PlagueStage append `.<numeric-index>` |
+| `stages` | `List<PlagueStage>` | list/array of PlagueStage append `.<numeric-index>` |
 | `type` | `PlagueStageType` |   |
 
 ### `PlagueStage`
@@ -1463,10 +1421,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 | `KeyName` | `System.String` |   |
-| `Minerals` | `MineralsData` |   |
-| `Plague` | `PlagueData` |   |
-| `Singularity` | `SingularityData` |   |
-| `Sprite` | `UnityEngine.Sprite` |   |
 | `basePopulation` | `BigDouble` |   |
 | `beatTimes` | `BigDouble` |   |
 | `healthy` | `BigDouble` |   |
@@ -1482,6 +1436,14 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
+
+### `PlagueStat`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `effect` | `BigDouble` |   |
+| `type` | `PlagueStatType` |   |
+| `value` | `BigDouble` |   |
 
 ### `PlagueStatType`
 
@@ -1506,7 +1468,14 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | --- | --- | --- |
 | `folded` | `System.Boolean` |   |
 | `name` | `System.String` |   |
-| `planets` | `Dictionary`2<AstroPlanetType, PlanetLoadoutSlotElement>` | dictionary keyed by AstroPlanetType, values PlanetLoadoutSlotElement append `.<string|integer|enum-key>` |
+| `planets` | `Dictionary<AstroPlanetType, PlanetLoadoutSlotElement>` | dictionary keyed by AstroPlanetType, values PlanetLoadoutSlotElement append `.<string|integer|enum-key>` |
+
+### `PlanetLoadoutSlotElement`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `sign` | `AstroSignType` |   |
+| `stats` | `List<ZodiacStats>` | list/array of ZodiacStats append `.<numeric-index>` |
 
 ### `PlanetShopDonutType`
 
@@ -1523,12 +1492,36 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 
-### `PolishUpgradeType`
+### `PolishEnchanceUpgrade`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
+| `CanBuy` | `System.Boolean` |   |
+| `Minerals` | `MineralsData` |   |
+| `Tarot` | `TarotData` |   |
+| `buyAmount` | `BigDouble` |   |
+| `cost` | `BigDouble` |   |
+| `effect` | `BigDouble` |   |
+| `effectNext` | `BigDouble` |   |
+| `level` | `BigDouble` |   |
+| `type` | `PolishUpgradeType` |   |
 
-### `PrestigeType`
+### `PolishUpgrade`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `CanBuy` | `System.Boolean` |   |
+| `Minerals` | `MineralsData` |   |
+| `Tarot` | `TarotData` |   |
+| `buyAmount` | `BigDouble` |   |
+| `cost` | `BigDouble` |   |
+| `effect` | `BigDouble` |   |
+| `effectNext` | `BigDouble` |   |
+| `level` | `BigDouble` |   |
+| `milestones` | `List<System.Boolean>` | list/array of System.Boolean append `.<numeric-index>` |
+| `type` | `PolishUpgradeType` |   |
+
+### `PolishUpgradeType`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
@@ -1537,7 +1530,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `notifications` | `Dictionary`2<System.String, System.Int32>` | dictionary keyed by System.String, values System.Int32 append `.<string|integer|enum-key>` |
+| `notifications` | `Dictionary<System.String, System.Int32>` | dictionary keyed by System.String, values System.Int32 append `.<string|integer|enum-key>` |
 | `reviewAskCount` | `System.Int32` |   |
 | `reviewed` | `System.Boolean` |   |
 | `startPackAskCount` | `System.Int32` |   |
@@ -1581,26 +1574,18 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
 | `Bought` | `System.Boolean` |   |
 | `CanBuy` | `System.Boolean` |   |
-| `Elements` | `ElementsData` |   |
-| `Eternity` | `EternityData` |   |
 | `Maxed` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
-| `Next` | `List`1<RefineNode>` | list of RefineNode append `.<numeric-index>` |
-| `Plague` | `PlagueData` |   |
-| `Singularity` | `SingularityData` |   |
-| `Tarot` | `TarotData` |   |
+| `Next` | `List<RefineNode>` | list/array of RefineNode append `.<numeric-index>` |
 | `buyAmount` | `BigDouble` |   |
 | `cost` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
-| `effectModifiers` | `List`1<ValueTuple`3<System.Int32, Func`1<System.Boolean>, Func`2<RefineNode, BigDouble>>>` | list of ValueTuple`3<System.Int32, Func`1<System.Boolean>, Func`2<RefineNode, BigDouble>> append `.<numeric-index>` |
 | `id` | `System.Int32` |   |
 | `level` | `BigDouble` |   |
 | `maxLevel` | `BigDouble` |   |
-| `next` | `Il2CppStructArray`1<System.Int32>` |   |
-| `prev` | `Il2CppStructArray`1<System.Int32>` |   |
+| `next` | `Il2CppStructArray<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `prev` | `Il2CppStructArray<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `unlocked` | `System.Boolean` |   |
 
 ### `Relic`
@@ -1617,7 +1602,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `amount` | `BigDouble` |   |
 | `baseCost` | `BigDouble` |   |
 | `buyAmount` | `BigDouble` |   |
-| `costData` | `Il2CppReferenceArray`1<ValueTuple`2<BigDouble, BigDouble>>` |   |
 | `costInc` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
 | `effect_next` | `BigDouble` |   |
@@ -1634,7 +1618,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | --- | --- | --- |
 | `amount` | `System.Double` |   |
 | `ascension` | `System.Int64` |   |
-| `bCosts` | `Il2CppStructArray`1<BigDouble>` |   |
+| `bCosts` | `Il2CppStructArray<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
 | `got` | `BigDouble` |   |
 | `id` | `System.Int32` |   |
 | `maxProgress` | `BigDouble` |   |
@@ -1653,66 +1637,40 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 
+### `RuneType`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+
+### `RuneUpgrade`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `CanBuy` | `System.Boolean` |   |
+| `Inventory` | `InventoryData` |   |
+| `Minerals` | `MineralsData` |   |
+| `buyAmount` | `BigDouble` |   |
+| `cost` | `BigDouble` |   |
+| `effect` | `BigDouble` |   |
+| `effectNext` | `BigDouble` |   |
+| `level` | `BigDouble` |   |
+| `rune` | `RuneType` |   |
+| `type` | `RuneUpgradeType` |   |
+
 ### `RuneUpgradeType`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 
-### `SettingsData`
+### `SacriStat`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `BrightText` | `System.Boolean` |   |
-| `MuteMusic` | `System.Boolean` |   |
-| `MuteSound` | `System.Boolean` |   |
-| `VolumeMusic` | `System.Single` |   |
-| `VolumeSound` | `System.Single` |   |
-| `achPopup` | `System.Boolean` |   |
-| `antiFlicker` | `System.Boolean` |   |
-| `brightText` | `System.Boolean` |   |
-| `darkMode` | `System.Boolean` |   |
-| `digitsAnim` | `System.Boolean` |   |
-| `dimMode` | `System.Boolean` |   |
-| `disabledGameNotif` | `List`1<NotificationType>` | list of NotificationType append `.<numeric-index>` |
-| `doubleClickTo` | `List`1<DoubleClickOption>` | list of DoubleClickOption append `.<numeric-index>` |
-| `fps` | `System.Boolean` |   |
-| `gameNotification` | `System.Boolean` |   |
-| `hiddenConfirmation` | `List`1<DialogConfirmationType>` | list of DialogConfirmationType append `.<numeric-index>` |
-| `hiddenTabs` | `List`1<BlockMenuType>` | list of BlockMenuType append `.<numeric-index>` |
-| `hideAnim` | `List`1<AnimationOption>` | list of AnimationOption append `.<numeric-index>` |
-| `hidePrestigeAnim` | `List`1<PrestigeType>` | list of PrestigeType append `.<numeric-index>` |
-| `hotkeyAsc` | `UnityEngine.KeyCode` |   |
-| `hotkeyBuy` | `UnityEngine.KeyCode` |   |
-| `hotkeyEternate` | `UnityEngine.KeyCode` |   |
-| `hotkeyInfinite` | `UnityEngine.KeyCode` |   |
-| `hotkeyMacroPause` | `UnityEngine.KeyCode` |   |
-| `hotkeyMacroPlay` | `UnityEngine.KeyCode` |   |
-| `hotkeyMacroStop` | `UnityEngine.KeyCode` |   |
-| `hotkeyPrestige` | `UnityEngine.KeyCode` |   |
-| `hotkeyProm1` | `UnityEngine.KeyCode` |   |
-| `hotkeyProm2` | `UnityEngine.KeyCode` |   |
-| `hotkeyProm3` | `UnityEngine.KeyCode` |   |
-| `hotkeyProm4` | `UnityEngine.KeyCode` |   |
-| `hotkeyUnite` | `UnityEngine.KeyCode` |   |
-| `hotkeys` | `System.Boolean` |   |
-| `musicMinimized` | `System.Boolean` |   |
-| `notation` | `NotationEnum` |   |
-| `notificationDot` | `System.Boolean` |   |
-| `notifications` | `System.Boolean` |   |
-| `oneClickTo` | `List`1<OneClickOption>` | list of OneClickOption append `.<numeric-index>` |
-| `reduceSidebar` | `System.Boolean` |   |
-| `resetSpeedOnWarp` | `System.Boolean` |   |
-| `safetyLock` | `List`1<PrestigeType>` | list of PrestigeType append `.<numeric-index>` |
-| `screenOrientation` | `UnityEngine.ScreenOrientation` |   |
-| `screenResolutionId` | `System.Int32` |   |
-| `seasonalTheme` | `System.Boolean` |   |
-| `showTooltip` | `System.Boolean` |   |
-| `skinDisplayMode` | `SkinDisplayMode` |   |
-| `soundMinimized` | `System.Boolean` |   |
-| `tutorials` | `System.Boolean` |   |
-| `uiScale` | `System.Single` |   |
-| `volumeMusic` | `System.Single` |   |
-| `volumeSound` | `System.Single` |   |
+| `score` | `BigDouble` |   |
+| `showable` | `System.Boolean` |   |
+| `stat` | `ZodiacStats` |   |
+| `value` | `BigDouble` |   |
 
 ### `ShopSlotData`
 
@@ -1720,7 +1678,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | --- | --- | --- |
 | `Cost` | `System.Int32` |   |
 | `CurrentValue` | `System.Int32` |   |
-| `ITEMS` | `List`1<ShopSlotData>` | list of ShopSlotData append `.<numeric-index>` |
 | `Inventory` | `InventoryData` |   |
 | `KeyName` | `System.String` |   |
 | `NextValue` | `System.Int32` |   |
@@ -1728,15 +1685,37 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `Step` | `System.Int32` |   |
 | `baseVal` | `System.Int32` |   |
 | `cost` | `System.Int32` |   |
-| `costFormula` | `Func`3<System.Int32, System.Int32, System.Int32>` |   |
 | `id` | `System.Int32` |   |
 | `maxStep` | `System.Int32` |   |
-| `saveCoroutine` | `UnityEngine.Coroutine` |   |
+
+### `SingEffect`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `effect` | `BigDouble` |   |
+| `initValue` | `BigDouble` |   |
+| `subType` | `SingEffectSubtype` |   |
+| `type` | `SingEffectType` |   |
+| `unlocked` | `System.Boolean` |   |
 
 ### `SingEffectSubtype`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
+
+### `SingEffectType`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+
+### `SingFactor`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Unlocked` | `System.Boolean` |   |
+| `baseValue` | `BigDouble` |   |
+| `factor` | `BigDouble` |   |
+| `type` | `SingFactorType` |   |
 
 ### `SingFactorType`
 
@@ -1747,11 +1726,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Elements` | `ElementsData` |   |
-| `Minerals` | `MineralsData` |   |
-| `Plague` | `PlagueData` |   |
-| `Singularity` | `SingularityData` |   |
-| `Tarot` | `TarotData` |   |
 | `Unlocked` | `System.Boolean` |   |
 | `id` | `System.Int32` |   |
 | `reached` | `System.Boolean` |   |
@@ -1763,11 +1737,17 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 
+### `SingularHouse`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `sign` | `AstroSignType` |   |
+
 ### `SingularZodiac`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `ActiveStats` | `List`1<SingularZodiacStatType>` | list of SingularZodiacStatType append `.<numeric-index>` |
+| `ActiveStats` | `List<SingularZodiacStatType>` | list/array of SingularZodiacStatType append `.<numeric-index>` |
 | `Element` | `AstroElementType` |   |
 | `IsEmpty` | `System.Boolean` |   |
 | `Score` | `BigDouble` |   |
@@ -1790,7 +1770,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `EffectsUnlocked` | `System.Boolean` |   |
 | `HousesUnlocked` | `System.Boolean` |   |
 | `MilestonesUnlocked` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
 | `ReadyPart` | `System.Single` |   |
 | `ReadyPartNext` | `System.Single` |   |
 | `SingMultGainNext` | `BigDouble` |   |
@@ -1798,7 +1777,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `SingReadyNext` | `System.Boolean` |   |
 | `SingStarted` | `System.Boolean` |   |
 | `SingZodiacsUnlocked` | `System.Boolean` |   |
-| `Singularity` | `SingularityData` |   |
 | `TreeUnlocked` | `System.Boolean` |   |
 | `Unlocked` | `System.Boolean` |   |
 | `UsedZodiacCount` | `System.Int32` |   |
@@ -1806,36 +1784,34 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `atomsGain` | `BigDouble` |   |
 | `atomsThreshold` | `BigDouble` |   |
 | `atomsThresholdNextSing` | `BigDouble` |   |
-| `buffsAndPenalties` | `List`1<BuffPenalty>` | list of BuffPenalty append `.<numeric-index>` |
-| `defaultSingZodiacStats` | `Dictionary`2<SingularZodiacStatType, BigDouble>` | dictionary keyed by SingularZodiacStatType, values BigDouble append `.<string|integer|enum-key>` |
-| `houses` | `Dictionary`2<AstroSignType, SingularHouse>` | dictionary keyed by AstroSignType, values SingularHouse append `.<string|integer|enum-key>` |
-| `housesInventory` | `Dictionary`2<AstroSignType, SingularZodiac>` | dictionary keyed by AstroSignType, values SingularZodiac append `.<string|integer|enum-key>` |
-| `inventory` | `Dictionary`2<System.Int32, SingularZodiac>` | dictionary keyed by System.Int32, values SingularZodiac append `.<string|integer|enum-key>` |
+| `buffsAndPenalties` | `List<BuffPenalty>` | list/array of BuffPenalty append `.<numeric-index>` |
+| `houses` | `Dictionary<AstroSignType, SingularHouse>` | dictionary keyed by AstroSignType, values SingularHouse append `.<string|integer|enum-key>` |
+| `housesInventory` | `Dictionary<AstroSignType, SingularZodiac>` | dictionary keyed by AstroSignType, values SingularZodiac append `.<string|integer|enum-key>` |
+| `inventory` | `Dictionary<System.Int32, SingularZodiac>` | dictionary keyed by System.Int32, values SingularZodiac append `.<string|integer|enum-key>` |
 | `localSpeed` | `BigDouble` |   |
 | `localSpeedBonus` | `BigDouble` |   |
 | `localSpeedPow` | `BigDouble` |   |
 | `luck` | `BigDouble` |   |
 | `luckConversionRate` | `BigDouble` |   |
 | `maxAtoms` | `BigDouble` |   |
-| `processResetSing` | `System.Boolean` |   |
-| `singBonusesAtoms` | `Dictionary`2<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
-| `singBonusesAtomsActive` | `Dictionary`2<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
-| `singBonusesSing` | `Dictionary`2<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
-| `singBonusesSingActive` | `Dictionary`2<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
-| `singBonusesSingMult` | `Dictionary`2<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
-| `singBonusesSingMultActive` | `Dictionary`2<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
-| `singFactors` | `Dictionary`2<SingFactorType, SingFactor>` | dictionary keyed by SingFactorType, values SingFactor append `.<string|integer|enum-key>` |
-| `singMilestonesAtoms` | `List`1<SingMilestone>` | list of SingMilestone append `.<numeric-index>` |
-| `singMilestonesProg` | `List`1<SingMilestone>` | list of SingMilestone append `.<numeric-index>` |
-| `singMilestonesSingularity` | `List`1<SingMilestone>` | list of SingMilestone append `.<numeric-index>` |
+| `singBonusesAtoms` | `Dictionary<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
+| `singBonusesAtomsActive` | `Dictionary<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
+| `singBonusesSing` | `Dictionary<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
+| `singBonusesSingActive` | `Dictionary<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
+| `singBonusesSingMult` | `Dictionary<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
+| `singBonusesSingMultActive` | `Dictionary<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
+| `singFactors` | `Dictionary<SingFactorType, SingFactor>` | dictionary keyed by SingFactorType, values SingFactor append `.<string|integer|enum-key>` |
+| `singMilestonesAtoms` | `List<SingMilestone>` | list/array of SingMilestone append `.<numeric-index>` |
+| `singMilestonesProg` | `List<SingMilestone>` | list/array of SingMilestone append `.<numeric-index>` |
+| `singMilestonesSingularity` | `List<SingMilestone>` | list/array of SingMilestone append `.<numeric-index>` |
 | `singMult` | `BigDouble` |   |
 | `singMultNext` | `BigDouble` |   |
 | `singZodiacLevel` | `BigDouble` |   |
-| `singZodiacRarityValues` | `Dictionary`2<ZodiacRarityType, BigDouble>` | dictionary keyed by ZodiacRarityType, values BigDouble append `.<string|integer|enum-key>` |
+| `singZodiacRarityValues` | `Dictionary<ZodiacRarityType, BigDouble>` | dictionary keyed by ZodiacRarityType, values BigDouble append `.<string|integer|enum-key>` |
 | `singularity` | `BigDouble` |   |
 | `totalNerf` | `BigDouble` |   |
-| `totalSingZodiacStats` | `Dictionary`2<SingularZodiacStatType, BigDouble>` | dictionary keyed by SingularZodiacStatType, values BigDouble append `.<string|integer|enum-key>` |
-| `treeNodes` | `Dictionary`2<System.Int32, SingularityTreeNode>` | dictionary keyed by System.Int32, values SingularityTreeNode append `.<string|integer|enum-key>` |
+| `totalSingZodiacStats` | `Dictionary<SingularZodiacStatType, BigDouble>` | dictionary keyed by SingularZodiacStatType, values BigDouble append `.<string|integer|enum-key>` |
+| `treeNodes` | `Dictionary<System.Int32, SingularityTreeNode>` | dictionary keyed by System.Int32, values SingularityTreeNode append `.<string|integer|enum-key>` |
 | `zodiacLevelMult` | `BigDouble` |   |
 | `zodiacLevelSing` | `BigDouble` |   |
 
@@ -1851,26 +1827,19 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `CanAscend` | `System.Boolean` |   |
 | `CanBuy` | `System.Boolean` |   |
 | `DisplayId` | `System.String` |   |
-| `Next` | `List`1<SingularityTreeNode>` | list of SingularityTreeNode append `.<numeric-index>` |
-| `Prev` | `List`1<SingularityTreeNode>` | list of SingularityTreeNode append `.<numeric-index>` |
+| `Next` | `List<SingularityTreeNode>` | list/array of SingularityTreeNode append `.<numeric-index>` |
+| `Prev` | `List<SingularityTreeNode>` | list/array of SingularityTreeNode append `.<numeric-index>` |
 | `Purchased` | `System.Boolean` |   |
-| `Singularity` | `SingularityData` |   |
 | `ascension` | `System.Int32` |   |
 | `baseCost` | `BigDouble` |   |
 | `cost` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
 | `id` | `System.Int32` |   |
 | `level` | `System.Int32` |   |
-| `maxLevel` | `System.Int32` |   |
-| `next` | `Il2CppStructArray`1<System.Int32>` |   |
-| `prev` | `Il2CppStructArray`1<System.Int32>` |   |
+| `next` | `Il2CppStructArray<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
+| `prev` | `Il2CppStructArray<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `type` | `SingularityTreeBonusType` |   |
 | `unlocked` | `System.Boolean` |   |
-
-### `SkinDisplayMode`
-
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
 
 ### `SpecialMineral`
 
@@ -1883,6 +1852,42 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `Tarot` | `TarotData` |   |
 | `baseEffect` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
+| `level` | `BigDouble` |   |
+| `type` | `SpecialMineralType` |   |
+
+### `SpecialMineralProgression`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Attacks` | `AttacksData` |   |
+| `CanBuy` | `System.Boolean` |   |
+| `Minerals` | `MineralsData` |   |
+| `Tarot` | `TarotData` |   |
+| `baseLevel` | `BigDouble` |   |
+| `buyAmount` | `BigDouble` |   |
+| `cost` | `BigDouble` |   |
+| `effect` | `BigDouble` |   |
+| `expNext` | `BigDouble` |   |
+| `expNow` | `BigDouble` |   |
+| `type` | `SpecialMineralType` |   |
+| `upgradeLevel` | `BigDouble` |   |
+
+### `SpecialMineralSacrifice`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `Inventory` | `InventoryData` |   |
+| `MaxLevel` | `System.Boolean` |   |
+| `Minerals` | `MineralsData` |   |
+| `Name` | `System.String` |   |
+| `Sacrificed` | `System.Boolean` |   |
+| `Singularity` | `SingularityData` |   |
+| `Tarot` | `TarotData` |   |
+| `baseEffect` | `BigDouble` |   |
+| `effect` | `BigDouble` |   |
+| `effect2` | `BigDouble` |   |
+| `exp` | `BigDouble` |   |
+| `expNext` | `BigDouble` |   |
 | `level` | `BigDouble` |   |
 | `type` | `SpecialMineralType` |   |
 
@@ -1927,14 +1932,48 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 
+### `TarotArtifact`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `CanFlush` | `System.Boolean` |   |
+| `CooldownPercent` | `BigDouble` |   |
+| `GoldResource` | `BigDouble&` |   |
+| `IsMaxPart` | `System.Boolean` |   |
+| `KeyName` | `System.String` |   |
+| `Resource` | `BigDouble&` |   |
+| `artTotalEffect1` | `BigDouble` |   |
+| `artTotalEffect2` | `BigDouble` |   |
+| `cooldown` | `BigDouble` |   |
+| `goldGainEst` | `BigDouble` |   |
+| `level` | `System.Int32` |   |
+| `maxCooldown` | `BigDouble` |   |
+| `maxLevel` | `System.Int32` |   |
+| `nerfPower` | `BigDouble` |   |
+| `parts` | `List<TarotArtifactPart>` | list/array of TarotArtifactPart append `.<numeric-index>` |
+| `selectedId` | `System.Int32` |   |
+| `totalLevel` | `BigDouble` |   |
+| `type` | `TarotSuitType` |   |
+
+### `TarotArtifactPart`
+
+| Property | CLR type | Collection path extension |
+| --- | --- | --- |
+| `CanUpgrade` | `System.Boolean` |   |
+| `GoldResource` | `BigDouble&` |   |
+| `ImagePath` | `System.String` |   |
+| `KeyName` | `System.String` |   |
+| `cost` | `BigDouble` |   |
+| `effect` | `BigDouble` |   |
+| `id` | `System.Int32` |   |
+| `level` | `BigDouble` |   |
+| `type` | `TarotSuitType` |   |
+| `unlocked` | `System.Boolean` |   |
+
 ### `TarotCard`
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
-| `BackgroundColor` | `UnityEngine.Color` |   |
-| `Elements` | `ElementsData` |   |
-| `Inventory` | `InventoryData` |   |
 | `IsActive` | `System.Boolean` |   |
 | `KeyEffect1` | `System.String` |   |
 | `KeyEffect1Challenge` | `System.String` |   |
@@ -1943,14 +1982,8 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `KeyEffect1Useless` | `System.String` |   |
 | `KeyEffect2` | `System.String` |   |
 | `KeyName` | `System.String` |   |
-| `Minerals` | `MineralsData` |   |
 | `Passive` | `System.Boolean` |   |
-| `Plague` | `PlagueData` |   |
 | `RomanNumber` | `System.String` |   |
-| `Settings` | `SettingsData` |   |
-| `Sprite` | `UnityEngine.Sprite` |   |
-| `Tarot` | `TarotData` |   |
-| `Unity` | `UnityData` |   |
 | `Unlocked` | `System.Boolean` |   |
 | `activeTime` | `BigDouble` |   |
 | `cooldownTime` | `BigDouble` |   |
@@ -1982,7 +2015,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `KeyPenalty` | `System.String` |   |
 | `KeyReward` | `System.String` |   |
 | `Locked` | `System.Boolean` |   |
-| `Tarot` | `TarotData` |   |
 | `complete` | `System.Boolean` |   |
 | `effect` | `BigDouble` |   |
 | `goal` | `BigDouble` |   |
@@ -1998,8 +2030,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | --- | --- | --- |
 | `InChallenge` | `System.Boolean` |   |
 | `SelectedChallenge` | `TarotChallenge` |   |
-| `Tarot` | `TarotData` |   |
-| `challenges` | `List`1<TarotChallenge>` | list of TarotChallenge append `.<numeric-index>` |
+| `challenges` | `List<TarotChallenge>` | list/array of TarotChallenge append `.<numeric-index>` |
 | `selectedId` | `System.Int32` |   |
 | `suitEffect` | `BigDouble` |   |
 | `totalCompleted` | `System.Int32` |   |
@@ -2010,7 +2041,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | --- | --- | --- |
 | `PendingChallenge` | `TarotChallenge` |   |
 | `SelectedType` | `TarotSuitType` |   |
-| `Tarot` | `TarotData` |   |
 | `bestLevel13` | `BigDouble` |   |
 | `bestQLog` | `BigDouble` |   |
 | `bestRarityCup4Value` | `BigDouble` |   |
@@ -2031,15 +2061,11 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
-| `Minerals` | `MineralsData` |   |
-| `Plague` | `PlagueData` |   |
-| `Singularity` | `SingularityData` |   |
 | `TarotArtifactsUnlocked` | `System.Boolean` |   |
 | `TarotChallengesUnlocked` | `System.Boolean` |   |
 | `TarotUpgradesUnlocked` | `System.Boolean` |   |
 | `Unlocked` | `System.Boolean` |   |
-| `artifacts` | `Dictionary`2<TarotSuitType, TarotArtifact>` | dictionary keyed by TarotSuitType, values TarotArtifact append `.<string|integer|enum-key>` |
+| `artifacts` | `Dictionary<TarotSuitType, TarotArtifact>` | dictionary keyed by TarotSuitType, values TarotArtifact append `.<string|integer|enum-key>` |
 | `cards` | `TarotCards` |   |
 | `challenges` | `TarotChallenges` |   |
 | `cups` | `BigDouble` |   |
@@ -2069,7 +2095,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `logpowSword` | `BigDouble` |   |
 | `logpowWand` | `BigDouble` |   |
 | `loversMult` | `BigDouble` |   |
-| `onCardDrawed` | `UnityEngine.Events.UnityEvent` |   |
 | `pentacles` | `BigDouble` |   |
 | `prietressBuff` | `BigDouble` |   |
 | `resetResources` | `System.Boolean` |   |
@@ -2091,7 +2116,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `MaxCardCount` | `System.Int32` |   |
 | `Tarot` | `TarotData` |   |
 | `UnlockedCardsCount` | `System.Int32` |   |
-| `cards` | `List`1<TarotCard>` | list of TarotCard append `.<numeric-index>` |
+| `cards` | `List<TarotCard>` | list/array of TarotCard append `.<numeric-index>` |
 | `chance` | `System.Double` |   |
 | `chanceNew` | `System.Double` |   |
 | `chanceOld` | `System.Double` |   |
@@ -2107,7 +2132,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 | `type` | `TarotSuitType` |   |
-| `upgrades` | `List`1<TarotUpgrade>` | list of TarotUpgrade append `.<numeric-index>` |
+| `upgrades` | `List<TarotUpgrade>` | list/array of TarotUpgrade append `.<numeric-index>` |
 
 ### `TarotUpgrade`
 
@@ -2116,8 +2141,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `Bought` | `System.Boolean` |   |
 | `CanBuy` | `System.Boolean` |   |
 | `MeetReq` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
-| `Tarot` | `TarotData` |   |
 | `cost` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
 | `effectNext` | `BigDouble` |   |
@@ -2159,14 +2182,14 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
-| `AllTrials` | `IEnumerable`1<UnityTrial>` |   |
-| `BonusTrials` | `List`1<UnityTrial>` | list of UnityTrial append `.<numeric-index>` |
+| `AllTrials` | `IEnumerable<UnityTrial>` |   |
+| `BonusTrials` | `List<UnityTrial>` | list/array of UnityTrial append `.<numeric-index>` |
 | `CanBreak` | `System.Boolean` |   |
-| `EasyTrials` | `List`1<UnityTrial>` | list of UnityTrial append `.<numeric-index>` |
-| `HardTrials` | `List`1<UnityTrial>` | list of UnityTrial append `.<numeric-index>` |
-| `InsaneTrials` | `List`1<UnityTrial>` | list of UnityTrial append `.<numeric-index>` |
-| `MediumTrials` | `List`1<UnityTrial>` | list of UnityTrial append `.<numeric-index>` |
-| `NextZodiacs` | `List`1<UnityZodiac>` | list of UnityZodiac append `.<numeric-index>` |
+| `EasyTrials` | `List<UnityTrial>` | list/array of UnityTrial append `.<numeric-index>` |
+| `HardTrials` | `List<UnityTrial>` | list/array of UnityTrial append `.<numeric-index>` |
+| `InsaneTrials` | `List<UnityTrial>` | list/array of UnityTrial append `.<numeric-index>` |
+| `MediumTrials` | `List<UnityTrial>` | list/array of UnityTrial append `.<numeric-index>` |
+| `NextZodiacs` | `List<UnityZodiac>` | list/array of UnityZodiac append `.<numeric-index>` |
 | `PlanetLoadoutUnlocked` | `System.Boolean` |   |
 | `PlanetShopUnlocked` | `System.Boolean` |   |
 | `SacrificeUnlocked` | `System.Boolean` |   |
@@ -2175,47 +2198,42 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `TrialCountPending` | `System.Int32` |   |
 | `TrialsUnlocked` | `System.Boolean` |   |
 | `UsedSlotCount` | `System.Int32` |   |
-| `_allTrials` | `IEnumerable`1<UnityTrial>` |   |
-| `ach229rewds` | `Il2CppStructArray`1<BigDouble>` |   |
-| `ach230rewds` | `Il2CppStructArray`1<BigDouble>` |   |
-| `ach231rewds` | `Il2CppStructArray`1<BigDouble>` |   |
-| `ach232rewds` | `Il2CppStructArray`1<BigDouble>` |   |
+| `_allTrials` | `IEnumerable<UnityTrial>` |   |
+| `ach229rewds` | `Il2CppStructArray<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
+| `ach230rewds` | `Il2CppStructArray<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
+| `ach231rewds` | `Il2CppStructArray<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
+| `ach232rewds` | `Il2CppStructArray<BigDouble>` | list/array of BigDouble append `.<numeric-index>` |
 | `astrodust` | `BigDouble` |   |
 | `baseQuality` | `BigDouble` |   |
 | `buyAmmoDonuts` | `System.Int32` |   |
 | `completeTrials` | `System.Int32` |   |
 | `currentLevel` | `BigDouble` |   |
-| `defaultPlanetStats` | `Dictionary`2<PlanetStatType, BigDouble>` | dictionary keyed by PlanetStatType, values BigDouble append `.<string|integer|enum-key>` |
-| `defaultStats` | `Dictionary`2<ZodiacStats, BigDouble>` | dictionary keyed by ZodiacStats, values BigDouble append `.<string|integer|enum-key>` |
-| `donuts` | `List`1<UnityPlanetShopDonut>` | list of UnityPlanetShopDonut append `.<numeric-index>` |
+| `donuts` | `List<UnityPlanetShopDonut>` | list/array of UnityPlanetShopDonut append `.<numeric-index>` |
 | `ecSaved` | `System.Int32` |   |
-| `elementsQualityPowers` | `Dictionary`2<AstroElementType, BigDouble>` | dictionary keyed by AstroElementType, values BigDouble append `.<string|integer|enum-key>` |
-| `expFactors` | `Dictionary`2<ExpFactorType, ExpFactor>` | dictionary keyed by ExpFactorType, values ExpFactor append `.<string|integer|enum-key>` |
+| `elementsQualityPowers` | `Dictionary<AstroElementType, BigDouble>` | dictionary keyed by AstroElementType, values BigDouble append `.<string|integer|enum-key>` |
+| `expFactors` | `Dictionary<ExpFactorType, ExpFactor>` | dictionary keyed by ExpFactorType, values ExpFactor append `.<string|integer|enum-key>` |
 | `expFill` | `System.Double` |   |
 | `expNext` | `BigDouble` |   |
 | `expNow` | `BigDouble` |   |
 | `infiniteTimes` | `System.Int32` |   |
-| `inventory` | `Dictionary`2<System.Int32, UnityZodiac>` | dictionary keyed by System.Int32, values UnityZodiac append `.<string|integer|enum-key>` |
+| `inventory` | `Dictionary<System.Int32, UnityZodiac>` | dictionary keyed by System.Int32, values UnityZodiac append `.<string|integer|enum-key>` |
 | `luck` | `BigDouble` |   |
-| `maxRarityAdd` | `BigDouble` |   |
 | `passiveUnities` | `BigDouble` |   |
-| `planetLoadouts` | `List`1<PlanetLoadoutSlot>` | list of PlanetLoadoutSlot append `.<numeric-index>` |
-| `planets` | `Dictionary`2<AstroPlanetType, UnityPlanet>` | dictionary keyed by AstroPlanetType, values UnityPlanet append `.<string|integer|enum-key>` |
-| `planetsInventory` | `Dictionary`2<AstroPlanetType, UnityZodiac>` | dictionary keyed by AstroPlanetType, values UnityZodiac append `.<string|integer|enum-key>` |
+| `planetLoadouts` | `List<PlanetLoadoutSlot>` | list/array of PlanetLoadoutSlot append `.<numeric-index>` |
+| `planets` | `Dictionary<AstroPlanetType, UnityPlanet>` | dictionary keyed by AstroPlanetType, values UnityPlanet append `.<string|integer|enum-key>` |
+| `planetsInventory` | `Dictionary<AstroPlanetType, UnityZodiac>` | dictionary keyed by AstroPlanetType, values UnityZodiac append `.<string|integer|enum-key>` |
 | `powerMultFromTrial3` | `BigDouble` |   |
 | `ppBonus` | `BigDouble` |   |
-| `processResetUnity` | `System.Boolean` |   |
-| `rarityValues` | `Dictionary`2<ZodiacRarityType, BigDouble>` | dictionary keyed by ZodiacRarityType, values BigDouble append `.<string|integer|enum-key>` |
-| `sacriStats` | `Dictionary`2<ZodiacStats, SacriStat>` | dictionary keyed by ZodiacStats, values SacriStat append `.<string|integer|enum-key>` |
+| `rarityValues` | `Dictionary<ZodiacRarityType, BigDouble>` | dictionary keyed by ZodiacRarityType, values BigDouble append `.<string|integer|enum-key>` |
+| `sacriStats` | `Dictionary<ZodiacStats, SacriStat>` | dictionary keyed by ZodiacStats, values SacriStat append `.<string|integer|enum-key>` |
 | `sacrificedZodiacs` | `System.Double` |   |
 | `sellMulti` | `BigDouble` |   |
-| `spaceship` | `List`1<UnityPlanetShopSpaceship>` | list of UnityPlanetShopSpaceship append `.<numeric-index>` |
-| `statFormulas` | `Dictionary`2<ZodiacStats, Func`2<BigDouble, BigDouble>>` | dictionary keyed by ZodiacStats, values Func`2<BigDouble, BigDouble> append `.<string|integer|enum-key>` |
+| `spaceship` | `List<UnityPlanetShopSpaceship>` | list/array of UnityPlanetShopSpaceship append `.<numeric-index>` |
 | `stateUniteSafety` | `System.Boolean` |   |
-| `stats` | `List`1<UnityStat>` | list of UnityStat append `.<numeric-index>` |
-| `totalPlanetStats` | `Dictionary`2<PlanetStatType, BigDouble>` | dictionary keyed by PlanetStatType, values BigDouble append `.<string|integer|enum-key>` |
-| `totalStats` | `Dictionary`2<ZodiacStats, BigDouble>` | dictionary keyed by ZodiacStats, values BigDouble append `.<string|integer|enum-key>` |
-| `trial` | `Dictionary`2<TrialType, List`1<UnityTrial>>` | dictionary keyed by TrialType, values List`1<UnityTrial> append `.<string|integer|enum-key>` |
+| `stats` | `List<UnityStat>` | list/array of UnityStat append `.<numeric-index>` |
+| `totalPlanetStats` | `Dictionary<PlanetStatType, BigDouble>` | dictionary keyed by PlanetStatType, values BigDouble append `.<string|integer|enum-key>` |
+| `totalStats` | `Dictionary<ZodiacStats, BigDouble>` | dictionary keyed by ZodiacStats, values BigDouble append `.<string|integer|enum-key>` |
+| `trial` | `Dictionary<TrialType, List<UnityTrial>>` | dictionary keyed by TrialType, values List<UnityTrial> append `.<string|integer|enum-key>` |
 | `trial5PowerLimit` | `System.Boolean` |   |
 | `unities` | `BigDouble` |   |
 | `unityBonuses` | `UnityBonuses` |   |
@@ -2231,8 +2249,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | --- | --- | --- |
 | `bonusType` | `PlanetStatType` |   |
 | `bonusValue` | `BigDouble` |   |
-| `bonuses` | `Dictionary`2<ValueTuple`2<AstroPlanetType, AstroSeasonType>, ValueTuple`2<PlanetStatType, BigDouble>>` | dictionary keyed by ValueTuple`2<AstroPlanetType, AstroSeasonType>, values ValueTuple`2<PlanetStatType, BigDouble> append `.<string|integer|enum-key>` |
-| `rulers` | `Dictionary`2<AstroPlanetType, Il2CppStructArray`1<AstroSignType>>` | dictionary keyed by AstroPlanetType, values Il2CppStructArray`1<AstroSignType> append `.<string|integer|enum-key>` |
 | `type` | `AstroPlanetType` |   |
 | `unlocked` | `System.Boolean` |   |
 
@@ -2276,8 +2292,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
 | `GroupUnlocked` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
-| `Unity` | `UnityData` |   |
 | `Unlocked` | `System.Boolean` |   |
 | `canBeAchieved` | `System.Boolean` |   |
 | `completed` | `System.Boolean` |   |
@@ -2302,7 +2316,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `rarityPlus` | `BigDouble` |   |
 | `score` | `BigDouble` |   |
 | `sign` | `AstroSignType` |   |
-| `stats` | `List`1<ZodiacStat>` | list of ZodiacStat append `.<numeric-index>` |
+| `stats` | `List<ZodiacStat>` | list/array of ZodiacStat append `.<numeric-index>` |
 
 ### `ZodiacConfiguration`
 

@@ -11,7 +11,13 @@ if (-not (Test-Path -LiteralPath $cecilPath) -or -not (Test-Path -LiteralPath $a
 }
 
 Add-Type -Path $cecilPath
-$assembly = [Mono.Cecil.AssemblyDefinition]::ReadAssembly($assemblyPath)
+$resolver = [Mono.Cecil.DefaultAssemblyResolver]::new()
+foreach ($searchDirectory in @((Join-Path $GameDir 'BepInEx\core'), (Join-Path $GameDir 'BepInEx\interop'), (Join-Path $GameDir 'Revolution Idle_Data\Managed'), $GameDir)) {
+    if (Test-Path -LiteralPath $searchDirectory) { $resolver.AddSearchDirectory($searchDirectory) }
+}
+$readerParameters = [Mono.Cecil.ReaderParameters]::new()
+$readerParameters.AssemblyResolver = $resolver
+$assembly = [Mono.Cecil.AssemblyDefinition]::ReadAssembly($assemblyPath, $readerParameters)
 $module = $assembly.MainModule
 
 function Get-TypeDefinition([Mono.Cecil.TypeReference]$reference) {
@@ -21,7 +27,7 @@ function Get-TypeDefinition([Mono.Cecil.TypeReference]$reference) {
 function Get-TypeLabel([Mono.Cecil.TypeReference]$reference) {
     if ($reference -is [Mono.Cecil.ArrayType]) { return "$(Get-TypeLabel $reference.ElementType)[]" }
     if ($reference.IsGenericInstance) {
-        $baseName = $reference.Name
+        $baseName = $reference.Name -replace ('`' + '[0-9]+$'), ''
         $arguments = @($reference.GenericArguments | ForEach-Object { Get-TypeLabel $_ }) -join ', '
         return "$baseName<$arguments>"
     }
@@ -29,6 +35,7 @@ function Get-TypeLabel([Mono.Cecil.TypeReference]$reference) {
 }
 
 function Test-ExcludedType([Mono.Cecil.TypeReference]$reference) {
+    if ($reference.FullName -like 'UnityEngine.*' -or $reference.FullName -like 'Il2CppSystem.Func*' -or $reference.FullName -like 'Il2CppSystem.Action*' -or $reference.FullName -in @('UnityEngine.Events.UnityEvent', 'UnityEngine.Events.UnityEventBase', 'System.Delegate', 'System.MulticastDelegate', 'Il2CppSystem.Delegate', 'Il2CppSystem.MulticastDelegate')) { return $true }
     $current = Get-TypeDefinition $reference
     while ($null -ne $current) {
         if ($current.FullName -in @('System.Delegate', 'System.MulticastDelegate', 'Il2CppSystem.Delegate', 'Il2CppSystem.MulticastDelegate', 'UnityEngine.Object', 'UnityEngine.Events.UnityEventBase')) { return $true }
@@ -48,7 +55,7 @@ function Get-EligibleProperties([Mono.Cecil.TypeDefinition]$type) {
     $current = $type
     while ($null -ne $current -and $current.FullName -notin @('System.Object', 'System.ValueType', 'Il2CppSystem.Object', 'Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase', 'UnityEngine.Object', 'UnityEngine.Events.UnityEventBase', 'Il2CppSystem.Delegate', 'Il2CppSystem.MulticastDelegate', 'System.Delegate', 'System.MulticastDelegate')) {
         foreach ($property in $current.Properties) {
-            if ($names.Add($property.Name) -and $null -ne $property.GetMethod -and $property.GetMethod.IsPublic -and $property.Parameters.Count -eq 0 -and -not (Test-ExcludedProperty $property)) { [void]$result.Add($property) }
+            if ($names.Add($property.Name) -and $null -ne $property.GetMethod -and $property.GetMethod.IsPublic -and -not $property.GetMethod.IsStatic -and $property.Parameters.Count -eq 0 -and -not (Test-ExcludedProperty $property)) { [void]$result.Add($property) }
         }
         $current = Get-TypeDefinition $current.BaseType
     }
@@ -56,23 +63,32 @@ function Get-EligibleProperties([Mono.Cecil.TypeDefinition]$type) {
     return @($result)
 }
 
-function Get-GameplayType([Mono.Cecil.TypeReference]$reference) {
-    if ($reference -is [Mono.Cecil.ArrayType]) { return Get-GameplayType $reference.ElementType }
+function Get-GameplayTypes([Mono.Cecil.TypeReference]$reference) {
+    if ($reference -is [Mono.Cecil.ArrayType]) { return @(Get-GameplayTypes $reference.ElementType) }
     if ($reference.IsGenericInstance) {
-        foreach ($argument in $reference.GenericArguments) { $found = Get-GameplayType $argument; if ($null -ne $found) { return $found } }
-        return $null
+        $found = [System.Collections.Generic.List[object]]::new()
+        foreach ($argument in $reference.GenericArguments) { foreach ($type in @(Get-GameplayTypes $argument)) { if ($null -ne $type -and -not ($found | Where-Object FullName -eq $type.FullName)) { [void]$found.Add($type) } } }
+        return @($found)
     }
     $definition = Get-TypeDefinition $reference
-    if ($null -ne $definition -and $definition.Module.Assembly.Name.Name -eq 'Assembly-CSharp') { return $definition }
-    return $null
+    if ($null -ne $definition -and $definition.Module.Assembly.Name.Name -eq 'Assembly-CSharp') { return @($definition) }
+    return @()
 }
 
 function Get-CollectionDescription([Mono.Cecil.TypeReference]$reference) {
     if ($reference -is [Mono.Cecil.ArrayType]) { return "array of $(Get-TypeLabel $reference.ElementType)" }
     if (-not $reference.IsGenericInstance) { return $null }
-    if ($reference.Name.StartsWith('List')) { return "list of $(Get-TypeLabel $reference.GenericArguments[0])" }
+    if ($reference.Name.StartsWith('List') -or $reference.FullName.StartsWith('Il2CppInterop.Runtime.InteropTypes.Arrays.')) { return "list/array of $(Get-TypeLabel $reference.GenericArguments[0])" }
     if ($reference.Name.StartsWith('Dictionary')) { return "dictionary keyed by $(Get-TypeLabel $reference.GenericArguments[0]), values $(Get-TypeLabel $reference.GenericArguments[1])" }
     return $null
+}
+
+function Test-SupportedDictionaryKey([Mono.Cecil.TypeReference]$reference) {
+    if (-not $reference.IsGenericInstance -or -not $reference.Name.StartsWith('Dictionary')) { return $false }
+    $key = $reference.GenericArguments[0]
+    $keyDefinition = Get-TypeDefinition $key
+    if ($key.FullName -eq 'System.String' -or $key.IsEnum -or ($null -ne $keyDefinition -and $keyDefinition.IsEnum)) { return $true }
+    return $key.FullName -in @('System.SByte', 'System.Byte', 'System.Int16', 'System.UInt16', 'System.Int32', 'System.UInt32', 'System.Int64', 'System.UInt64')
 }
 
 $gameData = @($module.Types | Where-Object FullName -eq 'GameData')[0]
@@ -86,8 +102,7 @@ while ($pending.Count -gt 0) {
     $properties = @(Get-EligibleProperties $type)
     $reachable[$type.FullName] = [pscustomobject]@{ Type = $type; Properties = $properties }
     foreach ($property in $properties) {
-        $child = Get-GameplayType $property.PropertyType
-        if ($null -ne $child -and -not $reachable.ContainsKey($child.FullName)) { $pending.Enqueue($child) }
+        foreach ($child in @(Get-GameplayTypes $property.PropertyType)) { if (-not $reachable.ContainsKey($child.FullName)) { $pending.Enqueue($child) } }
     }
 }
 
@@ -127,7 +142,8 @@ foreach ($entry in $sortedEntries) {
     foreach ($property in $entry.Properties) {
         $typeLabel = Get-TypeLabel $property.PropertyType
         $collection = Get-CollectionDescription $property.PropertyType
-        $extension = if ($null -eq $collection) { '' } elseif ($collection.StartsWith('dictionary')) { 'append `.<string|integer|enum-key>`' } else { 'append `.<numeric-index>`' }
+        $dictionary = $property.PropertyType.IsGenericInstance -and $property.PropertyType.Name.StartsWith('Dictionary')
+        $extension = if ($null -eq $collection) { '' } elseif ($dictionary -and -not (Test-SupportedDictionaryKey $property.PropertyType)) { 'whole-property only; not key-addressable' } elseif ($dictionary) { 'append `.<string|integer|enum-key>`' } else { 'append `.<numeric-index>`' }
         $lines.Add([string]::Format('| `{0}` | `{1}` | {2} {3} |', $property.Name, $typeLabel, $collection, $extension))
     }
     $lines.Add('')
