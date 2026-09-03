@@ -567,6 +567,10 @@ async fn run_with_controls_and_lifecycle(
         &mut paused,
     );
     let mut hotkey_channel_open = true;
+    // A non-stop command pulled off `commands` while an invocation was in
+    // flight (see below) can't be pushed back onto the mpsc channel, so it
+    // waits here and takes priority over the channel on the next iteration.
+    let mut pending_command: Option<ScriptCommand> = None;
 
     loop {
         if *shutdown.borrow() {
@@ -592,7 +596,9 @@ async fn run_with_controls_and_lifecycle(
             }
         }
 
-        let command = if session.is_some() && !paused {
+        let command = if let Some(command) = pending_command.take() {
+            Some(command)
+        } else if session.is_some() && !paused {
             match commands.try_recv() {
                 Ok(command) => Some(command),
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
@@ -776,6 +782,27 @@ async fn run_with_controls_and_lifecycle(
                     }
                     false
                 }
+                // Dropping `invocation` here (by not polling it again) cancels
+                // whatever the script is awaiting, including rev.sleep, so
+                // Stop/Exit take effect immediately instead of waiting for the
+                // current invocation (and its sleep) to finish on its own.
+                command = commands.recv() => match command {
+                    Some(ScriptCommand::Stop) => true,
+                    Some(ScriptCommand::Exit) => {
+                        capture_state.set_enabled(false);
+                        controls.actions_paused.set_paused(false);
+                        script_running.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                    Some(other) => {
+                        pending_command = Some(other);
+                        false
+                    }
+                    None => {
+                        script_running.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                },
             }
         };
 
@@ -2202,6 +2229,101 @@ mod tests {
             .await;
 
         fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stop_command_cancels_an_in_flight_sleep_immediately() {
+        use std::fs;
+        use tokio::sync::{mpsc, watch};
+
+        let sleeping_path = std::env::temp_dir().join(format!(
+            "rev-idle-stop-sleep-test-{}.js",
+            std::process::id(),
+        ));
+        fs::write(
+            &sleeping_path,
+            r#"(async () => {
+                rev.click(1, 1);
+                await rev.sleep(5000);
+                rev.click(2, 2);
+            })"#,
+        )
+        .unwrap();
+        let followup_path = std::env::temp_dir().join(format!(
+            "rev-idle-stop-sleep-followup-{}.js",
+            std::process::id(),
+        ));
+        fs::write(&followup_path, r#"(() => rev.click(3, 3))"#).unwrap();
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        struct ClickMouse(mpsc::UnboundedSender<(i32, i32)>);
+        impl MouseInput for ClickMouse {
+            fn click_at(
+                &mut self,
+                x: i32,
+                y: i32,
+                _button: Button,
+            ) -> Result<(), String> {
+                self.0.send((x, y)).map_err(|error| error.to_string())
+            }
+        }
+
+        let mouse: SharedMouse = Rc::new(RefCell::new(ClickMouse(event_tx)));
+        let (command_tx, command_rx) = mpsc::channel(32);
+        let (_state_tx, state_rx) = watch::channel(State::default());
+        let local = tokio::task::LocalSet::new();
+
+        let runner_path = sleeping_path.clone();
+        let load_path = followup_path.clone();
+        local
+            .run_until(async move {
+                let runner = tokio::task::spawn_local(run_with_mouse(
+                    command_rx,
+                    state_rx,
+                    runner_path,
+                    mouse,
+                    Duration::from_millis(5),
+                ));
+
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    (1, 1),
+                    "script did not start before sleeping"
+                );
+
+                command_tx.send(ScriptCommand::Stop).await.unwrap();
+                // Queued right behind Stop: if Stop had to wait for the 5s
+                // sleep to finish before being processed, this Load (and the
+                // click its script makes) would too, and the timeout below
+                // would fire well before either could complete.
+                command_tx
+                    .send(ScriptCommand::Load(load_path))
+                    .await
+                    .unwrap();
+
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_millis(200), event_rx.recv())
+                        .await
+                        .expect("Stop did not cancel the in-flight sleep promptly")
+                        .unwrap(),
+                    (3, 3),
+                    "follow-up script did not run after Stop"
+                );
+
+                command_tx.send(ScriptCommand::Exit).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), runner)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            })
+            .await;
+
+        fs::remove_file(sleeping_path).unwrap();
+        fs::remove_file(followup_path).unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
