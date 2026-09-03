@@ -35,7 +35,7 @@ function Get-TypeLabel([Mono.Cecil.TypeReference]$reference) {
 }
 
 function Test-ExcludedType([Mono.Cecil.TypeReference]$reference) {
-    if ($reference.FullName -like 'UnityEngine.*' -or $reference.FullName -like 'Il2CppSystem.Func*' -or $reference.FullName -like 'Il2CppSystem.Action*' -or $reference.FullName -in @('UnityEngine.Events.UnityEvent', 'UnityEngine.Events.UnityEventBase', 'System.Delegate', 'System.MulticastDelegate', 'Il2CppSystem.Delegate', 'Il2CppSystem.MulticastDelegate')) { return $true }
+    if ($reference.FullName -in @('UnityEngine.Object', 'UnityEngine.Events.UnityEventBase', 'System.Delegate', 'System.MulticastDelegate', 'Il2CppSystem.Delegate', 'Il2CppSystem.MulticastDelegate')) { return $true }
     $current = Get-TypeDefinition $reference
     while ($null -ne $current) {
         if ($current.FullName -in @('System.Delegate', 'System.MulticastDelegate', 'Il2CppSystem.Delegate', 'Il2CppSystem.MulticastDelegate', 'UnityEngine.Object', 'UnityEngine.Events.UnityEventBase')) { return $true }

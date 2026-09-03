@@ -1,7 +1,7 @@
 # Complete state path reference
 
 Generated deterministically from `BepInEx/interop/Assembly-CSharp.dll` by `generate-state-reference.ps1`.
-Reachable gameplay types: **140**. Properties: **1591**.
+Reachable gameplay types: **140**. Properties: **1596**.
 
 ## Path grammar and JSON behavior
 
@@ -351,7 +351,9 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
+| `BodyColor` | `UnityEngine.Color` |   |
 | `Depth` | `System.Int32` |   |
+| `HeaderColor` | `UnityEngine.Color` |   |
 | `Index` | `System.Int32` |   |
 | `Initialized` | `System.Boolean` |   |
 | `IsFirst` | `System.Boolean` |   |
@@ -359,7 +361,9 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `Progress` | `System.Single` |   |
 | `Scope` | `List<Block>` | list/array of Block append `.<numeric-index>` |
 | `State` | `BlockStateType` |   |
+| `bodyColor` | `UnityEngine.Color` |   |
 | `fields` | `List<BlockField>` | list/array of BlockField append `.<numeric-index>` |
+| `headerColor` | `UnityEngine.Color` |   |
 | `progress` | `System.Single` |   |
 | `state` | `BlockStateType` |   |
 | `type` | `BlockType` |   |
@@ -1974,6 +1978,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 | Property | CLR type | Collection path extension |
 | --- | --- | --- |
+| `BackgroundColor` | `UnityEngine.Color` |   |
 | `IsActive` | `System.Boolean` |   |
 | `KeyEffect1` | `System.String` |   |
 | `KeyEffect1Challenge` | `System.String` |   |
