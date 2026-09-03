@@ -322,7 +322,7 @@ impl ScriptSession {
                         }),
                     )?;
                     let state_wrapper: Function = ctx.eval(
-                        "(raw) => async (...keys) => Object.freeze(await raw(...keys))",
+                        "(raw) => async (...keys) => Object.freeze(JSON.parse(await raw(...keys)))",
                     )?;
                     let state: Function = state_wrapper.call((state_raw,))?;
                     rev.set("state", state)?;
@@ -977,6 +977,72 @@ mod tests {
         let (controls, events) = recording_controls();
         session.invoke(State::default(), controls).await.unwrap();
         assert_eq!(*events.borrow(), vec![HostEvent::Resize(1280, 720), HostEvent::Click(10, 20, Button::Right)]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rev_state_parses_mixed_json_and_freezes_only_top_level() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let _guard = telemetry::TEST_SERVER_LOCK.lock().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:19841").unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let length = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..length]);
+            assert!(request.contains("/state?key=score&key=items"));
+            let body = r#"{"score":42,"nested":{"ok":true},"items":[1,"two",null]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        let session = ScriptSession::new(
+            r#"(async (rev) => {
+                const state = await rev.state("score", "items");
+                if (!Object.isFrozen(state)) throw new Error("state is not frozen");
+                if (state.score !== 42 || state.nested.ok !== true || state.items[1] !== "two" || state.items[2] !== null) {
+                    throw new Error("mixed state was not preserved");
+                }
+                if (Object.keys(state).length !== 3) throw new Error("selected keys were lost");
+            })"#,
+        )
+        .await
+        .unwrap();
+        let (controls, _) = recording_controls();
+
+        session.invoke(State::default(), controls).await.unwrap();
+        server.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rev_state_rejects_malformed_json_as_promise_error() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        use std::thread;
+
+        let _guard = telemetry::TEST_SERVER_LOCK.lock().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:19841").unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let body = "not json";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        let session = ScriptSession::new(r#"(async (rev) => await rev.state())"#)
+            .await
+            .unwrap();
+        let (controls, _) = recording_controls();
+
+        let error = session.invoke(State::default(), controls).await.unwrap_err();
+        assert!(error.contains("state"), "missing state rejection: {error}");
+        server.join().unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
