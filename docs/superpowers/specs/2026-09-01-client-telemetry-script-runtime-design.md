@@ -7,7 +7,7 @@ Turn the Rust client into a small local automation host with two concurrent resp
 1. Receive Revolution Idle score telemetry over UDP and keep the latest valid game state in Rust.
 2. Run one reloadable JavaScript automation function repeatedly in QuickJS.
 
-The JavaScript function receives explicit `(rev, memory)` arguments. `rev.state` is the latest telemetry snapshot captured immediately before that invocation. The script can also click at absolute screen coordinates and sleep asynchronously, while `memory` retains script-owned state between invocations. Console commands control which script is loaded and whether it is running, paused, or stopped.
+The JavaScript function takes no arguments and reads a `rev` global installed on `globalThis` before each call. `rev.state` is the latest telemetry snapshot captured immediately before that invocation. The script can also click at absolute screen coordinates and sleep asynchronously, while top-level JavaScript globals retain script-owned state between invocations. Console commands control which script is loaded and whether it is running, paused, or stopped.
 
 ## Scope
 
@@ -28,7 +28,7 @@ This version does not:
 - find, focus, resize, or move the game window;
 - accept telemetry from non-loopback interfaces;
 - run multiple scripts concurrently;
-- persist JavaScript memory across client process restarts;
+- persist JavaScript state across client process restarts;
 - watch script files or reload them automatically;
 - forcibly interrupt a JavaScript invocation that has not finished;
 - provide a graphical control interface.
@@ -42,7 +42,7 @@ The runtime consists of:
 - a Tokio watch channel carrying the latest `State` snapshot;
 - a UDP receiver task that parses valid telemetry and replaces the watch channel value;
 - a console input task that parses lines into `ScriptCommand` values and sends them through an MPSC channel;
-- a script runner that owns both channel receivers and one Enigo input backend, and exclusively owns the current `AsyncRuntime`, `AsyncContext`, script function, and `memory` object.
+- a script runner that owns both channel receivers and one Enigo input backend, and exclusively owns the current `AsyncRuntime`, `AsyncContext`, and script function.
 
 The watch channel directly represents the required latest-valid-state semantics: a newer UDP update replaces the previous value instead of building a queue. Immediately before an invocation, the script runner clones `state_rx.borrow_and_update()` and builds that invocation's `rev` object from the clone. The script never owns a lock or channel handle.
 
@@ -67,20 +67,21 @@ Malformed UTF-8, malformed JSON, and payloads without a string `score` field do 
 A script file is a JavaScript expression that evaluates to one callable function. The normal form is:
 
 ```javascript
-(async (rev, memory) => {
-    memory.ticks ??= 0;
-    memory.ticks += 1;
+let ticks = 0;
 
-    if (rev.state.score !== null && memory.ticks === 10) {
+(async () => {
+    ticks += 1;
+
+    if (rev.state.score !== null && ticks === 10) {
         rev.click(1200, 800, "left");
         await rev.sleep(250);
     }
 })
 ```
 
-The evaluated function is retained by the script runner and invoked repeatedly as `script(rev, memory)`. Immediately before each call, the runner clones the latest watch value and constructs a fresh frozen `rev` object containing that snapshot and the host functions. The return value may be synchronous or a promise; the runner awaits promise settlement before beginning the next invocation. After every completed or failed invocation, the runner waits 50 ms before returning to the top of the main loop. Commands that arrive during the invocation or delay remain queued for that next safe boundary.
+The evaluated function is retained by the script runner and invoked repeatedly as `script()`. Immediately before each call, the runner clones the latest watch value, constructs a fresh frozen `rev` object containing that snapshot and the host functions, and installs it as the `rev` global on `globalThis`. The return value may be synchronous or a promise; the runner awaits promise settlement before beginning the next invocation. After every completed or failed invocation, the runner waits 50 ms before returning to the top of the main loop. Commands that arrive during the invocation or delay remain queued for that next safe boundary.
 
-The client does not install `rev`, `memory`, or the script function on `globalThis`. A script may use ordinary JavaScript globals deliberately. Those globals follow the same lifetime as the QuickJS context.
+The client installs `rev` on `globalThis` before each invocation, replacing the previous invocation's value, but does not install the script function there. A script relies on ordinary top-level JavaScript globals (declared with `let`/`const`, or assigned directly on `globalThis`) to retain its own state between invocations, including reassigning `rev` itself, though the runner overwrites `rev` again before the next invocation. Those globals follow the same lifetime as the QuickJS context.
 
 The default initial script path is `script.js` in the client's working directory. A first command-line argument replaces that path. Failure to load the initial script leaves the script runner stopped while the UDP receiver and console remain available, allowing the user to retry with `reload` or choose another file with `load`.
 
@@ -88,7 +89,7 @@ The default initial script path is `script.js` in the client's working directory
 
 ### `rev`
 
-`rev` is a fresh frozen host-owned object created for each invocation. Its state snapshot and API properties cannot be replaced by the script.
+`rev` is a fresh frozen host-owned object created for each invocation and installed as a global before the script function is called. Its state snapshot and API properties cannot be replaced by the script, though the script may reassign the `rev` global itself; the runner overwrites it again before the next invocation.
 
 #### `rev.state`
 
@@ -114,11 +115,11 @@ The Enigo call is synchronous because it is short. Invalid arguments and operati
 
 Returns a JavaScript promise backed by `tokio::time::sleep`. The value must be a finite, non-negative integer representable as `u64` milliseconds. Invalid values throw a catchable JavaScript exception. Sleeping does not block UDP reception or console input.
 
-### `memory`
+### Persisted script state
 
-`memory` is a mutable plain JavaScript object created with each fresh QuickJS context. The same object is passed to every invocation in that context. It may contain arbitrary JavaScript values and is not serialized to Rust or disk.
+A script has no host-provided object for persisting state between invocations. Instead, it declares ordinary top-level JavaScript globals (`let`, `const`, or direct `globalThis` assignment) in the same QuickJS context the script runner keeps alive. Nothing here is serialized to Rust or disk.
 
-`memory` and ordinary JavaScript globals survive normal invocations, script exceptions, pause, and resume. They are destroyed by load, reload, stop, or process exit. The per-invocation `rev` object is not retained by Rust after that invocation settles.
+These globals survive normal invocations, script exceptions, pause, and resume. They are destroyed by load, reload, stop, or process exit. The per-invocation `rev` object is not retained by Rust after that invocation settles.
 
 ## Script Lifecycle
 
@@ -133,20 +134,20 @@ Commands are processed in arrival order. The console prints confirmation after a
 #### `pause`
 
 - From `Running`, wait for the active invocation, then enter `Paused`.
-- Preserve the QuickJS runtime, context, script function, `memory`, and JavaScript globals. The next invocation still receives a fresh `rev`.
+- Preserve the QuickJS runtime, context, script function, and JavaScript globals. The next invocation still receives a fresh `rev`.
 - From `Paused`, do nothing and report that the script is already paused.
 - From `Stopped`, do nothing and report that no script is running.
 
 #### `resume`
 
-- From `Paused`, enter `Running` using the preserved context and memory.
+- From `Paused`, enter `Running` using the preserved context and globals.
 - From `Running`, do nothing and report that the script is already running.
 - From `Stopped`, do nothing and instruct the user to use `reload` or `load`.
 
 #### `reload`
 
 - Wait for the active invocation when necessary.
-- Destroy the current QuickJS runtime, context, globals, `rev`, and `memory`.
+- Destroy the current QuickJS runtime, context, globals, and `rev`.
 - Read the current script path again, create a fresh runtime and context, and start in `Running`.
 - Work from `Running`, `Paused`, or `Stopped`.
 - On failure, report the error and remain `Stopped` with the current path retained so another `reload` retries it.
@@ -154,14 +155,14 @@ Commands are processed in arrival order. The console prints confirmation after a
 #### `stop`
 
 - Wait for the active invocation when necessary.
-- Destroy the current QuickJS runtime, context, globals, `rev`, and `memory`.
+- Destroy the current QuickJS runtime, context, globals, and `rev`.
 - Enter `Stopped` while retaining the current script path for a later `reload`.
 - From `Stopped`, do nothing and report that the script is already stopped.
 
 #### `load <script-path>`
 
 - Wait for the active invocation when necessary.
-- Destroy the current QuickJS runtime, context, globals, `rev`, and `memory`.
+- Destroy the current QuickJS runtime, context, globals, and `rev`.
 - Adopt `<script-path>` as the current script path, create a fresh runtime and context, and start in `Running`.
 - Work from `Running`, `Paused`, or `Stopped`.
 - Treat the remainder of the console line as the path and strip one matching pair of surrounding quotes, allowing Windows paths with spaces.
@@ -174,7 +175,7 @@ The UDP receiver and watch channel continue unchanged across pause, resume, relo
 - UDP bind and unrecoverable receive failures terminate the client with the operating-system error visible.
 - Invalid telemetry is reported and ignored without clearing the latest valid state.
 - Enigo initialization failure prevents the script runner from starting. Script file read errors, syntax errors, non-callable evaluation results, and QuickJS initialization errors fail that load operation and leave the runner `Stopped`.
-- An exception from a normal script invocation is printed, but the same context and memory remain alive and the loop continues after 50 ms.
+- An exception from a normal script invocation is printed, but the same context and globals remain alive and the loop continues after 50 ms.
 - A click or sleep argument error becomes a JavaScript exception that the script may catch.
 - Unknown or malformed console commands print a short usage line and do not change state.
 - Ctrl+C terminates the whole client. The `stop` console command stops only the script runtime.
@@ -184,7 +185,7 @@ The UDP receiver and watch channel continue unchanged across pause, resume, relo
 - `client/src/main.rs`: current-thread Tokio setup, `LocalSet`, task startup, fatal task coordination, initial script path, and Ctrl+C handling.
 - `client/src/udp.rs`: `State`, the private UDP payload type, loopback socket binding, payload deserialization, local sequence ownership, and watch-channel sends.
 - `client/src/console.rs`: `ScriptCommand`, console-line parsing, and asynchronous stdin command forwarding.
-- `client/src/script.rs`: watch and command receivers, QuickJS ownership, lifecycle state machine, script loading, per-invocation `rev` construction, persistent `memory`, repeated invocation, host API bindings, and Enigo integration.
+- `client/src/script.rs`: watch and command receivers, QuickJS ownership, lifecycle state machine, script loading, per-invocation `rev` construction, repeated invocation, host API bindings, and Enigo integration.
 
 No window-control module or direct Windows window API dependency is added.
 
@@ -204,7 +205,7 @@ Create the console module, parse the five supported commands, and forward valid 
 
 ### Task 3: Build the persistent JavaScript session
 
-Create the QuickJS session in the script module, expose a fresh `(rev, memory)` call where `rev.state` is the per-invocation snapshot, retain the script function and memory object, await synchronous and asynchronous results, and bind sleep and mouse input.
+Create the QuickJS session in the script module, expose a fresh `rev` global and a zero-argument call where `rev.state` is the per-invocation snapshot, retain the script function, await synchronous and asynchronous results, and bind sleep and mouse input.
 
 ### Task 4: Run the lifecycle loop and wire the client
 
@@ -224,16 +225,16 @@ Task 1 automated tests cover:
 Tasks 2 through 4 automated tests cover:
 
 - a script expression must evaluate to a callable function;
-- repeated invocation with explicit `(rev, memory)` arguments;
-- `memory` and JavaScript globals persisting across invocations and pause/resume;
+- repeated zero-argument invocation with a fresh `rev` global;
+- JavaScript globals persisting across invocations and pause/resume;
 - `rev.state` remaining stable during one invocation and observing a newer watch value on the next invocation;
-- script exceptions not stopping later invocations or resetting memory;
+- script exceptions not stopping later invocations or resetting globals;
 - sleep yielding without blocking UDP progress;
 - a 50 ms delay after both successful and failed script invocations;
 - console command parsing, including quoted and unquoted paths with spaces;
 - running, paused, and stopped lifecycle transitions, including representative no-op commands;
-- load, reload, and stop destroying the previous context and memory;
+- load, reload, and stop destroying the previous context and globals;
 - failed load and reload leaving the runner stopped with the expected current path;
 - mouse validation and calls through a fake input backend so tests never move the real cursor.
 
-A bounded Windows manual check verifies one real mouse click, pausing after an active invocation, resuming with preserved memory, reloading with reset memory, loading a different script, and stopping without stopping UDP telemetry.
+A bounded Windows manual check verifies one real mouse click, pausing after an active invocation, resuming with preserved globals, reloading with reset globals, loading a different script, and stopping without stopping UDP telemetry.

@@ -1,5 +1,3 @@
-
-
 class ClickSteps {
   constructor() {
     this.steps = [];
@@ -10,7 +8,7 @@ class ClickSteps {
     return this;
   }
 
-  async apply(rev) {
+  async apply() {
     for (const step of this.steps) {
       rev.click(step.x, step.y);
       await rev.sleep(100);
@@ -120,10 +118,10 @@ class DT {
     ].join(';');
   }
 
-  async apply(rev) {
+  async apply() {
     rev.write_clipboard(this.string);
     console.log(`Applied DT steps with string: ${this.string}`);
-    await DT.applicationSteps.apply(rev);
+    await DT.applicationSteps.apply();
   }
 }
 
@@ -143,13 +141,16 @@ const DT_SN = [
 ];
 
 
-(async (rev, memory) => {
-  if (!memory.init) {
+let initialized = false;
+
+(async () => {
+  if (!initialized) {
     rev.resize(1270, 600);
-    memory.init = true;
+    initialized = true;
   }
 
-  console.log('Applying DT steps');
-  await new DT().ctr(1).top(1, 2, 3, 4).apply(rev);
+  // console.log('Applying DT steps');
+  // await new DT().ctr(1).top(1, 2, 3, 4).apply();
+  console.log(JSON.stringify((await rev.state("DTP")), null, 2));
   rev.stop();
 })

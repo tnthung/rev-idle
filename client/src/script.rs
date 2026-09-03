@@ -222,7 +222,6 @@ struct ScriptSession {
     // Rust drops fields in declaration order. Persistent roots must be gone
     // before their context and runtime.
     script: Persistent<Function<'static>>,
-    memory: Persistent<Object<'static>>,
     freeze: Persistent<Function<'static>>,
     context: AsyncContext,
     _runtime: AsyncRuntime,
@@ -248,7 +247,7 @@ impl ScriptSession {
         let context = AsyncContext::full(&runtime).await?;
         let source = source.to_owned();
 
-        let (script, memory, freeze) = context
+        let (script, freeze) = context
             .async_with(async move |ctx| {
                 let console = Object::new(ctx.clone())?;
                 console.set(
@@ -269,11 +268,9 @@ impl ScriptSession {
 
                 let freeze: Function = ctx.eval("Object.freeze")?;
                 let script: Function = ctx.eval(source)?;
-                let memory = Object::new(ctx.clone())?;
 
                 Ok::<_, rquickjs::Error>((
                     Persistent::save(&ctx, script),
-                    Persistent::save(&ctx, memory),
                     Persistent::save(&ctx, freeze),
                 ))
             })
@@ -281,7 +278,6 @@ impl ScriptSession {
 
         Ok(Self {
             script,
-            memory,
             freeze,
             context,
             _runtime: runtime,
@@ -296,7 +292,6 @@ impl ScriptSession {
     ) -> Result<bool, String> {
         let controls = controls.into();
         let script = self.script.clone();
-        let memory = self.memory.clone();
         let freeze = self.freeze.clone();
         let stop_requested = Rc::new(Cell::new(false));
         let stop_request = stop_requested.clone();
@@ -305,7 +300,6 @@ impl ScriptSession {
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<()> = async {
                     let script: Function = script.restore(&ctx)?;
-                    let memory: Object = memory.restore(&ctx)?;
                     let freeze: Function = freeze.restore(&ctx)?;
 
                     let rev = Object::new(ctx.clone())?;
@@ -449,8 +443,9 @@ impl ScriptSession {
                     )?;
 
                     let _: Object = freeze.call((rev.clone(),))?;
+                    ctx.globals().set("rev", rev)?;
 
-                    let result: MaybePromise = script.call((rev, memory))?;
+                    let result: MaybePromise = script.call(())?;
                     let _: Value = result.into_future().await?;
                     Ok(())
                 }
@@ -973,7 +968,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn resize_and_click_sends_one_event_without_window_work() {
-        let session = ScriptSession::new(r#"((rev) => { rev.resize(1280, 720); rev.click(10, 20, "right"); })"#).await.unwrap();
+        let session = ScriptSession::new(r#"(() => { rev.resize(1280, 720); rev.click(10, 20, "right"); })"#).await.unwrap();
         let (controls, events) = recording_controls();
         session.invoke(State::default(), controls).await.unwrap();
         assert_eq!(*events.borrow(), vec![HostEvent::Resize(1280, 720), HostEvent::Click(10, 20, Button::Right)]);
@@ -1001,7 +996,7 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
         let session = ScriptSession::new(
-            r#"(async (rev) => {
+            r#"(async () => {
                 const state = await rev.state("score", "items");
                 if (!Object.isFrozen(state)) throw new Error("state is not frozen");
                 if (state.score !== 42 || state.items[1].ok !== true || state.items[2] !== null) {
@@ -1039,7 +1034,7 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
         let session = ScriptSession::new(
-            r#"(async (rev) => {
+            r#"(async () => {
                 Object.freeze = (value) => value;
                 const state = await rev.state();
                 if (!Object.isFrozen(state)) throw new Error("state is not natively frozen");
@@ -1070,7 +1065,7 @@ mod tests {
             );
             stream.write_all(response.as_bytes()).unwrap();
         });
-        let session = ScriptSession::new(r#"(async (rev) => await rev.state())"#)
+        let session = ScriptSession::new(r#"(async () => await rev.state())"#)
             .await
             .unwrap();
         let (controls, _) = recording_controls();
@@ -1082,14 +1077,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn resize_rejects_invalid_dimensions_without_window_work() {
-        for source in [r#"((rev) => rev.resize(0, 720))"#, r#"((rev) => rev.resize(-1, 720))"#, r#"((rev) => rev.resize(1.5, 720))"#, r#"((rev) => rev.resize(Infinity, 720))"#] {
+        for source in [r#"(() => rev.resize(0, 720))"#, r#"(() => rev.resize(-1, 720))"#, r#"(() => rev.resize(1.5, 720))"#, r#"(() => rev.resize(Infinity, 720))"#] {
             let (controls, events) = recording_controls();
             let session = ScriptSession::new(source).await.unwrap();
             assert!(session.invoke(State::default(), controls).await.is_err());
             assert!(events.borrow().is_empty());
         }
         let (controls, events) = recording_controls();
-        let session = ScriptSession::new(r#"((rev) => rev.resize(1280, 720))"#).await.unwrap();
+        let session = ScriptSession::new(r#"(() => rev.resize(1280, 720))"#).await.unwrap();
         session.invoke(State::default(), controls).await.unwrap();
         assert_eq!(*events.borrow(), vec![HostEvent::Resize(1280, 720)]);
     }
@@ -1097,7 +1092,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn script_errors_include_message_and_stack() {
         let session = ScriptSession::new(
-            r#"((rev) => { function fail() { throw new Error("boom"); } fail(); })"#,
+            r#"(() => { function fail() { throw new Error("boom"); } fail(); })"#,
         )
         .await
         .unwrap();
@@ -1116,7 +1111,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn async_script_errors_include_message_and_stack() {
         let session = ScriptSession::new(
-            r#"(async (rev) => { await rev.sleep(0); function fail() { throw new Error("async boom"); } fail(); })"#,
+            r#"(async () => { await rev.sleep(0); function fail() { throw new Error("async boom"); } fail(); })"#,
         )
         .await
         .unwrap();
@@ -1174,7 +1169,7 @@ mod tests {
             "rev-idle-no-initial-script-test-{}.js",
             std::process::id(),
         ));
-        fs::write(&path, r#"((rev) => rev.click(1, 1, "left"))"#).unwrap();
+        fs::write(&path, r#"(() => rev.click(1, 1, "left"))"#).unwrap();
 
         let clicks = Rc::new(RefCell::new(Vec::new()));
         let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
@@ -1223,18 +1218,14 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn passes_fresh_state_and_preserves_memory_and_globals() {
+    async fn passes_fresh_state_and_preserves_globals() {
         let source = r#"
-            (async (rev, memory) => {
+            (async () => {
                 if (!Object.isFrozen(rev)) {
                     throw new Error("rev and state must be frozen");
                 }
-                memory.count = (memory.count ?? 0) + 1;
                 globalThis.count = (globalThis.count ?? 0) + 1;
-                if (memory.count !== globalThis.count) {
-                    throw new Error("persistent state mismatch");
-                }
-                if (memory.count === 2) {
+                if (globalThis.count === 2) {
                     rev.click(-12, 34, "right");
                 }
                 await rev.sleep(1);
@@ -1286,11 +1277,11 @@ mod tests {
             r#"
                 (() => {
                     Object.freeze = (value) => value;
-                    return ((rev, memory) => {
+                    return (() => {
                         if (!Object.isFrozen(rev)) {
                             throw new Error("rev and state must be frozen");
                         }
-                        memory.calls = (memory.calls ?? 0) + 1;
+                        globalThis.calls = (globalThis.calls ?? 0) + 1;
                     });
                 })()
             "#,
@@ -1312,12 +1303,12 @@ mod tests {
     async fn invocation_replacing_freeze_does_not_affect_later_host_objects() {
         let session = ScriptSession::new(
             r#"
-                ((rev, memory) => {
+                (() => {
                     if (!Object.isFrozen(rev)) {
                         throw new Error("rev and state must be frozen");
                     }
-                    memory.calls = (memory.calls ?? 0) + 1;
-                    if (memory.calls === 1) {
+                    globalThis.calls = (globalThis.calls ?? 0) + 1;
+                    if (globalThis.calls === 1) {
                         Object.freeze = (value) => value;
                     }
                 })
@@ -1337,16 +1328,16 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn invocation_error_does_not_reset_memory() {
+    async fn invocation_error_does_not_reset_globals() {
         let session = ScriptSession::new(
             r#"
-                ((rev, memory) => {
-                    memory.count = (memory.count ?? 0) + 1;
-                    if (memory.count === 1) {
+                (() => {
+                    globalThis.count = (globalThis.count ?? 0) + 1;
+                    if (globalThis.count === 1) {
                         throw new Error("first call");
                     }
-                    if (memory.count !== 2) {
-                        throw new Error("memory was reset");
+                    if (globalThis.count !== 2) {
+                        throw new Error("globals were reset");
                     }
                 })
             "#,
@@ -1369,7 +1360,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn missing_state_fields_are_null() {
         let session = ScriptSession::new(
-            r#"((rev) => {
+            r#"(() => {
                 if (typeof rev.state !== "function") {
                     throw new Error("state must be callable");
                 }
@@ -1387,7 +1378,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn console_log_and_error_accept_multiple_values() {
         let session = ScriptSession::new(
-            r#"((rev) => {
+            r#"(() => {
                 console.log("hello", { answer: 42 });
                 console.error("problem", 7);
             })"#,
@@ -1404,7 +1395,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn sleep_is_awaited_and_non_callable_source_is_rejected() {
         let session = ScriptSession::new(
-            "(async (rev, memory) => { await rev.sleep(20); })",
+            "(async () => { await rev.sleep(20); })",
         )
         .await
         .unwrap();
@@ -1432,10 +1423,10 @@ mod tests {
         let clicks = Rc::new(RefCell::new(Vec::new()));
 
         for source in [
-            r#"((rev) => rev.click(1, 2, "side"))"#,
-            r#"((rev) => rev.click(1.5, 2, "left"))"#,
-            r#"((rev) => rev.sleep(-1))"#,
-            r#"((rev) => rev.sleep(1.5))"#,
+            r#"(() => rev.click(1, 2, "side"))"#,
+            r#"(() => rev.click(1.5, 2, "left"))"#,
+            r#"(() => rev.sleep(-1))"#,
+            r#"(() => rev.sleep(1.5))"#,
         ] {
             let session = ScriptSession::new(source).await.unwrap();
             let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
@@ -1451,7 +1442,7 @@ mod tests {
     async fn clickn_repeats_clicks_and_allows_zero_clicks() {
         let session = ScriptSession::new(
             r#"
-                (async (rev) => {
+                (async () => {
                     await rev.clickn(10, 20, 3, "right");
                     await rev.clickn(30, 40, 0);
                 })
@@ -1482,7 +1473,7 @@ mod tests {
     async fn scroll_posts_through_window_control_for_named_axes_and_short_aliases() {
         let session = ScriptSession::new(
             r#"
-                (async (rev) => {
+                (async () => {
                     await rev.scroll(10, 20, 2, "vertical");
                     await rev.scroll(-30, 40, -1, "h");
                     await rev.scroll(50, -60, 3, "v");
@@ -1510,14 +1501,14 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn repeated_click_and_scroll_arguments_are_validated() {
         for source in [
-            r#"((rev) => rev.clickn(1, 2, -1))"#,
-            r#"((rev) => rev.clickn(1, 2, 1.5))"#,
-            r#"((rev) => rev.clickn(1, 2, Infinity))"#,
-            r#"((rev) => rev.scroll(1.5, 2, 1))"#,
-            r#"((rev) => rev.scroll(1, Infinity, 1))"#,
-            r#"((rev) => rev.scroll(1, 2, 1.5))"#,
-            r#"((rev) => rev.scroll(1, 2, 1, "diagonal"))"#,
-            r#"((rev) => rev.scroll(1, 2, 1, null))"#,
+            r#"(() => rev.clickn(1, 2, -1))"#,
+            r#"(() => rev.clickn(1, 2, 1.5))"#,
+            r#"(() => rev.clickn(1, 2, Infinity))"#,
+            r#"(() => rev.scroll(1.5, 2, 1))"#,
+            r#"(() => rev.scroll(1, Infinity, 1))"#,
+            r#"(() => rev.scroll(1, 2, 1.5))"#,
+            r#"(() => rev.scroll(1, 2, 1, "diagonal"))"#,
+            r#"(() => rev.scroll(1, 2, 1, null))"#,
         ] {
             let session = ScriptSession::new(source).await.unwrap();
             let (controls, events) = recording_controls();
@@ -1530,7 +1521,7 @@ mod tests {
     async fn click_button_defaults_accepts_valid_and_rejects_invalid_values() {
         let session = ScriptSession::new(
             r#"
-                ((rev) => {
+                (() => {
                     for (const button of [null, "side", true, 1, {}, []]) {
                         let threw = false;
                         try {
@@ -1614,9 +1605,9 @@ mod tests {
         fs::write(
             &first,
             r#"
-                ((rev, memory) => {
-                    memory.count = (memory.count ?? 0) + 1;
-                    rev.click(memory.count, 0);
+                (() => {
+                    globalThis.count = (globalThis.count ?? 0) + 1;
+                    rev.click(globalThis.count, 0);
                 })
             "#,
         )
@@ -1624,9 +1615,9 @@ mod tests {
         fs::write(
             &second,
             r#"
-                ((rev, memory) => {
-                    memory.count = (memory.count ?? 0) + 1;
-                    rev.click(memory.count, 0, "right");
+                (() => {
+                    globalThis.count = (globalThis.count ?? 0) + 1;
+                    rev.click(globalThis.count, 0, "right");
                 })
             "#,
         )
@@ -1744,7 +1735,7 @@ mod tests {
         ));
         fs::write(
             &path,
-            r#"(async (rev) => { await rev.sleep(30); rev.click(1, 1); })"#,
+            r#"(async () => { await rev.sleep(30); rev.click(1, 1); })"#,
         )
         .unwrap();
 
@@ -1832,8 +1823,8 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let first = root.join("first.js");
         let second = root.join("second.js");
-        fs::write(&first, r#"((rev) => rev.click(1, 1))"#).unwrap();
-        fs::write(&second, r#"((rev) => rev.click(2, 2, "right"))"#).unwrap();
+        fs::write(&first, r#"(() => rev.click(1, 1))"#).unwrap();
+        fs::write(&second, r#"(() => rev.click(2, 2, "right"))"#).unwrap();
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         struct LifecycleMouse(mpsc::UnboundedSender<()>);
@@ -2082,7 +2073,7 @@ mod tests {
             "rev-idle-stop-test-{}.js",
             std::process::id(),
         ));
-        fs::write(&path, r#"((rev) => { rev.stop(); rev.click(1, 1); })"#).unwrap();
+        fs::write(&path, r#"(() => { rev.stop(); rev.click(1, 1); })"#).unwrap();
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         struct StopMouse(mpsc::UnboundedSender<()>);
@@ -2138,7 +2129,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn write_clipboard_forwards_text_to_host() {
         let session = ScriptSession::new(
-            r#"((rev) => rev.write_clipboard("hello 世界"))"#,
+            r#"(() => rev.write_clipboard("hello 世界"))"#,
         )
         .await
         .unwrap();
@@ -2164,7 +2155,7 @@ mod tests {
         fs::write(
             &path,
             r#"
-                ((rev) => {
+                (() => {
                     rev.click(1, 0, "left");
                     throw new Error("stop after this invocation");
                 })
@@ -2276,7 +2267,7 @@ mod tests {
 
                 fs::write(
                     &missing,
-                    r#"((rev) => rev.click(1, 1, "left"))"#,
+                    r#"(() => rev.click(1, 1, "left"))"#,
                 )
                 .unwrap();
                 command_tx.send(ScriptCommand::Reload).await.unwrap();
