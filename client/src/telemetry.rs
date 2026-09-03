@@ -66,7 +66,7 @@ mod tests {
         let request = server.join().unwrap();
 
         assert_eq!(result.unwrap(), raw);
-        assert!(request.contains("/state?key=score&key=eternity.dtpSpent"));
+        assert_eq!(request.lines().next().unwrap(), "GET /state?key=score&key=eternity.dtpSpent HTTP/1.1");
     }
 
     #[tokio::test(flavor = "current_thread")]
