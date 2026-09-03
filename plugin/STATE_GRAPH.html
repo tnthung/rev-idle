@@ -268,8 +268,6 @@
   .route.active { background: var(--path-soft); }
 
   .route .seg { color: var(--text-dim); }
-  .route .hop { color: var(--text-faint); }
-  .route .hop.list, .route .hop.dict { color: var(--focus); }
   .route.active .seg { color: var(--text); }
 
   .route.alias-route {
@@ -2412,13 +2410,12 @@
     }
   }
 
+  function routeKey(route) {
+    return route.map(collectionSegment).join('.');
+  }
+
   function routeHtml(route, idx) {
-    let html = '<span class="seg">GameData</span>';
-    for (const e of route) {
-      const hopClass = e.kind === 'list' || e.kind === 'dict' || e.kind === 'dict-unkeyed' ? e.kind.startsWith('dict') ? 'dict' : 'list' : '';
-      html += ' <span class="hop ' + hopClass + '">&rarr;' + escapeHtml(collectionSegment(e)) + '&rarr;</span> <span class="seg">' + escapeHtml(e.to) + '</span>';
-    }
-    return '<div class="route" data-idx="' + idx + '">' + html + '</div>';
+    return '<div class="route" data-idx="' + idx + '"><span class="seg">' + escapeHtml(routeKey(route)) + '</span></div>';
   }
 
   function escapeHtml(s) {
@@ -2428,7 +2425,7 @@
   function renderDetail(nodeId) {
     document.getElementById('emptyState')?.remove();
     selectedId = nodeId;
-    currentRoutes = findAllRoutes(nodeId);
+    currentRoutes = findAllRoutes(nodeId).sort((a, b) => a.length - b.length);
     activeRouteIdx = -1;
 
     const outs = (outEdges.get(nodeId) || []).slice().sort((a, b) => a.property.localeCompare(b.property));
