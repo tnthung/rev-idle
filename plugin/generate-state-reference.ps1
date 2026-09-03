@@ -1,6 +1,9 @@
 param(
     [string]$GameDir = 'E:\SteamLibrary\steamapps\common\Revolution Idle',
-    [string]$OutputPath = (Join-Path $PSScriptRoot 'STATE_KEYS.md')
+    [string]$OutputPath = (Join-Path $PSScriptRoot 'STATE_KEYS.md'),
+    [string]$GraphOutputPath = (Join-Path $PSScriptRoot 'STATE_GRAPH.json'),
+    [string]$GraphTemplatePath = (Join-Path $PSScriptRoot 'STATE_GRAPH.template.html'),
+    [string]$GraphViewerOutputPath = (Join-Path $PSScriptRoot 'STATE_GRAPH.html')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -63,6 +66,8 @@ function Get-EligibleProperties([Mono.Cecil.TypeDefinition]$type) {
     return @($result)
 }
 
+$primitiveNodeTypes = @('BigDouble')
+
 function Get-GameplayTypes([Mono.Cecil.TypeReference]$reference) {
     if ($reference -is [Mono.Cecil.ArrayType]) { return @(Get-GameplayTypes $reference.ElementType) }
     if ($reference.IsGenericInstance) {
@@ -72,6 +77,18 @@ function Get-GameplayTypes([Mono.Cecil.TypeReference]$reference) {
     }
     $definition = Get-TypeDefinition $reference
     if ($null -ne $definition -and $definition.Module.Assembly.Name.Name -eq 'Assembly-CSharp') { return @($definition) }
+    return @()
+}
+
+function Get-GraphNodeTypes([Mono.Cecil.TypeReference]$reference) {
+    if ($reference -is [Mono.Cecil.ArrayType]) { return @(Get-GraphNodeTypes $reference.ElementType) }
+    if ($reference.IsGenericInstance) {
+        $found = [System.Collections.Generic.List[object]]::new()
+        foreach ($argument in $reference.GenericArguments) { foreach ($type in @(Get-GraphNodeTypes $argument)) { if ($null -ne $type -and -not ($found | Where-Object FullName -eq $type.FullName)) { [void]$found.Add($type) } } }
+        return @($found)
+    }
+    $definition = Get-TypeDefinition $reference
+    if ($null -ne $definition -and $definition.Module.Assembly.Name.Name -eq 'Assembly-CSharp' -and $definition.Name -notin $primitiveNodeTypes) { return @($definition) }
     return @()
 }
 
@@ -151,3 +168,74 @@ foreach ($entry in $sortedEntries) {
 [void]$lines.RemoveAt($lines.Count - 1)
 [IO.File]::WriteAllLines($OutputPath, $lines, [Text.UTF8Encoding]::new($false))
 Write-Output "Generated $OutputPath ($($reachable.Count) types)."
+
+$graphNodeNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($entry in $reachable.Values) {
+    if ($entry.Type.Name -notin $primitiveNodeTypes) { [void]$graphNodeNames.Add($entry.Type.FullName) }
+}
+
+$edges = [System.Collections.Generic.List[object]]::new()
+foreach ($entry in $reachable.Values) {
+    if ($entry.Type.Name -in $primitiveNodeTypes) { continue }
+    foreach ($property in $entry.Properties) {
+        $propertyType = $property.PropertyType
+        $collection = Get-CollectionDescription $propertyType
+        $dictionary = $propertyType.IsGenericInstance -and $propertyType.Name.StartsWith('Dictionary')
+        $kind = if ($null -eq $collection) { 'plain' } elseif ($dictionary) { 'dict' } else { 'list' }
+        if ($dictionary -and -not (Test-SupportedDictionaryKey $propertyType)) { $kind = 'dict-unkeyed' }
+        $targets = @(Get-GraphNodeTypes $propertyType)
+        $valueTypeLabel = Get-TypeLabel $propertyType
+        if ($targets.Count -eq 0) {
+            [void]$edges.Add([pscustomobject]@{ From = $entry.Type.FullName; To = $null; Property = $property.Name; Kind = $kind; ValueType = $valueTypeLabel })
+        } else {
+            foreach ($target in $targets) {
+                [void]$edges.Add([pscustomobject]@{ From = $entry.Type.FullName; To = $target.FullName; Property = $property.Name; Kind = $kind; ValueType = $valueTypeLabel })
+            }
+        }
+    }
+}
+
+function ConvertTo-JsonString([string]$value) {
+    if ($null -eq $value) { return 'null' }
+    $escaped = $value.Replace('\', '\\').Replace('"', '\"').Replace("`n", '\n').Replace("`r", '')
+    return "`"$escaped`""
+}
+
+$jsonLines = [System.Collections.Generic.List[string]]::new()
+$jsonLines.Add('{')
+$jsonLines.Add('  "root": "GameData",')
+$jsonLines.Add('  "nodes": [')
+$sortedNodeNames = @($graphNodeNames) | Sort-Object
+for ($i = 0; $i -lt $sortedNodeNames.Count; $i++) {
+    $comma = if ($i -eq $sortedNodeNames.Count - 1) { '' } else { ',' }
+    $jsonLines.Add("    {`"id`": $(ConvertTo-JsonString $sortedNodeNames[$i])}$comma")
+}
+$jsonLines.Add('  ],')
+$jsonLines.Add('  "edges": [')
+for ($i = 0; $i -lt $edges.Count; $i++) {
+    $edge = $edges[$i]
+    $comma = if ($i -eq $edges.Count - 1) { '' } else { ',' }
+    $toJson = if ($null -eq $edge.To) { 'null' } else { ConvertTo-JsonString $edge.To }
+    $jsonLines.Add("    {`"from`": $(ConvertTo-JsonString $edge.From), `"to`": $toJson, `"property`": $(ConvertTo-JsonString $edge.Property), `"kind`": $(ConvertTo-JsonString $edge.Kind), `"valueType`": $(ConvertTo-JsonString $edge.ValueType)}$comma")
+}
+$jsonLines.Add('  ],')
+$jsonLines.Add('  "aliases": [')
+$aliasEntries = @($aliases.GetEnumerator())
+for ($i = 0; $i -lt $aliasEntries.Count; $i++) {
+    $comma = if ($i -eq $aliasEntries.Count - 1) { '' } else { ',' }
+    $jsonLines.Add("    {`"alias`": $(ConvertTo-JsonString $aliasEntries[$i].Key), `"path`": $(ConvertTo-JsonString $aliasEntries[$i].Value)}$comma")
+}
+$jsonLines.Add('  ]')
+$jsonLines.Add('}')
+[IO.File]::WriteAllLines($GraphOutputPath, $jsonLines, [Text.UTF8Encoding]::new($false))
+Write-Output "Generated $GraphOutputPath ($($sortedNodeNames.Count) nodes, $($edges.Count) edges, $($aliasEntries.Count) aliases)."
+
+if (Test-Path -LiteralPath $GraphTemplatePath) {
+    $graphJson = ($jsonLines -join "`n")
+    $template = [IO.File]::ReadAllText($GraphTemplatePath)
+    $viewerHtml = $template.Replace('__GRAPH_JSON__', $graphJson)
+    [IO.File]::WriteAllText($GraphViewerOutputPath, $viewerHtml, [Text.UTF8Encoding]::new($false))
+    Write-Output "Generated $GraphViewerOutputPath (embedded graph data)."
+} else {
+    Write-Warning "Skipped viewer generation: template not found at '$GraphTemplatePath'."
+}

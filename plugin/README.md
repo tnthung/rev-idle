@@ -85,13 +85,13 @@ const state = await rev.state("score", "IP");
 
 Each call fetches fresh values on demand. The returned object is frozen. Requests reuse one HTTP client and its keep-alive connection when possible. HTTP or response errors reject the promise.
 
-The complete nested state is documented in the generated [state path reference](STATE_KEYS.md). It includes every reachable gameplay property, collection element/value types, and all compatibility aliases. Regenerate it after an interop assembly change:
+The complete nested state is documented in the generated [state path reference](STATE_KEYS.md). It includes every reachable gameplay property, collection element/value types, and all compatibility aliases. For finding which path(s) reach a given type, open [STATE_GRAPH.html](STATE_GRAPH.html) directly in a browser: it's an interactive node graph (search a type or field name, click a node to see every route from `GameData` and its alias shortcuts). Regenerate both after an interop assembly change:
 
 ```powershell
 .\plugin\generate-state-reference.ps1
 ```
 
-With no arguments, the generator reads `E:\SteamLibrary\steamapps\common\Revolution Idle`.
+With no arguments, the generator reads `E:\SteamLibrary\steamapps\common\Revolution Idle`. It also writes `STATE_GRAPH.json` (the graph data) and re-embeds it into `STATE_GRAPH.html` from `STATE_GRAPH.template.html`.
 
 Paths are case-sensitive property names separated by `.`, starting at `GameData`. Numeric segments index arrays/lists; dictionary segments use string, integer, or enum keys. For example:
 

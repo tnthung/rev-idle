@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>State Graph Explorer</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #14161c;
+    --surface: #1b1e27;
+    --surface-raised: #232733;
+    --border: #2b2f3c;
+    --border-soft: #23262f;
+    --text: #e7e9f0;
+    --text-dim: #9297ab;
+    --text-faint: #5d6175;
+    --accent: #7dd3c0;
+    --accent-dim: #4f8f82;
+    --accent-soft: rgba(125, 211, 192, 0.12);
+    --path: #e8a978;
+    --path-soft: rgba(232, 169, 120, 0.16);
+    --leaf: #6f7590;
+    --focus: #9db4ff;
+    --scrollbar: #343849;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 1fr 380px;
+  }
+
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  #stage {
+    position: relative;
+    min-width: 0;
+    border-right: 1px solid var(--border);
+  }
+
+  #cy {
+    position: absolute;
+    inset: 0;
+  }
+
+  .legend {
+    position: absolute;
+    left: 16px;
+    bottom: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    z-index: 5;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+  }
+
+  .legend-row { display: flex; align-items: center; gap: 8px; }
+  .legend-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .legend-line { width: 18px; height: 0; border-top: 2px solid; flex: none; }
+
+  .top-bar {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    right: 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    z-index: 5;
+    pointer-events: none;
+  }
+
+  .stat-pill {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+    pointer-events: auto;
+  }
+  .stat-pill b { color: var(--text); font-weight: 600; }
+
+  #sidebar {
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .sidebar-head {
+    padding: 18px 18px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-title {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    margin: 0 0 12px;
+  }
+
+  .search-box {
+    position: relative;
+  }
+
+  .search-box input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 12px 9px 32px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    outline: none;
+  }
+  .search-box input:focus { border-color: var(--accent-dim); }
+  .search-box input::placeholder { color: var(--text-faint); }
+
+  .search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 14px;
+    height: 14px;
+    color: var(--text-faint);
+    pointer-events: none;
+  }
+
+  .search-results {
+    margin-top: 8px;
+    max-height: 180px;
+    overflow-y: auto;
+    border-radius: 8px;
+    display: none;
+    flex-direction: column;
+  }
+  .search-results.open { display: flex; }
+
+  .search-result {
+    padding: 7px 10px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    color: var(--text);
+    cursor: pointer;
+    border-radius: 6px;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+  }
+  .search-result:hover { background: var(--accent-soft); }
+  .search-result .kind-tag {
+    font-family: 'Inter', sans-serif;
+    font-size: 10px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    flex: none;
+  }
+
+  #detail {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 18px 24px;
+  }
+
+  .empty-state {
+    color: var(--text-faint);
+    font-size: 13px;
+    line-height: 1.6;
+    padding-top: 8px;
+  }
+  .empty-state code {
+    font-family: 'JetBrains Mono', monospace;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-soft);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 12px;
+    color: var(--accent);
+  }
+
+  .node-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 19px;
+    font-weight: 700;
+    color: var(--text);
+    word-break: break-word;
+    text-wrap: balance;
+  }
+
+  .node-meta {
+    display: flex;
+    gap: 14px;
+    margin-top: 8px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  .node-meta span b { color: var(--text); font-weight: 600; }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: 20px 0 8px;
+  }
+  .section-label:first-of-type { margin-top: 22px; }
+
+  .route-count-badge {
+    display: inline-block;
+    background: var(--path-soft);
+    color: var(--path);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 10.5px;
+    font-weight: 600;
+    margin-left: 6px;
+  }
+
+  .route-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .route {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    word-break: break-all;
+  }
+  .route:hover { background: var(--surface-raised); }
+  .route.active { background: var(--path-soft); }
+
+  .route .seg { color: var(--text-dim); }
+  .route .hop { color: var(--text-faint); }
+  .route .hop.list, .route .hop.dict { color: var(--focus); }
+  .route.active .seg { color: var(--text); }
+
+  .route.alias-route {
+    cursor: default;
+    background: var(--accent-soft);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .route.alias-route .seg { color: var(--accent); font-weight: 600; }
+
+  .alias-badge {
+    display: inline-block;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+  .prop-name .alias-badge { margin-left: 7px; }
+
+  .prop-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    border: 1px solid var(--border-soft);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .prop-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 7px 10px;
+    background: var(--surface-raised);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    align-items: baseline;
+  }
+  .prop-row.linked { cursor: pointer; }
+  .prop-row.linked:hover { background: var(--accent-soft); }
+
+  .prop-name { color: var(--text); flex: none; }
+  .prop-type {
+    color: var(--text-faint);
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .prop-type.node { color: var(--accent); }
+
+  .no-results {
+    color: var(--text-faint);
+    font-size: 12.5px;
+    padding: 8px 10px;
+  }
+
+  #cy:focus { outline: none; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="cy"></div>
+  <div class="top-bar">
+    <div class="stat-pill"><b id="nodeCountStat">0</b> types &middot; <b id="edgeCountStat">0</b> links</div>
+  </div>
+  <div class="legend">
+    <div class="legend-row"><span class="legend-dot" style="background:var(--accent)"></span>gameplay type</div>
+    <div class="legend-row"><span class="legend-dot" style="background:var(--path)"></span>selected / on route</div>
+    <div class="legend-row"><span class="legend-line" style="border-color:var(--leaf)"></span>direct reference</div>
+    <div class="legend-row"><span class="legend-line" style="border-color:var(--focus)"></span>list / dictionary</div>
+  </div>
+</div>
+
+<div id="sidebar">
+  <div class="sidebar-head">
+    <p class="sidebar-title">Find a type or field</p>
+    <div class="search-box">
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="searchInput" type="text" placeholder="UnityZodiac, NextZodiacs, sign..." autocomplete="off" spellcheck="false">
+      <div class="search-results" id="searchResults"></div>
+    </div>
+  </div>
+  <div id="detail">
+    <div class="empty-state" id="emptyState">
+      Click a node in the graph, or search above, to see every path from <code>GameData</code> that reaches it.
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const GRAPH = __GRAPH_JSON__;
+
+  const nodeIds = new Set(GRAPH.nodes.map(n => n.id));
+  const outEdges = new Map();
+  const inEdges = new Map();
+  for (const id of nodeIds) { outEdges.set(id, []); inEdges.set(id, []); }
+  const leafProps = new Map();
+  for (const id of nodeIds) leafProps.set(id, []);
+
+  for (const e of GRAPH.edges) {
+    if (e.to && nodeIds.has(e.to)) {
+      outEdges.get(e.from).push(e);
+      inEdges.get(e.to).push(e);
+    } else {
+      if (!leafProps.has(e.from)) leafProps.set(e.from, []);
+      leafProps.get(e.from).push(e);
+    }
+  }
+
+  document.getElementById('nodeCountStat').textContent = GRAPH.nodes.length;
+  document.getElementById('edgeCountStat').textContent = GRAPH.edges.filter(e => e.to).length;
+
+  // Resolve each compatibility alias's dotted canonical path against the edge
+  // graph so it can be surfaced as a shortcut alongside real routes/fields.
+  const aliasesByOwner = new Map();   // node id -> [{alias, path, property}]  (alias resolves to a scalar field on that node)
+  const aliasesByTarget = new Map();  // node id -> [{alias, path}]            (alias resolves straight to that node)
+  for (const id of nodeIds) { aliasesByOwner.set(id, []); aliasesByTarget.set(id, []); }
+  for (const a of GRAPH.aliases || []) {
+    const segments = a.path.split('.');
+    let cur = GRAPH.root;
+    let finalEdge = null;
+    let ok = true;
+    for (const seg of segments) {
+      const e = (outEdges.get(cur) || []).find(edge => edge.property === seg) ||
+                (leafProps.get(cur) || []).find(edge => edge.property === seg);
+      if (!e) { ok = false; break; }
+      finalEdge = e;
+      cur = e.to;
+      if (!cur) break;
+    }
+    if (!ok || !finalEdge) continue;
+    if (finalEdge.to && nodeIds.has(finalEdge.to)) {
+      aliasesByTarget.get(finalEdge.to).push({ alias: a.alias, path: a.path });
+    } else {
+      aliasesByOwner.get(finalEdge.from).push({ alias: a.alias, path: a.path, property: finalEdge.property });
+    }
+  }
+
+  const degree = new Map();
+  for (const id of nodeIds) degree.set(id, (outEdges.get(id).length || 0) + (inEdges.get(id).length || 0));
+
+  const rootStyles = getComputedStyle(document.documentElement);
+  function cssVar(name) { return rootStyles.getPropertyValue(name).trim(); }
+
+  const cyElements = [];
+  for (const n of GRAPH.nodes) {
+    cyElements.push({ data: { id: n.id, label: n.id, deg: degree.get(n.id) || 1, isRoot: n.id === GRAPH.root } });
+  }
+  let edgeSeq = 0;
+  for (const e of GRAPH.edges) {
+    if (!e.to || !nodeIds.has(e.to)) continue;
+    edgeSeq++;
+    cyElements.push({ data: { id: 'e' + edgeSeq, source: e.from, target: e.to, kind: e.kind, property: e.property } });
+  }
+
+  const cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements: cyElements,
+    wheelSensitivity: 0.25,
+    style: [
+      {
+        selector: 'node',
+        style: {
+          'background-color': '#3a3f52',
+          'label': 'data(label)',
+          'color': cssVar('--text-dim'),
+          'font-family': 'JetBrains Mono, monospace',
+          'font-size': 9,
+          'text-valign': 'bottom',
+          'text-margin-y': 4,
+          'width': 'mapData(deg, 1, 60, 10, 42)',
+          'height': 'mapData(deg, 1, 60, 10, 42)',
+          'border-width': 1.5,
+          'border-color': cssVar('--border'),
+          'transition-property': 'background-color, border-color, opacity',
+          'transition-duration': '120ms'
+        }
+      },
+      {
+        selector: 'node[?isRoot]',
+        style: {
+          'background-color': cssVar('--accent'),
+          'border-color': cssVar('--accent'),
+          'width': 30,
+          'height': 30,
+          'font-size': 11,
+          'font-weight': 700,
+          'color': cssVar('--text')
+        }
+      },
+      {
+        selector: 'node.selected',
+        style: {
+          'background-color': cssVar('--path'),
+          'border-color': cssVar('--path'),
+          'color': cssVar('--text'),
+          'font-size': 11,
+          'font-weight': 700,
+          'z-index': 999
+        }
+      },
+      {
+        selector: 'node.on-route',
+        style: {
+          'background-color': cssVar('--path'),
+          'border-color': cssVar('--path'),
+          'color': cssVar('--text')
+        }
+      },
+      {
+        selector: 'node.dim',
+        style: { 'opacity': 0.12 }
+      },
+      {
+        selector: 'edge',
+        style: {
+          'width': 1,
+          'curve-style': 'bezier',
+          'line-color': cssVar('--leaf'),
+          'target-arrow-color': cssVar('--leaf'),
+          'target-arrow-shape': 'triangle',
+          'arrow-scale': 0.6,
+          'opacity': 0.55
+        }
+      },
+      {
+        selector: 'edge[kind = "list"], edge[kind = "dict"], edge[kind = "dict-unkeyed"]',
+        style: {
+          'line-color': cssVar('--focus'),
+          'target-arrow-color': cssVar('--focus')
+        }
+      },
+      {
+        selector: 'edge.on-route',
+        style: {
+          'line-color': cssVar('--path'),
+          'target-arrow-color': cssVar('--path'),
+          'width': 2.5,
+          'opacity': 1,
+          'z-index': 998
+        }
+      },
+      {
+        selector: 'edge.dim',
+        style: { 'opacity': 0.04 }
+      }
+    ],
+    layout: {
+      name: 'cose',
+      idealEdgeLength: 220,
+      nodeOverlap: 24,
+      nodeRepulsion: 950000,
+      edgeElasticity: 80,
+      nestingFactor: 0.1,
+      gravity: 12,
+      numIter: 2500,
+      initialTemp: 400,
+      coolingFactor: 0.97,
+      minTemp: 1.0,
+      animate: false
+    }
+  });
+
+  function collectionSegment(edge) {
+    if (edge.kind === 'list') return edge.property + '.<n>';
+    if (edge.kind === 'dict') return edge.property + '.<key>';
+    return edge.property;
+  }
+
+  // Enumerate every simple path GameData -> target, stopping a branch the moment
+  // it revisits a type already on that branch (cycles terminate, don't loop forever).
+  function findAllRoutes(targetId) {
+    const routes = [];
+    const chain = new Set();
+    function walk(nodeId, path) {
+      if (nodeId === targetId && path.length > 0) {
+        routes.push(path.slice());
+        return;
+      }
+      if (chain.has(nodeId)) return;
+      chain.add(nodeId);
+      for (const e of outEdges.get(nodeId) || []) {
+        path.push(e);
+        walk(e.to, path);
+        path.pop();
+      }
+      chain.delete(nodeId);
+    }
+    walk(GRAPH.root, []);
+    return routes;
+  }
+
+  let selectedId = null;
+  let activeRouteIdx = -1;
+  let currentRoutes = [];
+
+  function clearHighlight() {
+    cy.elements().removeClass('on-route dim selected');
+  }
+
+  function renderRouteInGraph(route) {
+    clearHighlight();
+    cy.nodes().addClass('dim');
+    cy.edges().addClass('dim');
+    let node = cy.getElementById(GRAPH.root);
+    node.removeClass('dim').addClass('on-route');
+    for (const e of route) {
+      const edgeEls = cy.edges().filter(el => el.data('source') === e.from && el.data('target') === e.to && el.data('property') === e.property);
+      edgeEls.removeClass('dim').addClass('on-route');
+      const targetNode = cy.getElementById(e.to);
+      targetNode.removeClass('dim').addClass(e.to === selectedId ? 'selected' : 'on-route');
+    }
+  }
+
+  function highlightAllRoutes(routes) {
+    clearHighlight();
+    cy.nodes().addClass('dim');
+    cy.edges().addClass('dim');
+    cy.getElementById(GRAPH.root).removeClass('dim').addClass('on-route');
+    for (const route of routes) {
+      for (const e of route) {
+        const edgeEls = cy.edges().filter(el => el.data('source') === e.from && el.data('target') === e.to && el.data('property') === e.property);
+        edgeEls.removeClass('dim').addClass('on-route');
+        const targetNode = cy.getElementById(e.to);
+        targetNode.removeClass('dim').addClass(e.to === selectedId ? 'selected' : 'on-route');
+      }
+    }
+  }
+
+  function routeHtml(route, idx) {
+    let html = '<span class="seg">GameData</span>';
+    for (const e of route) {
+      const hopClass = e.kind === 'list' || e.kind === 'dict' || e.kind === 'dict-unkeyed' ? e.kind.startsWith('dict') ? 'dict' : 'list' : '';
+      html += ' <span class="hop ' + hopClass + '">&rarr;' + escapeHtml(collectionSegment(e)) + '&rarr;</span> <span class="seg">' + escapeHtml(e.to) + '</span>';
+    }
+    return '<div class="route" data-idx="' + idx + '">' + html + '</div>';
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function renderDetail(nodeId) {
+    document.getElementById('emptyState')?.remove();
+    selectedId = nodeId;
+    currentRoutes = findAllRoutes(nodeId);
+    activeRouteIdx = -1;
+
+    const outs = (outEdges.get(nodeId) || []).slice().sort((a, b) => a.property.localeCompare(b.property));
+    const leaves = (leafProps.get(nodeId) || []).slice().sort((a, b) => a.property.localeCompare(b.property));
+    const nodeAliases = (aliasesByTarget.get(nodeId) || []).slice().sort((a, b) => a.alias.localeCompare(b.alias));
+    const fieldAliasByProperty = new Map();
+    for (const a of aliasesByOwner.get(nodeId) || []) fieldAliasByProperty.set(a.property, a);
+
+    const detail = document.getElementById('detail');
+    let html = '';
+    html += '<div class="node-name">' + escapeHtml(nodeId) + '</div>';
+    html += '<div class="node-meta">';
+    html += '<span><b>' + (currentRoutes.length + nodeAliases.length || (nodeId === GRAPH.root ? 1 : 0)) + '</b> route' + (currentRoutes.length + nodeAliases.length === 1 ? '' : 's') + '</span>';
+    html += '<span><b>' + outs.length + '</b> refs out</span>';
+    html += '<span><b>' + leaves.length + '</b> scalar fields</span>';
+    html += '</div>';
+
+    html += '<div class="section-label">Routes from GameData<span class="route-count-badge">' + (currentRoutes.length + nodeAliases.length) + '</span></div>';
+    if (nodeId === GRAPH.root) {
+      html += '<div class="no-results">This is the root of the state tree.</div>';
+    } else if (currentRoutes.length === 0 && nodeAliases.length === 0) {
+      html += '<div class="no-results">No route found (unexpected).</div>';
+    } else {
+      let routesHtml = '';
+      for (const a of nodeAliases) {
+        routesHtml += '<div class="route alias-route"><span class="alias-badge">alias</span><span class="seg">' + escapeHtml(a.alias) + '</span></div>';
+      }
+      routesHtml += currentRoutes.map(routeHtml).join('');
+      html += '<div class="route-list" id="routeList">' + routesHtml + '</div>';
+    }
+
+    if (outs.length) {
+      html += '<div class="section-label">References out</div>';
+      html += '<div class="prop-list">' + outs.map(e => {
+        const seg = collectionSegment(e);
+        return '<div class="prop-row linked" data-target="' + escapeHtml(e.to) + '"><span class="prop-name">' + escapeHtml(seg) + '</span><span class="prop-type node">' + escapeHtml(e.to) + '</span></div>';
+      }).join('') + '</div>';
+    }
+
+    if (leaves.length) {
+      html += '<div class="section-label">Scalar fields</div>';
+      html += '<div class="prop-list">' + leaves.map(e => {
+        const alias = fieldAliasByProperty.get(e.property);
+        const aliasBadge = alias ? '<span class="alias-badge" title="shortcut for ' + escapeHtml(e.property) + '">' + escapeHtml(alias.alias) + '</span>' : '';
+        return '<div class="prop-row"><span class="prop-name">' + escapeHtml(e.property) + aliasBadge + '</span><span class="prop-type">' + escapeHtml(e.valueType) + '</span></div>';
+      }).join('') + '</div>';
+    }
+
+    detail.innerHTML = html;
+
+    detail.querySelectorAll('.route').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = parseInt(el.getAttribute('data-idx'), 10);
+        if (activeRouteIdx === idx) {
+          activeRouteIdx = -1;
+          highlightAllRoutes(currentRoutes);
+          detail.querySelectorAll('.route').forEach(r => r.classList.remove('active'));
+        } else {
+          activeRouteIdx = idx;
+          renderRouteInGraph(currentRoutes[idx]);
+          detail.querySelectorAll('.route').forEach(r => r.classList.remove('active'));
+          el.classList.add('active');
+        }
+      });
+    });
+
+    detail.querySelectorAll('.prop-row.linked').forEach(el => {
+      el.addEventListener('click', () => selectNode(el.getAttribute('data-target')));
+    });
+
+    if (nodeId !== GRAPH.root) highlightAllRoutes(currentRoutes);
+    else {
+      clearHighlight();
+      cy.getElementById(GRAPH.root).addClass('selected');
+    }
+  }
+
+  function selectNode(nodeId) {
+    cy.elements().unselect();
+    const el = cy.getElementById(nodeId);
+    if (el.length) {
+      cy.animate({ center: { eles: el }, zoom: Math.max(cy.zoom(), 1.1) }, { duration: 260 });
+    }
+    renderDetail(nodeId);
+  }
+
+  cy.on('tap', 'node', evt => selectNode(evt.target.id()));
+
+  // Search
+  const searchInput = document.getElementById('searchInput');
+  const searchResults = document.getElementById('searchResults');
+
+  function buildSearchIndex() {
+    const items = [];
+    for (const id of nodeIds) items.push({ label: id, sub: 'type', target: id });
+    const seenProps = new Set();
+    for (const e of GRAPH.edges) {
+      const key = e.property + ' ' + e.from;
+      if (seenProps.has(key)) continue;
+      seenProps.add(key);
+      items.push({ label: e.property, sub: e.from, target: e.to || e.from, isField: true, fieldOwner: e.from });
+    }
+    for (const id of nodeIds) {
+      for (const a of aliasesByTarget.get(id) || []) items.push({ label: a.alias, sub: a.path, target: id, isAlias: true, fieldOwner: id });
+      for (const a of aliasesByOwner.get(id) || []) items.push({ label: a.alias, sub: a.path, target: id, isAlias: true, fieldOwner: id });
+    }
+    return items;
+  }
+  const searchIndex = buildSearchIndex();
+
+  function runSearch(query) {
+    const q = query.trim().toLowerCase();
+    if (!q) { searchResults.classList.remove('open'); searchResults.innerHTML = ''; return; }
+    const matches = searchIndex.filter(item => item.label.toLowerCase().includes(q)).slice(0, 40);
+    if (!matches.length) {
+      searchResults.innerHTML = '<div class="no-results">No matches</div>';
+      searchResults.classList.add('open');
+      return;
+    }
+    searchResults.innerHTML = matches.map((m, i) => {
+      const tag = m.isAlias ? 'alias for ' + m.sub : m.isField ? 'field on ' + m.sub : 'type';
+      return '<div class="search-result" data-idx="' + i + '"><span>' + escapeHtml(m.label) + '</span><span class="kind-tag">' + escapeHtml(tag) + '</span></div>';
+    }).join('');
+    searchResults.classList.add('open');
+    searchResults.querySelectorAll('.search-result').forEach((el, i) => {
+      el.addEventListener('click', () => {
+        const m = matches[i];
+        searchInput.value = m.label;
+        searchResults.classList.remove('open');
+        selectNode(m.isField ? m.fieldOwner : m.target);
+      });
+    });
+  }
+
+  searchInput.addEventListener('input', () => runSearch(searchInput.value));
+  searchInput.addEventListener('focus', () => { if (searchInput.value) runSearch(searchInput.value); });
+  document.addEventListener('click', evt => {
+    if (!evt.target.closest('.search-box')) searchResults.classList.remove('open');
+  });
+
+  cy.ready(() => {
+    selectNode(GRAPH.root);
+  });
+})();
+</script>
+</body>
+</html>
