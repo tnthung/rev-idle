@@ -4,7 +4,7 @@ use tokio::{
     sync::{mpsc, watch},
 };
 
-const USAGE: &str = "commands: load <script-path> | reload | pause | resume | stop | capture | exit";
+const USAGE: &str = "commands: load <script-path> | reload | pause | resume | stop | capture | clear | exit";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ScriptCommand {
@@ -78,6 +78,12 @@ async fn run_with_input<R: AsyncRead + Unpin>(
         };
         let Some(line) = line else { break };
 
+        if line.trim() == "clear" {
+            print!("\x1B[2J\x1B[H");
+            let _ = io::Write::flush(&mut io::stdout());
+            continue;
+        }
+
         match parse_command(&line) {
             Ok(command) => {
                 let should_exit = command == ScriptCommand::Exit;
@@ -140,6 +146,23 @@ mod tests {
         assert!(parse_command(r#"load """#).is_err());
         assert!(parse_command("pause now").is_err());
         assert!(parse_command("exit now").is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn clear_is_handled_locally_and_never_forwarded_as_a_command() {
+        let (mut input, output) = tokio::io::duplex(64);
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let runner = tokio::spawn(run_with_input(output, command_tx, shutdown_rx));
+
+        input.write_all(b"clear\nexit\n").await.unwrap();
+        assert_eq!(command_rx.recv().await, Some(ScriptCommand::Exit));
+
+        tokio::time::timeout(std::time::Duration::from_millis(200), runner)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]

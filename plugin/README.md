@@ -77,10 +77,11 @@ Invoke-RestMethod http://127.0.0.1:19841/state
 Invoke-RestMethod 'http://127.0.0.1:19841/state?key=score&key=IP'
 ```
 
-In JavaScript, `rev.state()` returns a promise. With no arguments it returns all supported keys; arguments return only those requested, case-sensitively:
+In JavaScript, `rev.state()` returns a promise. With no arguments it returns all supported keys; arguments return only those requested, case-sensitively. Requesting exactly one key unwraps the result to that key's value directly, instead of an object with one property:
 
 ```javascript
 const state = await rev.state("score", "IP");
+const ep = await rev.state("EP"); // "0e0", not { EP: "0e0" }
 ```
 
 Each call fetches fresh values on demand. The returned object is frozen. Requests reuse one HTTP client and its keep-alive connection when possible. HTTP or response errors reject the promise.

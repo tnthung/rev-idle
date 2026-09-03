@@ -322,7 +322,10 @@ impl ScriptSession {
                         }),
                     )?;
                     let state_wrapper: Function = ctx.eval(
-                        "(raw, parse, freeze) => async (...keys) => freeze(parse(await raw(...keys)))",
+                        "(raw, parse, freeze) => async (...keys) => {
+                            const result = freeze(parse(await raw(...keys)));
+                            return keys.length === 1 ? result[keys[0]] : result;
+                        }",
                     )?;
                     let state: Function = state_wrapper.call((state_raw, parse, freeze.clone()))?;
                     rev.set("state", state)?;
@@ -1010,6 +1013,41 @@ mod tests {
                 }
                 if (Object.keys(state).length !== 2) throw new Error("selected keys were lost");
                 if (Object.isFrozen(state.items) || Object.isFrozen(state.items[1])) throw new Error("nested state was frozen");
+            })"#,
+        )
+        .await
+        .unwrap();
+        let (controls, _) = recording_controls();
+
+        session.invoke(State::default(), controls).await.unwrap();
+        server.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rev_state_unwraps_single_key_request() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let _guard = telemetry::TEST_SERVER_LOCK.lock().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:19841").unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let length = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..length]);
+            assert_eq!(request.lines().next().unwrap(), "GET /state?key=EP HTTP/1.1");
+            let body = r#"{"EP":"0e0"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        let session = ScriptSession::new(
+            r#"(async () => {
+                const state = await rev.state("EP");
+                if (state !== "0e0") throw new Error("single-key state was not unwrapped: " + JSON.stringify(state));
             })"#,
         )
         .await
