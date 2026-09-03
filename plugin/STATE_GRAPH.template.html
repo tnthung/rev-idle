@@ -594,10 +594,6 @@
         }
       },
       {
-        selector: 'node.dim',
-        style: { 'opacity': 0.12 }
-      },
-      {
         selector: 'edge',
         style: {
           'width': 1,
@@ -626,10 +622,6 @@
           'z-index': 998
         }
       },
-      {
-        selector: 'edge.dim',
-        style: { 'opacity': 0.04 }
-      }
     ],
     layout: COSE_LAYOUT
   });
@@ -668,36 +660,35 @@
   let currentRoutes = [];
 
   function clearHighlight() {
-    cy.elements().removeClass('on-route dim selected');
+    cy.elements().removeClass('on-route selected').show();
   }
 
-  function renderRouteInGraph(route) {
-    clearHighlight();
-    cy.nodes().addClass('dim');
-    cy.edges().addClass('dim');
-    let node = cy.getElementById(GRAPH.root);
-    node.removeClass('dim').addClass('on-route');
-    for (const e of route) {
-      const edgeEls = cy.edges().filter(el => el.data('source') === e.from && el.data('target') === e.to && el.data('property') === e.property);
-      edgeEls.removeClass('dim').addClass('on-route');
-      const targetNode = cy.getElementById(e.to);
-      targetNode.removeClass('dim').addClass(e.to === selectedId ? 'selected' : 'on-route');
-    }
-  }
-
-  function highlightAllRoutes(routes) {
-    clearHighlight();
-    cy.nodes().addClass('dim');
-    cy.edges().addClass('dim');
-    cy.getElementById(GRAPH.root).removeClass('dim').addClass('on-route');
+  // Show only the nodes/edges that appear in `routes`, hiding everything else
+  // entirely (not just dimming) so overlapping unrelated edges stop cluttering
+  // the picture, then fit the viewport to what remains.
+  function isolateRoutes(routes) {
+    cy.elements().removeClass('on-route selected').hide();
+    const rootNode = cy.getElementById(GRAPH.root);
+    rootNode.show().addClass('on-route');
+    const visible = cy.collection().union(rootNode);
     for (const route of routes) {
       for (const e of route) {
         const edgeEls = cy.edges().filter(el => el.data('source') === e.from && el.data('target') === e.to && el.data('property') === e.property);
-        edgeEls.removeClass('dim').addClass('on-route');
+        edgeEls.show().addClass('on-route');
         const targetNode = cy.getElementById(e.to);
-        targetNode.removeClass('dim').addClass(e.to === selectedId ? 'selected' : 'on-route');
+        targetNode.show().addClass(e.to === selectedId ? 'selected' : 'on-route');
+        visible.merge(edgeEls).merge(targetNode);
       }
     }
+    cy.animate({ fit: { eles: visible, padding: 70 } }, { duration: 300 });
+  }
+
+  function renderRouteInGraph(route) {
+    isolateRoutes([route]);
+  }
+
+  function highlightAllRoutes(routes) {
+    isolateRoutes(routes);
   }
 
   function routeKey(route) {
@@ -819,6 +810,8 @@
   let focusMode = false;
   const focusToggle = document.getElementById('focusToggle');
 
+  let activeLayout = null;
+
   function runFocusLayout(nodeId) {
     const dist = bfsDistances(nodeId);
     let maxDist = 0;
@@ -827,21 +820,24 @@
       const d = dist.has(n.id()) ? dist.get(n.id()) : maxDist + 2;
       n.data('concentric', -d);
     });
-    cy.layout({
+    activeLayout?.stop();
+    activeLayout = cy.layout({
       name: 'concentric',
       concentric: n => n.data('concentric'),
       levelWidth: () => 1,
       minNodeSpacing: 40,
+      fit: true,
+      padding: 60,
       animate: true,
       animationDuration: 400
-    }).run();
+    });
+    activeLayout.run();
   }
 
   function selectNode(nodeId) {
     cy.elements().unselect();
     if (focusMode) {
       runFocusLayout(nodeId);
-      cy.animate({ fit: { eles: cy.elements(), padding: 60 } }, { duration: 420 });
     } else {
       const el = cy.getElementById(nodeId);
       if (el.length) {
@@ -869,9 +865,10 @@
     focusToggle.textContent = 'Focus layout: ' + (focusMode ? 'on' : 'off');
     if (focusMode && selectedId) {
       runFocusLayout(selectedId);
-      cy.animate({ fit: { eles: cy.elements(), padding: 60 } }, { duration: 420 });
     } else if (!focusMode) {
-      cy.layout(COSE_LAYOUT).run();
+      activeLayout?.stop();
+      activeLayout = cy.layout(COSE_LAYOUT);
+      activeLayout.run();
     }
   });
 
