@@ -615,6 +615,14 @@
           'z-index': 998
         }
       },
+      {
+        selector: 'edge.long-span',
+        style: {
+          'curve-style': 'unbundled-bezier',
+          'control-point-distances': 'data(bendDistance)',
+          'control-point-weights': 'data(bendWeight)'
+        }
+      },
     ],
     layout: COSE_LAYOUT
   });
@@ -690,7 +698,34 @@
       animate: true,
       animationDuration: 300
     });
+    activeLayout.one('layoutstop', () => routeLongSpanEdges(visible));
     activeLayout.run();
+  }
+
+  // Dagre positions nodes by rank but cytoscape still draws each edge as a
+  // near-straight bezier between its two endpoints, so an edge skipping
+  // several ranks cuts straight through whatever nodes sit in between.
+  // Once positions settle, give edges that skip 2+ ranks a bend that arcs
+  // them above or below the busy middle band instead of through it, sized
+  // and alternated by how many ranks they skip so parallel long edges don't
+  // just re-collide with each other.
+  function routeLongSpanEdges(visible) {
+    const edges = visible.edges();
+    edges.removeClass('long-span');
+    let bendSeq = 0;
+    edges.forEach(edge => {
+      const src = edge.source();
+      const tgt = edge.target();
+      const dx = Math.abs(tgt.position('x') - src.position('x'));
+      const rankGap = dx / 130;
+      if (rankGap <= 1.4) return;
+      bendSeq++;
+      const direction = bendSeq % 2 === 0 ? 1 : -1;
+      const distance = direction * (26 + Math.min(rankGap, 5) * 16);
+      edge.data('bendDistance', distance);
+      edge.data('bendWeight', 0.5);
+      edge.addClass('long-span');
+    });
   }
 
   function renderRouteInGraph(route) {
