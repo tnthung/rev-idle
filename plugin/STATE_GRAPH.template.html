@@ -360,6 +360,50 @@
   }
 
   #cy:focus { outline: none; }
+
+  #contextMenu {
+    position: fixed;
+    display: none;
+    z-index: 50;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.35);
+    min-width: 180px;
+  }
+  #contextMenu.open { display: block; }
+
+  .context-menu-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    padding: 2px 6px 8px;
+    border-bottom: 1px solid var(--border-soft);
+    margin-bottom: 6px;
+    word-break: break-all;
+    max-width: 320px;
+  }
+
+  #contextMenu button {
+    width: 100%;
+    background: none;
+    border: none;
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    font-size: 12.5px;
+    text-align: left;
+    padding: 7px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #contextMenu button:hover { background: var(--accent-soft); }
+  #contextMenu.copied button {
+    color: var(--accent);
+  }
+  #contextMenu.copied button::after {
+    content: ' \2713';
+  }
 </style>
 </head>
 <body>
@@ -393,6 +437,11 @@
       Click a node in the graph, or search above, to see every path from <code>GameData</code> that reaches it.
     </div>
   </div>
+</div>
+
+<div id="contextMenu">
+  <div class="context-menu-value"></div>
+  <button id="contextMenuCopy" type="button">Copy</button>
 </div>
 
 <script>
@@ -641,7 +690,8 @@
   }
 
   function routeHtml(route, idx) {
-    return '<div class="route" data-idx="' + idx + '"><span class="seg">' + escapeHtml(routeKey(route)) + '</span></div>';
+    const key = routeKey(route);
+    return '<div class="route" data-idx="' + idx + '" data-copy="' + escapeHtml(key) + '"><span class="seg">' + escapeHtml(key) + '</span></div>';
   }
 
   function escapeHtml(s) {
@@ -677,7 +727,7 @@
     } else {
       let routesHtml = '';
       for (const a of nodeAliases) {
-        routesHtml += '<div class="route alias-route"><span class="alias-badge">alias</span><span class="seg">' + escapeHtml(a.alias) + '</span></div>';
+        routesHtml += '<div class="route alias-route" data-copy="' + escapeHtml(a.alias) + '"><span class="alias-badge">alias</span><span class="seg">' + escapeHtml(a.alias) + '</span></div>';
       }
       routesHtml += currentRoutes.map(routeHtml).join('');
       html += '<div class="route-list" id="routeList">' + routesHtml + '</div>';
@@ -687,7 +737,7 @@
       html += '<div class="section-label">References out</div>';
       html += '<div class="prop-list">' + outs.map(e => {
         const seg = collectionSegment(e);
-        return '<div class="prop-row linked" data-target="' + escapeHtml(e.to) + '"><span class="prop-name">' + escapeHtml(seg) + '</span><span class="prop-type node">' + escapeHtml(e.to) + '</span></div>';
+        return '<div class="prop-row linked" data-target="' + escapeHtml(e.to) + '" data-copy="' + escapeHtml(seg) + '"><span class="prop-name">' + escapeHtml(seg) + '</span><span class="prop-type node">' + escapeHtml(e.to) + '</span></div>';
       }).join('') + '</div>';
     }
 
@@ -696,7 +746,7 @@
       html += '<div class="prop-list">' + leaves.map(e => {
         const alias = fieldAliasByProperty.get(e.property);
         const aliasBadge = alias ? '<span class="alias-badge" title="shortcut for ' + escapeHtml(e.property) + '">' + escapeHtml(alias.alias) + '</span>' : '';
-        return '<div class="prop-row"><span class="prop-name">' + escapeHtml(e.property) + aliasBadge + '</span><span class="prop-type">' + escapeHtml(e.valueType) + '</span></div>';
+        return '<div class="prop-row" data-copy="' + escapeHtml(e.property) + '"><span class="prop-name">' + escapeHtml(e.property) + aliasBadge + '</span><span class="prop-type">' + escapeHtml(e.valueType) + '</span></div>';
       }).join('') + '</div>';
     }
 
@@ -872,6 +922,59 @@
     resizer.addEventListener('pointermove', onMove);
     resizer.addEventListener('pointerup', onUp);
   });
+
+  // Right-click copy menu for any element carrying data-copy
+  const contextMenu = document.getElementById('contextMenu');
+  let contextMenuTarget = null;
+
+  function hideContextMenu() {
+    contextMenu.classList.remove('open');
+    contextMenuTarget = null;
+  }
+
+  function showContextMenu(x, y, copyText) {
+    contextMenuTarget = copyText;
+    contextMenu.querySelector('.context-menu-value').textContent = copyText;
+    contextMenu.classList.remove('copied');
+    contextMenu.classList.add('open');
+    const rect = contextMenu.getBoundingClientRect();
+    const clampedX = Math.min(x, window.innerWidth - rect.width - 8);
+    const clampedY = Math.min(y, window.innerHeight - rect.height - 8);
+    contextMenu.style.left = Math.max(4, clampedX) + 'px';
+    contextMenu.style.top = Math.max(4, clampedY) + 'px';
+  }
+
+  document.addEventListener('contextmenu', evt => {
+    const el = evt.target.closest('[data-copy]');
+    if (!el) { hideContextMenu(); return; }
+    evt.preventDefault();
+    showContextMenu(evt.clientX, evt.clientY, el.getAttribute('data-copy'));
+  });
+
+  document.getElementById('contextMenuCopy').addEventListener('click', async () => {
+    if (!contextMenuTarget) return;
+    try {
+      await navigator.clipboard.writeText(contextMenuTarget);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = contextMenuTarget;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch {}
+      document.body.removeChild(ta);
+    }
+    contextMenu.classList.add('copied');
+    setTimeout(hideContextMenu, 700);
+  });
+
+  document.addEventListener('click', evt => {
+    if (!evt.target.closest('#contextMenu')) hideContextMenu();
+  });
+  document.addEventListener('scroll', hideContextMenu, true);
+  window.addEventListener('blur', hideContextMenu);
+  document.addEventListener('keydown', evt => { if (evt.key === 'Escape') hideContextMenu(); });
 })();
 </script>
 </body>
