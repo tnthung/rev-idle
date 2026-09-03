@@ -85,7 +85,7 @@ const state = await rev.state("score", "IP");
 
 Each call fetches fresh values on demand. The returned object is frozen. Requests reuse one HTTP client and its keep-alive connection when possible. HTTP or response errors reject the promise.
 
-The complete nested state is documented in the generated [state path reference](STATE_KEYS.md). It includes every reachable gameplay property, collection element/value types, and all compatibility aliases. For finding which path(s) reach a given type, open [STATE_GRAPH.html](STATE_GRAPH.html) directly in a browser: it's an interactive node graph (search a type or field name, click a node to see every route from `GameData` and its alias shortcuts). Regenerate both after an interop assembly change:
+The complete nested state is documented in the generated [state path reference](STATE_KEYS.md). It includes every reachable gameplay property, collection element/value types, and all compatibility aliases. For finding which path(s) reach a given type, open [STATE_GRAPH.html](STATE_GRAPH.html) directly in a browser: search a type, field name, or alias to see every route from `GameData` that reaches it. Regenerate both after an interop assembly change:
 
 ```powershell
 .\plugin\generate-state-reference.ps1

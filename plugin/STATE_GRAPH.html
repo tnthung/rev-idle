@@ -3,11 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>State Graph Explorer</title>
+<title>State Path Search</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
 <style>
   :root {
     color-scheme: dark;
@@ -24,8 +21,6 @@
     --accent-soft: rgba(125, 211, 192, 0.12);
     --path: #e8a978;
     --path-soft: rgba(232, 169, 120, 0.16);
-    --leaf: #6f7590;
-    --focus: #9db4ff;
     --scrollbar: #343849;
   }
 
@@ -36,121 +31,50 @@
     padding: 0;
   }
 
-  :root {
-    --sidebar-width: 380px;
-  }
-
   body {
     background: var(--bg);
     color: var(--text);
     font-family: 'Inter', system-ui, sans-serif;
-    height: 100vh;
-    overflow: hidden;
-    display: grid;
-    grid-template-columns: 1fr 6px var(--sidebar-width);
-  }
-
-  #resizer {
-    position: relative;
-    cursor: col-resize;
-    background: var(--border);
-  }
-  #resizer::after {
-    content: '';
-    position: absolute;
-    inset: 0 -3px;
-  }
-  #resizer:hover, #resizer.dragging {
-    background: var(--accent-dim);
-  }
-  body.resizing {
-    cursor: col-resize;
-    user-select: none;
-  }
-  body.resizing #cy {
-    pointer-events: none;
+    min-height: 100vh;
   }
 
   ::-webkit-scrollbar { width: 9px; height: 9px; }
   ::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
 
-  #stage {
-    position: relative;
-    min-width: 0;
-    border-right: 1px solid var(--border);
+  .page {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
   }
 
-  #cy {
-    position: absolute;
-    inset: 0;
-  }
-
-  .legend {
-    position: absolute;
-    left: 16px;
-    bottom: 16px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 14px;
-    font-size: 11.5px;
-    color: var(--text-dim);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    z-index: 5;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
-  }
-
-  .legend-row { display: flex; align-items: center; gap: 8px; }
-  .legend-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-  .legend-line { width: 18px; height: 0; border-top: 2px solid; flex: none; }
-
-  .top-bar {
-    position: absolute;
-    top: 16px;
-    left: 16px;
-    right: 16px;
+  .page-head {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
-    z-index: 5;
-    pointer-events: none;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .page-title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--text);
+    margin: 0;
   }
 
   .stat-pill {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 999px;
-    padding: 6px 14px;
+    padding: 5px 12px;
     font-size: 11.5px;
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
-    pointer-events: auto;
+    white-space: nowrap;
   }
   .stat-pill b { color: var(--text); font-weight: 600; }
-
-  #sidebar {
-    background: var(--surface);
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-
-  .sidebar-head {
-    padding: 18px 18px 14px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .sidebar-title {
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
-    color: var(--text-faint);
-    text-transform: uppercase;
-    margin: 0 0 12px;
-  }
 
   .search-box {
     position: relative;
@@ -158,13 +82,13 @@
 
   .search-box input {
     width: 100%;
-    background: var(--bg);
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 9px 12px 9px 32px;
+    border-radius: 10px;
+    padding: 14px 16px 14px 42px;
     color: var(--text);
     font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
+    font-size: 15px;
     outline: none;
   }
   .search-box input:focus { border-color: var(--accent-dim); }
@@ -173,40 +97,37 @@
   .search-icon {
     position: absolute;
     display: block;
-    left: 10px;
-    top: 11px;
-    width: 14px;
-    height: 14px;
+    left: 14px;
+    top: 16px;
+    width: 18px;
+    height: 18px;
     color: var(--text-faint);
     pointer-events: none;
   }
 
   .search-results {
-    margin-top: 8px;
-    max-height: 180px;
-    overflow-y: auto;
-    border-radius: 8px;
-    display: none;
+    margin-top: 10px;
+    display: flex;
     flex-direction: column;
+    gap: 2px;
   }
-  .search-results.open { display: flex; }
 
   .search-result {
-    padding: 7px 10px;
+    padding: 9px 12px;
     font-family: 'JetBrains Mono', monospace;
-    font-size: 12.5px;
+    font-size: 13px;
     color: var(--text);
     cursor: pointer;
-    border-radius: 6px;
+    border-radius: 8px;
     display: flex;
     justify-content: space-between;
-    gap: 8px;
+    gap: 10px;
     align-items: center;
   }
-  .search-result:hover { background: var(--accent-soft); }
+  .search-result:hover, .search-result.active { background: var(--surface); }
   .search-result .kind-tag {
     font-family: 'Inter', sans-serif;
-    font-size: 10px;
+    font-size: 10.5px;
     color: var(--text-faint);
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -218,17 +139,20 @@
     font-weight: 700;
   }
 
+  .hint {
+    color: var(--text-faint);
+    font-size: 12.5px;
+    padding: 10px 12px;
+  }
+
   #detail {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 16px 18px 24px;
+    margin-top: 28px;
   }
 
   .empty-state {
     color: var(--text-faint);
-    font-size: 13px;
-    line-height: 1.6;
+    font-size: 13.5px;
+    line-height: 1.7;
     padding-top: 8px;
   }
   .empty-state code {
@@ -237,13 +161,13 @@
     border: 1px solid var(--border-soft);
     border-radius: 4px;
     padding: 1px 5px;
-    font-size: 12px;
+    font-size: 12.5px;
     color: var(--accent);
   }
 
   .node-name {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 19px;
+    font-size: 23px;
     font-weight: 700;
     color: var(--text);
     word-break: break-word;
@@ -252,23 +176,23 @@
 
   .node-meta {
     display: flex;
-    gap: 14px;
+    gap: 16px;
     margin-top: 8px;
-    font-size: 11.5px;
+    font-size: 12px;
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
   }
   .node-meta span b { color: var(--text); font-weight: 600; }
 
   .section-label {
-    font-size: 11px;
+    font-size: 11.5px;
     font-weight: 600;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-faint);
-    margin: 20px 0 8px;
+    margin: 26px 0 10px;
   }
-  .section-label:first-of-type { margin-top: 22px; }
+  .section-label:first-of-type { margin-top: 28px; }
 
   .route-count-badge {
     display: inline-block;
@@ -289,21 +213,15 @@
 
   .route {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.7;
-    padding: 6px 8px;
-    border-radius: 6px;
-    cursor: pointer;
+    padding: 8px 12px;
+    border-radius: 8px;
     word-break: break-all;
   }
-  .route:hover { background: var(--surface-raised); }
-  .route.active { background: var(--path-soft); }
-
   .route .seg { color: var(--text-dim); }
-  .route.active .seg { color: var(--text); }
 
   .route.alias-route {
-    cursor: default;
     background: var(--accent-soft);
     display: flex;
     align-items: center;
@@ -328,7 +246,7 @@
     flex-direction: column;
     gap: 1px;
     border: 1px solid var(--border-soft);
-    border-radius: 8px;
+    border-radius: 10px;
     overflow: hidden;
   }
 
@@ -336,10 +254,10 @@
     display: flex;
     justify-content: space-between;
     gap: 10px;
-    padding: 7px 10px;
+    padding: 9px 12px;
     background: var(--surface-raised);
     font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
+    font-size: 13px;
     align-items: baseline;
   }
   .prop-row.linked { cursor: pointer; }
@@ -357,11 +275,9 @@
 
   .no-results {
     color: var(--text-faint);
-    font-size: 12.5px;
-    padding: 8px 10px;
+    font-size: 13px;
+    padding: 8px 12px;
   }
-
-  #cy:focus { outline: none; }
 
   #contextMenu {
     position: fixed;
@@ -410,33 +326,21 @@
 </head>
 <body>
 
-<div id="stage">
-  <div id="cy"></div>
-  <div class="top-bar">
+<div class="page">
+  <div class="page-head">
+    <p class="page-title">State path search</p>
     <div class="stat-pill"><b id="nodeCountStat">0</b> types &middot; <b id="edgeCountStat">0</b> links</div>
   </div>
-  <div class="legend">
-    <div class="legend-row"><span class="legend-dot" style="background:var(--accent)"></span>gameplay type</div>
-    <div class="legend-row"><span class="legend-dot" style="background:var(--path)"></span>selected / on route</div>
-    <div class="legend-row"><span class="legend-line" style="border-color:var(--leaf)"></span>direct reference</div>
-    <div class="legend-row"><span class="legend-line" style="border-color:var(--focus)"></span>list / dictionary</div>
-  </div>
-</div>
 
-<div id="resizer" title="Drag to resize"></div>
-
-<div id="sidebar">
-  <div class="sidebar-head">
-    <p class="sidebar-title">Find a type or field</p>
-    <div class="search-box">
-      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input id="searchInput" type="text" placeholder="UnityZodiac, NextZodiacs, sign..." autocomplete="off" spellcheck="false">
-      <div class="search-results" id="searchResults"></div>
-    </div>
+  <div class="search-box">
+    <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <input id="searchInput" type="text" placeholder="UnityZodiac, NextZodiacs, sign..." autocomplete="off" spellcheck="false">
   </div>
+  <div class="search-results" id="searchResults"></div>
+
   <div id="detail">
     <div class="empty-state" id="emptyState">
-      Click a node in the graph, or search above, to see every path from <code>GameData</code> that reaches it.
+      Search for a gameplay type, a field name, or a compatibility alias to see every path from <code>GameData</code> that reaches it.
     </div>
   </div>
 </div>
@@ -448,10 +352,6 @@
 
 <script>
 (function () {
-  if (typeof cytoscape.use === 'function' && typeof cytoscapeDagre !== 'undefined') {
-    cytoscape.use(cytoscapeDagre);
-  }
-
   const GRAPH = {
   "root": "GameData",
   "nodes": [
@@ -2260,21 +2160,6 @@
   ]
 };
 
-  const COSE_LAYOUT = {
-    name: 'cose',
-    idealEdgeLength: 220,
-    nodeOverlap: 24,
-    nodeRepulsion: 950000,
-    edgeElasticity: 80,
-    nestingFactor: 0.1,
-    gravity: 12,
-    numIter: 2500,
-    initialTemp: 400,
-    coolingFactor: 0.97,
-    minTemp: 1.0,
-    animate: false
-  };
-
   const nodeIds = new Set(GRAPH.nodes.map(n => n.id));
   const outEdges = new Map();
   const inEdges = new Map();
@@ -2321,118 +2206,6 @@
     }
   }
 
-  const degree = new Map();
-  for (const id of nodeIds) degree.set(id, (outEdges.get(id).length || 0) + (inEdges.get(id).length || 0));
-
-  const rootStyles = getComputedStyle(document.documentElement);
-  function cssVar(name) { return rootStyles.getPropertyValue(name).trim(); }
-
-  const cyElements = [];
-  for (const n of GRAPH.nodes) {
-    cyElements.push({ data: { id: n.id, label: n.id, deg: degree.get(n.id) || 1, isRoot: n.id === GRAPH.root } });
-  }
-  let edgeSeq = 0;
-  for (const e of GRAPH.edges) {
-    if (!e.to || !nodeIds.has(e.to)) continue;
-    edgeSeq++;
-    cyElements.push({ data: { id: 'e' + edgeSeq, source: e.from, target: e.to, kind: e.kind, property: e.property } });
-  }
-
-  const cy = cytoscape({
-    container: document.getElementById('cy'),
-    elements: cyElements,
-    wheelSensitivity: 0.25,
-    style: [
-      {
-        selector: 'node',
-        style: {
-          'background-color': '#3a3f52',
-          'label': 'data(label)',
-          'color': cssVar('--text-dim'),
-          'font-family': 'JetBrains Mono, monospace',
-          'font-size': 9,
-          'text-valign': 'bottom',
-          'text-margin-y': 4,
-          'width': 'mapData(deg, 1, 60, 10, 42)',
-          'height': 'mapData(deg, 1, 60, 10, 42)',
-          'border-width': 1.5,
-          'border-color': cssVar('--border'),
-          'transition-property': 'background-color, border-color, opacity',
-          'transition-duration': '120ms'
-        }
-      },
-      {
-        selector: 'node[?isRoot]',
-        style: {
-          'background-color': cssVar('--accent'),
-          'border-color': cssVar('--accent'),
-          'width': 30,
-          'height': 30,
-          'font-size': 11,
-          'font-weight': 700,
-          'color': cssVar('--text')
-        }
-      },
-      {
-        selector: 'node.selected',
-        style: {
-          'background-color': cssVar('--path'),
-          'border-color': cssVar('--path'),
-          'color': cssVar('--text'),
-          'font-size': 11,
-          'font-weight': 700,
-          'z-index': 999
-        }
-      },
-      {
-        selector: 'node.on-route',
-        style: {
-          'background-color': cssVar('--path'),
-          'border-color': cssVar('--path'),
-          'color': cssVar('--text')
-        }
-      },
-      {
-        selector: 'edge',
-        style: {
-          'width': 1,
-          'curve-style': 'bezier',
-          'line-color': cssVar('--leaf'),
-          'target-arrow-color': cssVar('--leaf'),
-          'target-arrow-shape': 'triangle',
-          'arrow-scale': 0.6,
-          'opacity': 0.55
-        }
-      },
-      {
-        selector: 'edge[kind = "list"], edge[kind = "dict"], edge[kind = "dict-unkeyed"]',
-        style: {
-          'line-color': cssVar('--focus'),
-          'target-arrow-color': cssVar('--focus')
-        }
-      },
-      {
-        selector: 'edge.on-route',
-        style: {
-          'line-color': cssVar('--path'),
-          'target-arrow-color': cssVar('--path'),
-          'width': 2.5,
-          'opacity': 1,
-          'z-index': 998
-        }
-      },
-      {
-        selector: 'edge.long-span',
-        style: {
-          'curve-style': 'unbundled-bezier',
-          'control-point-distances': 'data(bendDistance)',
-          'control-point-weights': 'data(bendWeight)'
-        }
-      },
-    ],
-    layout: COSE_LAYOUT
-  });
-
   function collectionSegment(edge) {
     if (edge.kind === 'list') return edge.property + '.<n>';
     if (edge.kind === 'dict') return edge.property + '.<key>';
@@ -2462,93 +2235,13 @@
     return routes;
   }
 
-  let selectedId = null;
-  let activeRouteIdx = -1;
-  let currentRoutes = [];
-
-  function clearHighlight() {
-    cy.elements().removeClass('on-route selected').show();
-  }
-
-  // Show only the nodes/edges that appear in `routes`, hiding everything else
-  // entirely (not just dimming) so overlapping unrelated edges stop cluttering
-  // the picture, then fit the viewport to what remains.
-  function isolateRoutes(routes) {
-    cy.elements().removeClass('on-route selected').hide();
-    const rootNode = cy.getElementById(GRAPH.root);
-    rootNode.show().addClass('on-route');
-    const visible = cy.collection().union(rootNode);
-    for (const route of routes) {
-      for (const e of route) {
-        const edgeEls = cy.edges().filter(el => el.data('source') === e.from && el.data('target') === e.to && el.data('property') === e.property);
-        edgeEls.show().addClass('on-route');
-        const targetNode = cy.getElementById(e.to);
-        targetNode.show().addClass(e.to === selectedId ? 'selected' : 'on-route');
-        visible.merge(edgeEls).merge(targetNode);
-      }
-    }
-    // GameData has no incoming edge within this isolated subgraph, and the
-    // selected node is its unique sink, so a left-to-right dagre layout on
-    // just the visible elements naturally pins them at opposite ends with
-    // every intermediate node column-ordered by its distance from GameData,
-    // and parallel routes fanned out as separate horizontal lanes between.
-    activeLayout?.stop();
-    activeLayout = visible.layout({
-      name: 'dagre',
-      rankDir: 'LR',
-      nodeSep: 36,
-      rankSep: 130,
-      edgeSep: 18,
-      fit: true,
-      padding: 70,
-      animate: true,
-      animationDuration: 300
-    });
-    activeLayout.one('layoutstop', () => routeLongSpanEdges(visible));
-    activeLayout.run();
-  }
-
-  // Dagre positions nodes by rank but cytoscape still draws each edge as a
-  // near-straight bezier between its two endpoints, so an edge skipping
-  // several ranks cuts straight through whatever nodes sit in between.
-  // Once positions settle, give edges that skip 2+ ranks a bend that arcs
-  // them above or below the busy middle band instead of through it, sized
-  // and alternated by how many ranks they skip so parallel long edges don't
-  // just re-collide with each other.
-  function routeLongSpanEdges(visible) {
-    const edges = visible.edges();
-    edges.removeClass('long-span');
-    let bendSeq = 0;
-    edges.forEach(edge => {
-      const src = edge.source();
-      const tgt = edge.target();
-      const dx = Math.abs(tgt.position('x') - src.position('x'));
-      const rankGap = dx / 130;
-      if (rankGap <= 1.4) return;
-      bendSeq++;
-      const direction = bendSeq % 2 === 0 ? 1 : -1;
-      const distance = direction * (26 + Math.min(rankGap, 5) * 16);
-      edge.data('bendDistance', distance);
-      edge.data('bendWeight', 0.5);
-      edge.addClass('long-span');
-    });
-  }
-
-  function renderRouteInGraph(route) {
-    isolateRoutes([route]);
-  }
-
-  function highlightAllRoutes(routes) {
-    isolateRoutes(routes);
-  }
-
   function routeKey(route) {
     return route.map(collectionSegment).join('.');
   }
 
-  function routeHtml(route, idx) {
+  function routeHtml(route) {
     const key = routeKey(route);
-    return '<div class="route" data-idx="' + idx + '" data-copy="' + escapeHtml(key) + '"><span class="seg">' + escapeHtml(key) + '</span></div>';
+    return '<div class="route" data-copy="' + escapeHtml(key) + '"><span class="seg">' + escapeHtml(key) + '</span></div>';
   }
 
   function escapeHtml(s) {
@@ -2556,10 +2249,7 @@
   }
 
   function renderDetail(nodeId) {
-    document.getElementById('emptyState')?.remove();
-    selectedId = nodeId;
-    currentRoutes = findAllRoutes(nodeId).sort((a, b) => a.length - b.length);
-    activeRouteIdx = -1;
+    const currentRoutes = findAllRoutes(nodeId).sort((a, b) => a.length - b.length);
 
     const outs = (outEdges.get(nodeId) || []).slice().sort((a, b) => a.property.localeCompare(b.property));
     const leaves = (leafProps.get(nodeId) || []).slice().sort((a, b) => a.property.localeCompare(b.property));
@@ -2587,7 +2277,7 @@
         routesHtml += '<div class="route alias-route" data-copy="' + escapeHtml(a.alias) + '"><span class="alias-badge">alias</span><span class="seg">' + escapeHtml(a.alias) + '</span></div>';
       }
       routesHtml += currentRoutes.map(routeHtml).join('');
-      html += '<div class="route-list" id="routeList">' + routesHtml + '</div>';
+      html += '<div class="route-list">' + routesHtml + '</div>';
     }
 
     if (outs.length) {
@@ -2609,57 +2299,22 @@
 
     detail.innerHTML = html;
 
-    detail.querySelectorAll('.route').forEach(el => {
-      el.addEventListener('click', () => {
-        const idx = parseInt(el.getAttribute('data-idx'), 10);
-        if (activeRouteIdx === idx) {
-          activeRouteIdx = -1;
-          highlightAllRoutes(currentRoutes);
-          detail.querySelectorAll('.route').forEach(r => r.classList.remove('active'));
-        } else {
-          activeRouteIdx = idx;
-          renderRouteInGraph(currentRoutes[idx]);
-          detail.querySelectorAll('.route').forEach(r => r.classList.remove('active'));
-          el.classList.add('active');
-        }
-      });
-    });
-
     detail.querySelectorAll('.prop-row.linked').forEach(el => {
       el.addEventListener('click', () => selectNode(el.getAttribute('data-target')));
     });
 
-    if (nodeId !== GRAPH.root) highlightAllRoutes(currentRoutes);
-    else {
-      clearHighlight();
-      const rootEl = cy.getElementById(GRAPH.root);
-      rootEl.addClass('selected');
-      cy.animate({ center: { eles: rootEl }, zoom: Math.max(cy.zoom(), 1.1) }, { duration: 260 });
-    }
+    detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
-
-  let activeLayout = null;
 
   function selectNode(nodeId) {
-    cy.elements().unselect();
+    searchInput.value = nodeId;
+    searchResults.innerHTML = '';
+    searchResults.classList.remove('open');
     renderDetail(nodeId);
+    const params = new URLSearchParams(location.search);
+    params.set('select', nodeId);
+    history.replaceState(null, '', '?' + params.toString());
   }
-
-  function deselectAll() {
-    selectedId = null;
-    activeRouteIdx = -1;
-    currentRoutes = [];
-    clearHighlight();
-    activeLayout?.stop();
-    activeLayout = cy.layout(COSE_LAYOUT);
-    activeLayout.run();
-    document.getElementById('detail').innerHTML =
-      '<div class="empty-state" id="emptyState">Click a node in the graph, or search above, to see every path from <code>GameData</code> that reaches it.</div>';
-  }
-
-  cy.on('tap', 'node', evt => selectNode(evt.target.id()));
-  cy.on('tap', evt => { if (evt.target === cy) deselectAll(); });
-
 
   // Search
   const searchInput = document.getElementById('searchInput');
@@ -2716,83 +2371,37 @@
     return html;
   }
 
+  let currentMatches = [];
+
   function runSearch(query) {
     const q = query.trim().toLowerCase();
-    if (!q) { searchResults.classList.remove('open'); searchResults.innerHTML = ''; return; }
+    if (!q) { searchResults.classList.remove('open'); searchResults.innerHTML = ''; currentMatches = []; return; }
     const scored = [];
     for (const item of searchIndex) {
       const m = fuzzyMatch(item.label, q);
       if (m) scored.push({ item, score: m.score, positions: m.positions });
     }
     scored.sort((a, b) => a.score - b.score);
-    const matches = scored.slice(0, 40);
-    if (!matches.length) {
-      searchResults.innerHTML = '<div class="no-results">No matches</div>';
+    currentMatches = scored.slice(0, 40);
+    if (!currentMatches.length) {
+      searchResults.innerHTML = '<div class="hint">No matches</div>';
       searchResults.classList.add('open');
       return;
     }
-    searchResults.innerHTML = matches.map(({ item, positions }, i) => {
+    searchResults.innerHTML = currentMatches.map(({ item, positions }) => {
       const tag = item.isAlias ? 'alias for ' + item.sub : item.isField ? 'field on ' + item.sub : 'type';
-      return '<div class="search-result" data-idx="' + i + '"><span>' + highlightMatch(item.label, positions) + '</span><span class="kind-tag">' + escapeHtml(tag) + '</span></div>';
+      return '<div class="search-result"><span>' + highlightMatch(item.label, positions) + '</span><span class="kind-tag">' + escapeHtml(tag) + '</span></div>';
     }).join('');
     searchResults.classList.add('open');
     searchResults.querySelectorAll('.search-result').forEach((el, i) => {
       el.addEventListener('click', () => {
-        const m = matches[i].item;
-        searchInput.value = m.label;
-        searchResults.classList.remove('open');
+        const m = currentMatches[i].item;
         selectNode(m.isField ? m.fieldOwner : m.target);
       });
     });
   }
 
   searchInput.addEventListener('input', () => runSearch(searchInput.value));
-  searchInput.addEventListener('focus', () => { if (searchInput.value) runSearch(searchInput.value); });
-  document.addEventListener('click', evt => {
-    if (!evt.target.closest('.search-box')) searchResults.classList.remove('open');
-  });
-
-  cy.ready(() => {
-    selectNode(GRAPH.root);
-  });
-
-  // Sidebar resize
-  const resizer = document.getElementById('resizer');
-  const MIN_SIDEBAR = 260;
-  const MAX_SIDEBAR = 720;
-
-  function setSidebarWidth(px) {
-    const clamped = Math.max(MIN_SIDEBAR, Math.min(MAX_SIDEBAR, px));
-    document.documentElement.style.setProperty('--sidebar-width', clamped + 'px');
-    return clamped;
-  }
-
-  try {
-    const saved = parseInt(localStorage.getItem('stateGraphSidebarWidth'), 10);
-    if (Number.isFinite(saved)) setSidebarWidth(saved);
-  } catch {}
-
-  resizer.addEventListener('pointerdown', evt => {
-    evt.preventDefault();
-    resizer.classList.add('dragging');
-    document.body.classList.add('resizing');
-    resizer.setPointerCapture(evt.pointerId);
-
-    const onMove = moveEvt => {
-      const width = setSidebarWidth(window.innerWidth - moveEvt.clientX);
-      try { localStorage.setItem('stateGraphSidebarWidth', String(width)); } catch {}
-      cy.resize();
-    };
-    const onUp = () => {
-      resizer.classList.remove('dragging');
-      document.body.classList.remove('resizing');
-      resizer.removeEventListener('pointermove', onMove);
-      resizer.removeEventListener('pointerup', onUp);
-      cy.resize();
-    };
-    resizer.addEventListener('pointermove', onMove);
-    resizer.addEventListener('pointerup', onUp);
-  });
 
   // Right-click copy menu for any element carrying data-copy
   const contextMenu = document.getElementById('contextMenu');
@@ -2842,10 +2451,16 @@
 
   document.addEventListener('click', evt => {
     if (!evt.target.closest('#contextMenu')) hideContextMenu();
+    if (!evt.target.closest('.search-box') && !evt.target.closest('.search-results')) {
+      searchResults.classList.remove('open');
+    }
   });
   document.addEventListener('scroll', hideContextMenu, true);
   window.addEventListener('blur', hideContextMenu);
   document.addEventListener('keydown', evt => { if (evt.key === 'Escape') hideContextMenu(); });
+
+  const preselect = new URLSearchParams(location.search).get('select');
+  if (preselect && nodeIds.has(preselect)) selectNode(preselect);
 })();
 </script>
 </body>
