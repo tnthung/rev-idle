@@ -2594,7 +2594,17 @@
     renderDetail(nodeId);
   }
 
+  function deselectAll() {
+    selectedId = null;
+    activeRouteIdx = -1;
+    currentRoutes = [];
+    clearHighlight();
+    document.getElementById('detail').innerHTML =
+      '<div class="empty-state" id="emptyState">Click a node in the graph, or search above, to see every path from <code>GameData</code> that reaches it.</div>';
+  }
+
   cy.on('tap', 'node', evt => selectNode(evt.target.id()));
+  cy.on('tap', evt => { if (evt.target === cy) deselectAll(); });
 
   // Search
   const searchInput = document.getElementById('searchInput');
