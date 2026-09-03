@@ -129,6 +129,18 @@
   }
   .stat-pill b { color: var(--text); font-weight: 600; }
 
+  .focus-toggle {
+    font-family: 'Inter', sans-serif;
+    cursor: pointer;
+    transition: background-color 120ms, color 120ms, border-color 120ms;
+  }
+  .focus-toggle:hover { border-color: var(--accent-dim); }
+  .focus-toggle.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent-dim);
+  }
+
   #sidebar {
     background: var(--surface);
     display: flex;
@@ -412,6 +424,7 @@
   <div id="cy"></div>
   <div class="top-bar">
     <div class="stat-pill"><b id="nodeCountStat">0</b> types &middot; <b id="edgeCountStat">0</b> links</div>
+    <button id="focusToggle" class="stat-pill focus-toggle" type="button" title="Arrange nodes in rings by distance from the selected node">Focus layout: off</button>
   </div>
   <div class="legend">
     <div class="legend-row"><span class="legend-dot" style="background:var(--accent)"></span>gameplay type</div>
@@ -447,6 +460,21 @@
 <script>
 (function () {
   const GRAPH = __GRAPH_JSON__;
+
+  const COSE_LAYOUT = {
+    name: 'cose',
+    idealEdgeLength: 220,
+    nodeOverlap: 24,
+    nodeRepulsion: 950000,
+    edgeElasticity: 80,
+    nestingFactor: 0.1,
+    gravity: 12,
+    numIter: 2500,
+    initialTemp: 400,
+    coolingFactor: 0.97,
+    minTemp: 1.0,
+    animate: false
+  };
 
   const nodeIds = new Set(GRAPH.nodes.map(n => n.id));
   const outEdges = new Map();
@@ -603,20 +631,7 @@
         style: { 'opacity': 0.04 }
       }
     ],
-    layout: {
-      name: 'cose',
-      idealEdgeLength: 220,
-      nodeOverlap: 24,
-      nodeRepulsion: 950000,
-      edgeElasticity: 80,
-      nestingFactor: 0.1,
-      gravity: 12,
-      numIter: 2500,
-      initialTemp: 400,
-      coolingFactor: 0.97,
-      minTemp: 1.0,
-      animate: false
-    }
+    layout: COSE_LAYOUT
   });
 
   function collectionSegment(edge) {
@@ -779,11 +794,59 @@
     }
   }
 
+  // Undirected BFS distance from a node, used to arrange the graph by
+  // relevance (graph distance) to the current selection in focus mode.
+  function bfsDistances(startId) {
+    const dist = new Map([[startId, 0]]);
+    const queue = [startId];
+    while (queue.length) {
+      const cur = queue.shift();
+      const d = dist.get(cur);
+      const neighbors = [
+        ...(outEdges.get(cur) || []).map(e => e.to),
+        ...(inEdges.get(cur) || []).map(e => e.from)
+      ];
+      for (const next of neighbors) {
+        if (next && !dist.has(next)) {
+          dist.set(next, d + 1);
+          queue.push(next);
+        }
+      }
+    }
+    return dist;
+  }
+
+  let focusMode = false;
+  const focusToggle = document.getElementById('focusToggle');
+
+  function runFocusLayout(nodeId) {
+    const dist = bfsDistances(nodeId);
+    let maxDist = 0;
+    for (const d of dist.values()) maxDist = Math.max(maxDist, d);
+    cy.nodes().forEach(n => {
+      const d = dist.has(n.id()) ? dist.get(n.id()) : maxDist + 2;
+      n.data('concentric', -d);
+    });
+    cy.layout({
+      name: 'concentric',
+      concentric: n => n.data('concentric'),
+      levelWidth: () => 1,
+      minNodeSpacing: 40,
+      animate: true,
+      animationDuration: 400
+    }).run();
+  }
+
   function selectNode(nodeId) {
     cy.elements().unselect();
-    const el = cy.getElementById(nodeId);
-    if (el.length) {
-      cy.animate({ center: { eles: el }, zoom: Math.max(cy.zoom(), 1.1) }, { duration: 260 });
+    if (focusMode) {
+      runFocusLayout(nodeId);
+      cy.animate({ fit: { eles: cy.elements(), padding: 60 } }, { duration: 420 });
+    } else {
+      const el = cy.getElementById(nodeId);
+      if (el.length) {
+        cy.animate({ center: { eles: el }, zoom: Math.max(cy.zoom(), 1.1) }, { duration: 260 });
+      }
     }
     renderDetail(nodeId);
   }
@@ -799,6 +862,18 @@
 
   cy.on('tap', 'node', evt => selectNode(evt.target.id()));
   cy.on('tap', evt => { if (evt.target === cy) deselectAll(); });
+
+  focusToggle.addEventListener('click', () => {
+    focusMode = !focusMode;
+    focusToggle.classList.toggle('active', focusMode);
+    focusToggle.textContent = 'Focus layout: ' + (focusMode ? 'on' : 'off');
+    if (focusMode && selectedId) {
+      runFocusLayout(selectedId);
+      cy.animate({ fit: { eles: cy.elements(), padding: 60 } }, { duration: 420 });
+    } else if (!focusMode) {
+      cy.layout(COSE_LAYOUT).run();
+    }
+  });
 
   // Search
   const searchInput = document.getElementById('searchInput');
