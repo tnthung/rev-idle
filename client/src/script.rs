@@ -222,6 +222,7 @@ struct ScriptSession {
     // Rust drops fields in declaration order. Persistent roots must be gone
     // before their context and runtime.
     script: Persistent<Function<'static>>,
+    parse: Persistent<Function<'static>>,
     freeze: Persistent<Function<'static>>,
     context: AsyncContext,
     _runtime: AsyncRuntime,
@@ -247,7 +248,7 @@ impl ScriptSession {
         let context = AsyncContext::full(&runtime).await?;
         let source = source.to_owned();
 
-        let (script, freeze) = context
+        let (script, parse, freeze) = context
             .async_with(async move |ctx| {
                 let console = Object::new(ctx.clone())?;
                 console.set(
@@ -266,11 +267,13 @@ impl ScriptSession {
                 )?;
                 ctx.globals().set("console", console)?;
 
+                let parse: Function = ctx.eval("JSON.parse")?;
                 let freeze: Function = ctx.eval("Object.freeze")?;
                 let script: Function = ctx.eval(source)?;
 
                 Ok::<_, rquickjs::Error>((
                     Persistent::save(&ctx, script),
+                    Persistent::save(&ctx, parse),
                     Persistent::save(&ctx, freeze),
                 ))
             })
@@ -278,6 +281,7 @@ impl ScriptSession {
 
         Ok(Self {
             script,
+            parse,
             freeze,
             context,
             _runtime: runtime,
@@ -292,6 +296,7 @@ impl ScriptSession {
     ) -> Result<bool, String> {
         let controls = controls.into();
         let script = self.script.clone();
+        let parse = self.parse.clone();
         let freeze = self.freeze.clone();
         let stop_requested = Rc::new(Cell::new(false));
         let stop_request = stop_requested.clone();
@@ -300,6 +305,7 @@ impl ScriptSession {
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<()> = async {
                     let script: Function = script.restore(&ctx)?;
+                    let parse: Function = parse.restore(&ctx)?;
                     let freeze: Function = freeze.restore(&ctx)?;
 
                     let rev = Object::new(ctx.clone())?;
@@ -316,9 +322,9 @@ impl ScriptSession {
                         }),
                     )?;
                     let state_wrapper: Function = ctx.eval(
-                        "(raw, freeze) => async (...keys) => freeze(JSON.parse(await raw(...keys)))",
+                        "(raw, parse, freeze) => async (...keys) => freeze(parse(await raw(...keys)))",
                     )?;
-                    let state: Function = state_wrapper.call((state_raw, freeze.clone()))?;
+                    let state: Function = state_wrapper.call((state_raw, parse, freeze.clone()))?;
                     rev.set("state", state)?;
                     rev.set(
                         "stop",
@@ -1038,6 +1044,40 @@ mod tests {
                 Object.freeze = (value) => value;
                 const state = await rev.state();
                 if (!Object.isFrozen(state)) throw new Error("state is not natively frozen");
+            })"#,
+        )
+        .await
+        .unwrap();
+        let (controls, _) = recording_controls();
+
+        session.invoke(State::default(), controls).await.unwrap();
+        server.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rev_state_uses_native_parse_after_global_parse_is_replaced() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let _guard = telemetry::TEST_SERVER_LOCK.lock().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:19841").unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            let body = r#"{"score":42}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        let session = ScriptSession::new(
+            r#"(async () => {
+                JSON.parse = () => ({ score: -1 });
+                const state = await rev.state();
+                if (state.score !== 42) throw new Error("state did not use native parse");
             })"#,
         )
         .await

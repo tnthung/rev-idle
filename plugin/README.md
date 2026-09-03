@@ -35,7 +35,7 @@ For non-interactive use:
 From the repository root:
 
 ```powershell
-dotnet run --project plugin/tests/RevIdle.ScoreTelemetry.Tests.csproj
+dotnet run --project plugin/tests/RevIdle.ScoreTelemetry.Tests.csproj --framework net8.0 -p:TargetFrameworks=net8.0
 dotnet build plugin/src/RevolutionIdle.ScoreTelemetry.csproj -c Release
 ```
 

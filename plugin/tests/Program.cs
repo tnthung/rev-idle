@@ -24,10 +24,14 @@ StatePayloadPreservesCollectionIndexesAcrossCycles();
 StatePayloadSerializesGameSpecificScalars();
 StatePayloadKeepsSelectedKeysForSharedValues();
 StatePayloadSerializesIl2CppDatesAndNullables();
+StatePayloadRejectsUnsupportedIl2CppObjectWrappers();
 StatePayloadUsesIl2CppCollectionAccessors();
 StatePayloadIncludesInheritedGameplayProperties();
+StatePayloadSerializesUnityColorAsChannels();
+StatePayloadRejectsRunawayValueTraversal();
+StatePayloadRejectsImplementationPropertyPaths();
 StatePayloadExcludesIl2CppDelegatesAndUnityEvents();
-StatePayloadStopsBeforeClrDelegateRuntimeBases();
+StatePayloadExcludesRuntimeTypesAtEveryBoundary();
 BridgeDecodesFullWidthCoordinates();
 BridgeRejectsZeroRequestId();
 BridgeMapsTopLeftClientCoordinatesToUnityCoordinates();
@@ -40,7 +44,7 @@ ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
 ScrollProtocolRejectsZeroRequestId();
 ScrollQueuePreservesOrderAndRejectsDuplicates();
 DispatcherFindsFirstScrollableRaycast();
-System.Console.WriteLine("34 tests passed.");
+System.Console.WriteLine("38 tests passed.");
 
 static void InvalidPortsDisableServer()
 {
@@ -359,6 +363,20 @@ static void StatePayloadSerializesIl2CppDatesAndNullables()
     Equal("{\"Date\":\"2026-09-03T01:02:03.0000000Z\",\"HasValue\":17,\"NoValue\":null}", Encoding.UTF8.GetString(payload), nameof(StatePayloadSerializesIl2CppDatesAndNullables));
 }
 
+static void StatePayloadRejectsUnsupportedIl2CppObjectWrappers()
+{
+    object wrapper = Activator.CreateInstance(AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("Il2Cppmscorlib"), AssemblyBuilderAccess.Run).DefineDynamicModule("main").DefineType("Il2CppSystem.Object", TypeAttributes.Public | TypeAttributes.Class).CreateType())!;
+    var data = new Il2CppObjectFixture { Value = wrapper };
+
+    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, Array.Empty<string>(), out byte[] canonicalPayload), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
+    Equal(0, canonicalPayload.Length, nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
+    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, new[] { "Value" }, out byte[] selectedPayload), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
+    Equal(0, selectedPayload.Length, nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
+
+    data = new Il2CppObjectFixture { Value = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Il2CppSystem.Object)) };
+    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, Array.Empty<string>(), out _), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
+}
+
 static void StatePayloadUsesIl2CppCollectionAccessors()
 {
     static object Create(string assemblyName, string typeName, Type baseType) => Activator.CreateInstance(AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(assemblyName), AssemblyBuilderAccess.Run).DefineDynamicModule("main").DefineType(typeName, TypeAttributes.Public | TypeAttributes.Class, baseType).CreateType())!;
@@ -383,6 +401,32 @@ static void StatePayloadIncludesInheritedGameplayProperties()
     Equal("{\"Item\":{\"Base\":\"base\",\"Derived\":\"derived\",\"Hidden\":\"derived hidden\"}}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
     Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "Item.Base", "Item.Hidden" }, out byte[] selectedPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
     Equal("{\"Item.Base\":\"base\",\"Item.Hidden\":\"derived hidden\"}", Encoding.UTF8.GetString(selectedPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
+}
+
+static void StatePayloadSerializesUnityColorAsChannels()
+{
+    var data = new ColorFixture { Color = default };
+
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, Array.Empty<string>(), out byte[] canonicalPayload), nameof(StatePayloadSerializesUnityColorAsChannels));
+    Equal("{\"Color\":{\"r\":0,\"g\":0,\"b\":0,\"a\":0}}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadSerializesUnityColorAsChannels));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "Color" }, out byte[] selectedPayload), nameof(StatePayloadSerializesUnityColorAsChannels));
+    Equal("{\"Color\":{\"r\":0,\"g\":0,\"b\":0,\"a\":0}}", Encoding.UTF8.GetString(selectedPayload), nameof(StatePayloadSerializesUnityColorAsChannels));
+}
+
+static void StatePayloadRejectsRunawayValueTraversal()
+{
+    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(new SelfReturningValueFixture(), Array.Empty<string>(), out byte[] payload), nameof(StatePayloadRejectsRunawayValueTraversal));
+    Equal(0, payload.Length, nameof(StatePayloadRejectsRunawayValueTraversal));
+}
+
+static void StatePayloadRejectsImplementationPropertyPaths()
+{
+    var data = new TerminalPathFixture { Color = default, playerId = "player", rows = new List<int> { 1 } };
+
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "playerId.Length" }, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "rows.Count" }, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "rows.Capacity" }, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "Color.gamma" }, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
 }
 
 static void StatePayloadExcludesIl2CppDelegatesAndUnityEvents()
@@ -418,15 +462,18 @@ static void StatePayloadExcludesIl2CppDelegatesAndUnityEvents()
     Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "Item.Provider" }, out _), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
 }
 
-static void StatePayloadStopsBeforeClrDelegateRuntimeBases()
+static void StatePayloadExcludesRuntimeTypesAtEveryBoundary()
 {
     Action callback = static () => { };
-    var data = new ClrDelegateFixture { Selected = callback, Values = new object[] { callback } };
+    object unityObject = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(UnityEngine.Object));
+    var data = new ExcludedRuntimeFixture { Selected = callback, Unity = unityObject, Values = new[] { callback, unityObject } };
 
-    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, Array.Empty<string>(), out byte[] canonicalPayload), nameof(StatePayloadStopsBeforeClrDelegateRuntimeBases));
-    Equal("{\"Values\":[{}]}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadStopsBeforeClrDelegateRuntimeBases));
-    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "Selected" }, out byte[] selectedPayload), nameof(StatePayloadStopsBeforeClrDelegateRuntimeBases));
-    Equal("{\"Selected\":{}}", Encoding.UTF8.GetString(selectedPayload), nameof(StatePayloadStopsBeforeClrDelegateRuntimeBases));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, Array.Empty<string>(), out byte[] canonicalPayload), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
+    Equal("{\"Values\":[null,null]}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "Selected" }, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "Unity" }, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "Values.0" }, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "Values.1" }, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
 }
 
 static HttpScoreServer CreateServer()
@@ -699,6 +746,11 @@ sealed class Il2CppCollectionFixture
     public object List { get; init; } = new();
 }
 
+sealed class Il2CppObjectFixture
+{
+    public object Value { get; init; } = new();
+}
+
 public class ReflectedListFixture : System.Collections.IEnumerable
 {
     public int Count => 2;
@@ -734,9 +786,27 @@ sealed class FilteredMemberRoot
     public object Item { get; init; } = new();
 }
 
-sealed class ClrDelegateFixture
+sealed class ColorFixture
+{
+    public UnityEngine.Color Color { get; init; }
+}
+
+readonly struct SelfReturningValueFixture
+{
+    public SelfReturningValueFixture Value => this;
+}
+
+sealed class TerminalPathFixture
+{
+    public UnityEngine.Color Color { get; init; }
+    public string playerId { get; init; } = "";
+    public List<int> rows { get; init; } = new();
+}
+
+sealed class ExcludedRuntimeFixture
 {
     public object Selected { get; init; } = new();
+    public object Unity { get; init; } = new();
     public object[] Values { get; init; } = Array.Empty<object>();
 }
 

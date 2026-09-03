@@ -17,6 +17,7 @@ internal enum StatePayloadStatus
 internal static class StatePayload
 {
     private const long MaxSafeInteger = 9007199254740991;
+    private const int MaxTraversalDepth = 64;
     private static readonly ConcurrentDictionary<Type, PropertyInfo[]> Properties = new();
 
     public static bool TryEncode(GameData data, IReadOnlyList<string> keys, out byte[] payload) => Encode(data, keys, out payload) == StatePayloadStatus.Success;
@@ -43,14 +44,14 @@ internal static class StatePayload
             using (var writer = new Utf8JsonWriter(stream))
             {
                 if (paths.Count == 0)
-                    WriteValue(writer, data, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false);
+                    WriteValue(writer, data, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0);
                 else
                 {
                     writer.WriteStartObject();
                     foreach ((string path, object? value) in values)
                     {
                         writer.WritePropertyName(path);
-                        WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false);
+                        WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0);
                     }
                     writer.WriteEndObject();
                 }
@@ -76,7 +77,7 @@ internal static class StatePayload
         value = data;
         foreach (string segment in ResolveAlias(path).Split('.'))
         {
-            if (value is null || segment.Length == 0)
+            if (value is null || segment.Length == 0 || IsExcludedType(value.GetType()))
                 return false;
 
             if (TryGetDictionaryValue(value, segment, out object? dictionaryValue, out bool dictionary))
@@ -95,12 +96,26 @@ internal static class StatePayload
                 continue;
             }
 
-            PropertyInfo? property = GetProperties(value.GetType()).FirstOrDefault(property => property.Name == segment);
+            Type type = value.GetType();
+            if (value is IList
+                || IsReflectedCollection(type)
+                || type.IsPrimitive
+                || type.IsEnum
+                || type == typeof(decimal)
+                || value is string or DateTime or DateTimeOffset
+                || type.FullName == "BigDouble" && type.Assembly.GetName().Name == "Assembly-CSharp"
+                || type.Assembly.GetName().Name == "ACTk.Runtime" && type.Namespace == "CodeStage.AntiCheat.ObscuredTypes"
+                || type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName is "Il2CppSystem.DateTime" or "Il2CppSystem.DateTimeOffset" or "Il2CppSystem.Object"
+                || type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName?.StartsWith("Il2CppSystem.Nullable`1", StringComparison.Ordinal) == true
+                || type.Assembly.GetName().Name == "UnityEngine.CoreModule" && type.FullName == "UnityEngine.Color")
+                return false;
+
+            PropertyInfo? property = GetProperties(type).FirstOrDefault(property => property.Name == segment);
             if (property is null)
                 return false;
             value = property.GetValue(value);
         }
-        return true;
+        return value is null || !IsExcludedType(value.GetType());
     }
 
     private static string ResolveAlias(string path) => path switch
@@ -147,8 +162,10 @@ internal static class StatePayload
         _ => path
     };
 
-    private static void WriteValue(Utf8JsonWriter writer, object? value, HashSet<object> references, HashSet<nint> pointers, bool collectionElement)
+    private static void WriteValue(Utf8JsonWriter writer, object? value, HashSet<object> references, HashSet<nint> pointers, bool collectionElement, int depth)
     {
+        if (depth > MaxTraversalDepth)
+            throw new InvalidOperationException("State traversal exceeded the maximum depth.");
         if (value is null)
         {
             writer.WriteNullValue();
@@ -156,6 +173,15 @@ internal static class StatePayload
         }
 
         Type type = value.GetType();
+        if (IsExcludedType(type))
+        {
+            if (collectionElement)
+            {
+                writer.WriteNullValue();
+                return;
+            }
+            throw new InvalidOperationException("Excluded runtime values cannot be serialized directly.");
+        }
         if (type.FullName == "BigDouble" && type.Assembly.GetName().Name == "Assembly-CSharp")
         {
             writer.WriteStringValue(Format((double)type.GetProperty("Mantissa")!.GetValue(value)!, (double)type.GetProperty("Exponent")!.GetValue(value)!));
@@ -163,7 +189,52 @@ internal static class StatePayload
         }
         if (type.Assembly.GetName().Name == "ACTk.Runtime" && type.Namespace == "CodeStage.AntiCheat.ObscuredTypes")
         {
-            WriteValue(writer, type.GetMethod("GetDecrypted", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null)!.Invoke(value, null), references, pointers, collectionElement);
+            WriteValue(writer, type.GetMethod("GetDecrypted", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null)!.Invoke(value, null), references, pointers, collectionElement, depth + 1);
+            return;
+        }
+        if (type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName == "Il2CppSystem.Object")
+        {
+            if (value is not Il2CppSystem.Object wrapper || wrapper.Pointer == IntPtr.Zero)
+                throw new InvalidOperationException("The IL2CPP object wrapper has no runtime value.");
+            nint objectClass = wrapper.ObjectClass;
+            if (objectClass == 0)
+                throw new InvalidOperationException("The IL2CPP object wrapper has no runtime type.");
+            string objectNamespace = Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_namespace_(objectClass)!;
+            string objectName = Il2CppInterop.Runtime.IL2CPP.il2cpp_class_get_name_(objectClass)!;
+            object unboxed = (objectNamespace, objectName) switch
+            {
+                ("System", "Boolean") => wrapper.Unbox<bool>(),
+                ("System", "Byte") => wrapper.Unbox<byte>(),
+                ("System", "SByte") => wrapper.Unbox<sbyte>(),
+                ("System", "Int16") => wrapper.Unbox<short>(),
+                ("System", "UInt16") => wrapper.Unbox<ushort>(),
+                ("System", "Int32") => wrapper.Unbox<int>(),
+                ("System", "UInt32") => wrapper.Unbox<uint>(),
+                ("System", "Int64") => wrapper.Unbox<long>(),
+                ("System", "UInt64") => wrapper.Unbox<ulong>(),
+                ("System", "Char") => wrapper.Unbox<char>(),
+                ("System", "Single") => wrapper.Unbox<float>(),
+                ("System", "Double") => wrapper.Unbox<double>(),
+                ("System", "Decimal") => wrapper.Unbox<decimal>(),
+                ("System", "String") => Il2CppInterop.Runtime.IL2CPP.Il2CppStringToManaged(wrapper.Pointer)!,
+                ("System", "DateTime") => wrapper.Unbox<Il2CppSystem.DateTime>(),
+                ("System", "DateTimeOffset") => wrapper.Unbox<Il2CppSystem.DateTimeOffset>(),
+                ("", "BigDouble") => wrapper.Unbox<BigDouble>(),
+                ("UnityEngine", "Color") => wrapper.Unbox<UnityEngine.Color>(),
+                _ => throw new InvalidOperationException($"Unsupported IL2CPP object value {objectNamespace}.{objectName}.")
+            };
+            WriteValue(writer, unboxed, references, pointers, collectionElement, depth + 1);
+            return;
+        }
+        if (type.Assembly.GetName().Name == "UnityEngine.CoreModule" && type.FullName == "UnityEngine.Color")
+        {
+            UnityEngine.Color color = (UnityEngine.Color)value;
+            writer.WriteStartObject();
+            writer.WriteNumber("r", color.r);
+            writer.WriteNumber("g", color.g);
+            writer.WriteNumber("b", color.b);
+            writer.WriteNumber("a", color.a);
+            writer.WriteEndObject();
             return;
         }
         if (type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName == "Il2CppSystem.DateTime")
@@ -184,7 +255,7 @@ internal static class StatePayload
         if (type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName?.StartsWith("Il2CppSystem.Nullable`1", StringComparison.Ordinal) == true)
         {
             if ((bool)type.GetProperty("HasValue")!.GetValue(value)!)
-                WriteValue(writer, type.GetProperty("Value")!.GetValue(value), references, pointers, collectionElement);
+                WriteValue(writer, type.GetProperty("Value")!.GetValue(value), references, pointers, collectionElement, depth + 1);
             else
                 writer.WriteNullValue();
             return;
@@ -235,7 +306,7 @@ internal static class StatePayload
             foreach (DictionaryEntry entry in dictionary)
             {
                 writer.WritePropertyName(FormatDictionaryKey(entry.Key));
-                WriteValue(writer, entry.Value, references, pointers, true);
+                WriteValue(writer, entry.Value, references, pointers, true, depth + 1);
             }
             writer.WriteEndObject();
             return;
@@ -250,7 +321,7 @@ internal static class StatePayload
             {
                 object pair = current.GetValue(enumerator)!;
                 writer.WritePropertyName(FormatDictionaryKey(pair.GetType().GetProperty("Key")!.GetValue(pair)!));
-                WriteValue(writer, pair.GetType().GetProperty("Value")!.GetValue(pair), references, pointers, true);
+                WriteValue(writer, pair.GetType().GetProperty("Value")!.GetValue(pair), references, pointers, true, depth + 1);
             }
             writer.WriteEndObject();
             return;
@@ -261,7 +332,7 @@ internal static class StatePayload
             int count = GetCollectionCount(value);
             PropertyInfo item = GetCollectionItem(type);
             for (int index = 0; index < count; index++)
-                WriteValue(writer, item.GetValue(value, new object[] { index }), references, pointers, true);
+                WriteValue(writer, item.GetValue(value, new object[] { index }), references, pointers, true, depth + 1);
             writer.WriteEndArray();
             return;
         }
@@ -269,7 +340,7 @@ internal static class StatePayload
         {
             writer.WriteStartArray();
             foreach (object? item in enumerable)
-                WriteValue(writer, item, references, pointers, true);
+                WriteValue(writer, item, references, pointers, true, depth + 1);
             writer.WriteEndArray();
             return;
         }
@@ -283,7 +354,7 @@ internal static class StatePayload
             if (propertyValue is not null && IsTrackable(propertyValue.GetType()) && IsVisited(propertyValue, references, pointers))
                 continue;
             writer.WritePropertyName(property.Name);
-            WriteValue(writer, propertyValue, references, pointers, false);
+            WriteValue(writer, propertyValue, references, pointers, false, depth + 1);
         }
         writer.WriteEndObject();
     }
