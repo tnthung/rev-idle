@@ -10,7 +10,9 @@ use windows::{
         Graphics::Gdi::ClientToScreen,
         System::{
             Console::GetConsoleWindow,
-            DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData},
+            DataExchange::{
+                CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
+            },
             Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
             Ole::CF_UNICODETEXT,
             Threading::{
@@ -102,6 +104,46 @@ fn write_unicode_clipboard(text: &str) -> Result<(), String> {
     }
     result?;
     close_result
+}
+
+fn read_unicode_clipboard() -> Result<String, String> {
+    let owner = unsafe { GetConsoleWindow() };
+    if owner.is_invalid() {
+        return Err("GetConsoleWindow returned no console window".to_string());
+    }
+
+    unsafe { OpenClipboard(Some(owner)) }
+        .map_err(|error| format!("OpenClipboard failed: {error}"))?;
+
+    let result = (|| {
+        let handle = unsafe { GetClipboardData(CF_UNICODETEXT.0 as u32) }
+            .map_err(|error| format!("GetClipboardData failed: {error}"))?;
+        let memory = HGLOBAL(handle.0);
+        let source = unsafe { GlobalLock(memory) };
+        if source.is_null() {
+            let error = WinError::from_win32();
+            return Err(format!("GlobalLock failed: {error}"));
+        }
+
+        let text = unsafe {
+            let mut length = 0usize;
+            while *source.cast::<u16>().add(length) != 0 {
+                length += 1;
+            }
+            let slice = std::slice::from_raw_parts(source.cast::<u16>(), length);
+            String::from_utf16_lossy(slice)
+        };
+
+        let _ = unsafe { GlobalUnlock(memory) };
+        Ok(text)
+    })();
+
+    let close_result = unsafe { CloseClipboard() }
+        .map_err(|error| format!("CloseClipboard failed: {error}"));
+
+    let text = result?;
+    close_result?;
+    Ok(text)
 }
 
 fn pack_bridge_coordinates(x: i32, y: i32) -> isize {
@@ -220,6 +262,10 @@ pub trait WindowControl {
 
     fn write_clipboard(&self, _text: &str) -> Result<(), String> {
         Err("clipboard writing is not supported".to_string())
+    }
+
+    fn read_clipboard(&self) -> Result<String, String> {
+        Err("clipboard reading is not supported".to_string())
     }
 
     fn scroll(
@@ -390,6 +436,10 @@ pub(crate) fn screen_to_client_position(
 impl WindowControl for Win32WindowControl {
     fn write_clipboard(&self, text: &str) -> Result<(), String> {
         write_unicode_clipboard(text)
+    }
+
+    fn read_clipboard(&self) -> Result<String, String> {
+        read_unicode_clipboard()
     }
 
     fn resize_client(&self, width: i32, height: i32) -> Result<(), String> {

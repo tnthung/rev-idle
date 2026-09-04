@@ -414,6 +414,16 @@ impl ScriptSession {
                         })?,
                     )?;
 
+                    let read_clipboard_window = controls.window.clone();
+                    let read_clipboard_paused = controls.actions_paused.clone();
+                    rev.set(
+                        "read_clipboard",
+                        Function::new(ctx.clone(), move || {
+                            ensure_actions_running(&read_clipboard_paused)?;
+                            read_clipboard_window.read_clipboard().map_err(host_error)
+                        })?,
+                    )?;
+
                     let resize_window = controls.window.clone();
                     let resize_paused = controls.actions_paused.clone();
                     rev.set("resize", Function::new(ctx.clone(), move |width: f64, height: f64| {
@@ -976,14 +986,20 @@ mod tests {
         Clipboard(String),
     }
 
-    struct RecordingWindow { events: Rc<RefCell<Vec<HostEvent>>> }
+    struct RecordingWindow { events: Rc<RefCell<Vec<HostEvent>>>, clipboard: RefCell<String> }
     impl WindowControl for RecordingWindow {
         fn resize_client(&self, width: i32, height: i32) -> Result<(), String> {
             self.events.borrow_mut().push(HostEvent::Resize(width, height)); Ok(())
         }
 
         fn write_clipboard(&self, text: &str) -> Result<(), String> {
-            self.events.borrow_mut().push(HostEvent::Clipboard(text.to_owned())); Ok(())
+            self.events.borrow_mut().push(HostEvent::Clipboard(text.to_owned()));
+            *self.clipboard.borrow_mut() = text.to_owned();
+            Ok(())
+        }
+
+        fn read_clipboard(&self) -> Result<String, String> {
+            Ok(self.clipboard.borrow().clone())
         }
 
         fn scroll(&self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
@@ -999,7 +1015,7 @@ mod tests {
     }
     fn recording_controls() -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
         let events = Rc::new(RefCell::new(Vec::new()));
-        (HostControls { mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })), window: Rc::new(RecordingWindow { events: events.clone() }), actions_paused: ActionGate::default() }, events)
+        (HostControls { mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })), window: Rc::new(RecordingWindow { events: events.clone(), clipboard: RefCell::new(String::new()) }), actions_paused: ActionGate::default() }, events)
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2341,6 +2357,22 @@ mod tests {
             *events.borrow(),
             vec![HostEvent::Clipboard("hello 世界".to_string())]
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_clipboard_returns_host_text() {
+        let session = ScriptSession::new(
+            r#"(async () => {
+                rev.write_clipboard("round trip");
+                const text = await rev.read_clipboard();
+                if (text !== "round trip") throw new Error("unexpected clipboard text: " + text);
+            })"#,
+        )
+        .await
+        .unwrap();
+        let (controls, _) = recording_controls();
+
+        session.invoke(State::default(), controls).await.unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
