@@ -216,9 +216,6 @@ class DT {
   async match() {
     const current = await rev.state("gameData.eternity.dilationTree");
 
-    if (current.TotalDTP !== this.total)
-      return false;
-
     if (current.bot[0].prev.level !== this.c)
       return false;
 
