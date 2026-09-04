@@ -356,139 +356,165 @@ const ZODIAC_POS = [
 let initialized = false;
 
 (async () => {
-  if (!initialized) {
-    rev.resize(1270, 600);
-    // await ClickSteps.ResetUnity.execute();
-    initialized = true;
-  }
-
-  const unityInventory = await rev.state("gameData.unity.inventory");
-  if (Object.values(unityInventory).length >= 4) {
-    await ClickSteps.ZodiacShop.execute();
-    for (const pos of Object.keys(unityInventory)) {
-      const [x, y] = ZODIAC_POS[Number(pos)];
-      await rev.drag(x, y, 613, 525);
-      await rev.sleep(500);
-      rev.click(686, 525);
-    }
-  }
-
-  // bootstrap the unity
-  if (Number(await rev.state("EP")) === 0) {
-    if (rev.global.runStart !== undefined)
-      console.log(`Previous run elapsed time: ${(Date.now() - rev.global.runStart) / 1000}s`);
-
-    console.log(`Bootstrapping the unity`);
-    rev.global.runStart = Date.now();
-
-    for (let i=0; i<2; i++) {
-      await wait_for_exponent("nextIP", 300n);
-      await ClickSteps.ClaimIP.execute();
+  try {
+    if (!initialized) {
+      rev.resize(1270, 600);
+      // await ClickSteps.ResetUnity.execute();
+      initialized = true;
     }
 
-    await rev.sleep(1000);
-    await ClickSteps.ClaimEP.execute();
-
-    for (let i=1; i<4; i++) {
-      await wait_for_exponent("nextEP", 10n * BigInt(i));
-      await ClickSteps.ClaimEP.execute();
-    }
-
-    return;
-  }
-
-  // eternal challenge 1-9
-  for (let cid=0; cid<9; cid++) {
-    const challenge = await rev.state(`gameData.eternity.challenges.${cid}`);
-    if (challenge.completeDiff === 5) continue;
-
-    for (let offset = 0; offset < 3; offset++) {
-      const offsetCid = cid + offset;
-      if (offsetCid >= 9) break;
-
-      for (let attempt = 0; attempt < 2; attempt++) {
-        await rev.sleep(100);
-        if (await rev.state(`gameData.eternity.challenges.${offsetCid}.completeDiff`) === 5)
-          break;
-
-        await ClickSteps[`EC${offsetCid+1}`].execute();
-        await ClickSteps.StartEC.execute();
-
-        if (await wait_for(async () => !await rev.state(`gameData.eternity.challenges.${offsetCid}.inChallenge`), 100, 3000))
-          await ClickSteps.Dismiss.execute();
-        else
-          await ClickSteps.StartEC.execute();
+    const unityInventory = await rev.state("gameData.unity.inventory");
+    if (Object.values(unityInventory).length >= 4) {
+      await ClickSteps.ZodiacShop.execute();
+      for (const pos of Object.keys(unityInventory)) {
+        const [x, y] = ZODIAC_POS[Number(pos)];
+        await rev.drag(x, y, 613, 525);
+        await rev.sleep(500);
+        rev.click(686, 525);
       }
     }
 
-    await rev.sleep(2500);
-    await ClickSteps.ClaimEP.execute();
-    return;
-  }
+    // bootstrap the unity
+    if (Number(await rev.state("EP")) === 0) {
+      if (rev.global.runStart !== undefined)
+        console.log(`Previous run elapsed time: ${(Date.now() - rev.global.runStart) / 1000}s`);
 
-  // eternal challenge 10
-  const EC10 = await rev.state(`gameData.eternity.challenges.9`);
-  if (EC10.completeDiff !== 5) {
-    // enter dilation if not already in it
-    if (!await rev.state("gameData.eternity.inDilation")) {
-      await ClickSteps.toggleDilation.execute();
-      await rev.sleep(EC10.completeDiff === 0 ? 5000 : 500);
-    }
+      console.log(`Bootstrapping the unity`);
+      rev.global.runStart = Date.now();
 
-    // exit dilation
-    await ClickSteps.toggleDilation.execute();
+      for (let i=0; i<2; i++) {
+        await wait_for_exponent("nextIP", 300n);
+        await ClickSteps.ClaimIP.execute();
+      }
 
-    // start EC10
-    await ClickSteps.EC10.execute();
-    await ClickSteps.StartEC.execute();
-
-    if (await wait_for(async () => !await rev.state(`gameData.eternity.challenges.9.inChallenge`), 50, 3000))
-      await ClickSteps.Dismiss.execute();
-    else
-      await ClickSteps.StartEC.execute();
-    return;
-  }
-
-  // bootstrap the dilation
-  if (await rev.state("gameData.eternity.dtpBought") === 0) {
-    await ClickSteps.toggleDilation.execute();
-    await rev.sleep(500);
-    await ClickSteps.toggleDilation.execute();
-    return;
-  }
-
-  // get at least 5 DTPs
-  const DTP = await rev.state("gameData.eternity.dtpBought");
-  if (DTP < 5) {
-    await DT[`DTP${DTP}`].apply();
-
-    for (let i = DTP; i < 5; i++) {
-      await ClickSteps.toggleDilation.execute();
       await rev.sleep(1000);
-      await ClickSteps.toggleDilation.execute();
+      await ClickSteps.ClaimEP.execute();
+
+      for (let i=1; i<4; i++) {
+        await wait_for_exponent("nextEP", 10n * BigInt(i));
+        await ClickSteps.ClaimEP.execute();
+      }
+
+      return;
     }
 
-    return;
-  }
+    // eternal challenge 1-9
+    for (let cid=0; cid<9; cid++) {
+      const challenge = await rev.state(`gameData.eternity.challenges.${cid}`);
+      if (challenge.completeDiff === 5) continue;
 
-  // meet non-DTP guide milestones before buying more DTPs
-  for (const stage of DT_STAGES) {
-    const key = `gameData.eternity.${stage.state}`
-    if (DTP < stage.dtp || Number(await rev.state(key)) >= stage.target) continue;
-    await stage.loadout.apply();
-    await wait_for(async () => Number(await rev.state(key)) >= stage.target, 500, 3000);
-    await rev.sleep(4000);
-    return;
-  }
+      for (let offset = 0; offset < 3; offset++) {
+        const offsetCid = cid + offset;
+        if (offsetCid >= 9) break;
 
-  if (DTP > 40) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await rev.sleep(100);
+          if (await rev.state(`gameData.eternity.challenges.${offsetCid}.completeDiff`) === 5)
+            break;
+
+          await ClickSteps[`EC${offsetCid+1}`].execute();
+          await ClickSteps.StartEC.execute();
+
+          if (await wait_for(async () => !await rev.state(`gameData.eternity.challenges.${offsetCid}.inChallenge`), 100, 3000))
+            await ClickSteps.Dismiss.execute();
+          else
+            await ClickSteps.StartEC.execute();
+        }
+      }
+
+      await rev.sleep(2500);
+      await ClickSteps.ClaimEP.execute();
+      return;
+    }
+
+    // eternal challenge 10
+    const EC10 = await rev.state(`gameData.eternity.challenges.9`);
+    if (EC10.completeDiff !== 5) {
+      // enter dilation if not already in it
+      if (!await rev.state("gameData.eternity.inDilation")) {
+        await ClickSteps.toggleDilation.execute();
+        await rev.sleep(EC10.completeDiff === 0 ? 5000 : 500);
+      }
+
+      // exit dilation
+      await ClickSteps.toggleDilation.execute();
+
+      // start EC10
+      await ClickSteps.EC10.execute();
+      await ClickSteps.StartEC.execute();
+
+      if (await wait_for(async () => !await rev.state(`gameData.eternity.challenges.9.inChallenge`), 50, 3000))
+        await ClickSteps.Dismiss.execute();
+      else
+        await ClickSteps.StartEC.execute();
+      return;
+    }
+
+    // bootstrap the dilation
+    if (await rev.state("gameData.eternity.dtpBought") === 0) {
+      await ClickSteps.toggleDilation.execute();
+      await rev.sleep(500);
+      await ClickSteps.toggleDilation.execute();
+      return;
+    }
+
+    // get at least 5 DTPs
+    const DTP = await rev.state("gameData.eternity.dtpBought");
+    if (DTP < 5) {
+      await DT[`DTP${DTP}`].apply();
+
+      for (let i = DTP; i < 5; i++) {
+        await ClickSteps.toggleDilation.execute();
+        await rev.sleep(1000);
+        await ClickSteps.toggleDilation.execute();
+      }
+
+      return;
+    }
+
+    // meet non-DTP guide milestones before buying more DTPs
+    for (const stage of DT_STAGES) {
+      const key = `gameData.eternity.${stage.state}`
+      if (DTP < stage.dtp || Number(await rev.state(key)) >= stage.target) continue;
+      await stage.loadout.apply();
+      await wait_for(async () => Number(await rev.state(key)) >= stage.target, 500, 3000);
+      await rev.sleep(4000);
+      return;
+    }
+
+    if (DTP > 40) {
+      const start = Date.now();
+      while ((Date.now() - start) < 60000) {
+        const currentDT = await DT.current();
+        const unspent = await rev.state("dtpFree");
+
+        for (let i = 0; i < unspent; i++) {
+          if (currentDT.b3 < 5) {
+            await DT.IncB3.execute();
+          } else if (currentDT.t2 < 5) {
+            await DT.IncT2.execute();
+          } else if (currentDT.b1 < 5) {
+            await DT.IncB1.execute();
+          } else if (currentDT.t3 < 5) {
+            await DT.IncT3.execute();
+          }
+        }
+
+        await rev.sleep(1000);
+      }
+
+      await ClickSteps.ClaimEP.execute();
+      return;
+    }
+
+    await DT[`DTP${DTP}`].apply();
+    await ClickSteps.toggleDilation.execute();
     await rev.sleep(1000);
-    return;
+    await ClickSteps.toggleDilation.execute();
+    await rev.sleep(4000);
   }
 
-  await DT[`DTP${DTP}`].apply();
-  await ClickSteps.toggleDilation.execute();
-  await rev.sleep(1000);
-  await ClickSteps.toggleDilation.execute();
-  await rev.sleep(4000);
+  catch (error) {
+    console.error(error);
+  }
 })
