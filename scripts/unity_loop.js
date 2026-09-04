@@ -231,9 +231,11 @@ class DT {
       return;
     }
 
+    const old = rev.read_clipboard();
     rev.write_clipboard(this.string);
     console.log(`Applied DT steps ${this.total} with string: ${this.string}`);
     await DT.applicationSteps.execute();
+    rev.write_clipboard(old);
   }
 
   static DTP1  = new DT().ctr(1);
