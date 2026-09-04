@@ -223,7 +223,7 @@ class DT {
       return false;
 
     for (const key of ['top', 'mid', 'bot'])
-      for (const raw of passThrough(current[passThrough(key)]))
+      for (const raw of current[key])
         if (raw.level !== this[`${key[0]}${raw.num}`])
           return false;
 
