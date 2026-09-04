@@ -202,6 +202,80 @@ internal static class StatePayload
         "nextBrokenEP" => "eternityController.brokenEPGain",
         "nextIP" => "infinityController.IPGain",
         "nextBrokenIP" => "infinityController.brokenIPGain",
+
+        // GameData top-level: master unlock flags and cross-layer records.
+        "infinityUnlocked" => "gameData.InfinityUnlocked",
+        "eternityUnlocked" => "gameData.EternityUnlocked",
+        "unityUnlocked" => "gameData.UnityUnlocked",
+        "automationUnlocked" => "gameData.AutomationUnlocked",
+        "attacksUnlocked" => "gameData.AttacksUnlocked",
+        "mineralsUnlocked" => "gameData.MineralsUnlocked",
+        "promotionUnlocked" => "gameData.PromotionUnlocked",
+        "bestEP" => "gameData.bestEPs",
+        "bestIP" => "gameData.bestIPs",
+        "achievementsUnlockedCount" => "gameData.CountUnlockedAch",
+
+        // Eternity/dilation siblings of EP/DP/AP/RP/DT/DTP already aliased above.
+        "dtpFree" => "gameData.eternity.dtpFree",
+        "dtpSpent" => "gameData.eternity.dtpSpent",
+        "maxDP" => "gameData.eternity.maxDP",
+        "dilationMaxScore" => "gameData.eternity.dilationMaxScore",
+        "dilationMaxScoreCurrent" => "gameData.eternity.dilationMaxScoreCurrent",
+        "dilationUnlocked" => "gameData.eternity.DilationUnlocked",
+        "dilationTreeUnlocked" => "gameData.eternity.DilationTreeUnlocked",
+        "challengesCompletedCount" => "gameData.eternity.ChallengesCompletedCount",
+        "maxChallengeDiff" => "gameData.eternity.maxChalDiff",
+        "supernovaLv" => "gameData.eternity.supernovaLv",
+        "supernovaReq" => "gameData.eternity.supernovaReq",
+        "supernovaUnlocked" => "gameData.eternity.SupernovaUnlocked",
+        "ownedAnimalsCount" => "gameData.eternity.OwnedAnimalsCount",
+        "labPtsNow" => "gameData.eternity.labPtsNow",
+        "labPtsIncome" => "gameData.eternity.labPtsIncome",
+        "labUnlocked" => "gameData.eternity.LabUnlocked",
+
+        // Infinity: generator/star economy and challenge-unlock flags.
+        "dustPerSec" => "gameData.infinity.dustPerSec",
+        "stardustEffect" => "gameData.infinity.stardustEffect",
+        "starCost" => "gameData.infinity.starCost",
+        "totalStarBase" => "gameData.infinity.totalStarBase",
+        "infinityChallengesCompleted" => "gameData.infinity.TotalChallengesCompleted",
+        "infinityChallengeUnlocked" => "gameData.infinity.ChallengeUnlocked",
+        "starUnlocked" => "gameData.infinity.StarUnlocked",
+        "genMult" => "gameData.infinity.genMult",
+
+        // Unity: trial/leveling progress and core unlock flags.
+        "unityLevel" => "gameData.unity.currentLevel",
+        "unityLuck" => "gameData.unity.luck",
+        "trialsCompleted" => "gameData.unity.TrialCountCompleted",
+        "trialsPending" => "gameData.unity.TrialCountPending",
+        "trialsUnlocked" => "gameData.unity.TrialsUnlocked",
+        "planetShopUnlocked" => "gameData.unity.PlanetShopUnlocked",
+        "sacrificeUnlocked" => "gameData.unity.SacrificeUnlocked",
+        "infiniteTimes" => "gameData.unity.infiniteTimes",
+
+        // Singularity: atom economy and readiness/unlock flags.
+        "atomsGain" => "gameData.singularity.atomsGain",
+        "maxAtoms" => "gameData.singularity.maxAtoms",
+        "atomsThreshold" => "gameData.singularity.atomsThreshold",
+        "singMult" => "gameData.singularity.singMult",
+        "singularityUnlocked" => "gameData.singularity.Unlocked",
+        "singReady" => "gameData.singularity.SingReady",
+        "singularityLuck" => "gameData.singularity.luck",
+
+        // Plague: cure progress and unlock/stage tracking.
+        "plagueUnlocked" => "gameData.plague.Unlocked",
+        "cureProgress" => "gameData.plague.CureProgress",
+        "cureReady" => "gameData.plague.CureReady",
+        "plagueMaxStage" => "gameData.plague.maxStage",
+        "plagueSpreadSpeed" => "gameData.plague.spreadSpeed",
+        "plagueLocalSpeed" => "gameData.plague.localSpeed",
+
+        // Tarot: deck-wide totals and unlock flag.
+        "tarotUnlocked" => "gameData.tarot.Unlocked",
+        "tarotTotalCards" => "gameData.tarot.totalCards",
+        "tarotTotalUnlocked" => "gameData.tarot.totalUnlocked",
+        "tarotLocalSpeed" => "gameData.tarot.localSpeed",
+
         _ => path
     };
 
