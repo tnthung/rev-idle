@@ -126,6 +126,21 @@ class DT {
     .click(766, 356)
     .chain(ClickSteps.Dismiss);
 
+
+  static IncC  = ClickSteps.DilationTree.clone().click(106, 202).click(106, 202);
+  static IncT1 = ClickSteps.DilationTree.clone().click(277, 209).click(277, 209);
+  static IncT2 = ClickSteps.DilationTree.clone().click(448, 203).click(448, 203);
+  static IncT3 = ClickSteps.DilationTree.clone().click(613, 205).click(613, 205);
+  static IncT4 = ClickSteps.DilationTree.clone().click(797, 206).click(797, 206);
+  static IncM1 = ClickSteps.DilationTree.clone().click(271, 293).click(271, 293);
+  static IncM2 = ClickSteps.DilationTree.clone().click(446, 381).click(446, 381);
+  static IncM3 = ClickSteps.DilationTree.clone().click(629, 466).click(629, 466);
+  static IncM4 = ClickSteps.DilationTree.clone().click(805, 540).click(805, 540);
+  static IncB1 = ClickSteps.DilationTree.clone().click(95, 297).click(95, 297);
+  static IncB2 = ClickSteps.DilationTree.clone().click(102, 372).click(102, 372);
+  static IncB3 = ClickSteps.DilationTree.clone().click(100, 458).click(100, 458);
+  static IncB4 = ClickSteps.DilationTree.clone().click(95, 554).click(95, 554);
+
   constructor() {
     this.c  = 0;
     this.t1 = 0;
