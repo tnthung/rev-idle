@@ -318,7 +318,7 @@ let runStart = null;
     if (runStart !== null)
       console.log(`Previous run elapsed time: ${(Date.now() - runStart) / 1000}s`);
 
-    console.log(`Bootstrapping the unity ${unityCount++}`);
+    console.log(`Bootstrapping the unity`);
     runStart = Date.now();
 
     for (let i=0; i<2; i++) {
@@ -417,12 +417,6 @@ let runStart = null;
     await stage.loadout.apply();
     await wait_for(async () => Number(await rev.state(key)) >= stage.target, 500, 3000);
     await rev.sleep(4000);
-    return;
-  }
-
-  if (DTP >= 41) {
-    await DT.DTP41.apply();
-    await rev.sleep(1000);
     return;
   }
 
