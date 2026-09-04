@@ -214,8 +214,20 @@ class DT {
   }
 
   async match() {
-    await DT.exportationSteps.execute();
-    return rev.read_clipboard().trim() === this.string;
+    const current = await rev.state("gameData.eternity.dilationTree");
+
+    if (current.TotalDTP !== this.total)
+      return false;
+
+    if (current.bot[0].prev.level !== this.c)
+      return false;
+
+    for (const key of ['top', 'mid', 'bot'])
+      for (const raw of passThrough(current[passThrough(key)]))
+        if (raw.level !== this[`${key[0]}${raw.num}`])
+          return false;
+
+    return true;
   }
 
   async apply() {
@@ -299,7 +311,7 @@ let unityCount = 0;
 (async () => {
   if (!initialized) {
     rev.resize(1270, 600);
-    await ClickSteps.ResetUnity.execute();
+    // await ClickSteps.ResetUnity.execute();
     initialized = true;
   }
 
