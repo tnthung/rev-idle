@@ -130,6 +130,14 @@ class DT {
     this.b4 = 0;
   }
 
+  static async current() {
+    const current = await rev.state("gameData.eternity.dilationTree");
+    return new DT().ctr(current.bot[0].prev.level)
+      .top(...current.top.map(raw => raw.level))
+      .mid(...current.mid.map(raw => raw.level))
+      .bot(...current.bot.map(raw => raw.level));
+  }
+
   static validatePoint(p) {
     if (p < 0 || p > 5) throw new Error('Invalid point value');
   }
@@ -214,17 +222,7 @@ class DT {
   }
 
   async match() {
-    const current = await rev.state("gameData.eternity.dilationTree");
-
-    if (current.bot[0].prev.level !== this.c)
-      return false;
-
-    for (const key of ['top', 'mid', 'bot'])
-      for (const raw of current[key])
-        if (raw.level !== this[`${key[0]}${raw.num}`])
-          return false;
-
-    return true;
+    return (await DT.current()).string === this.string;
   }
 
   async apply() {
@@ -280,9 +278,9 @@ class DT {
   static DTP34 = DT.DTP33.clone().top(1, 5, 0, 0);
   static SN35  = new DT().ctr(1).top(1, 1, 5, 5).mid(1, 1, 5, 3).bot(1, 5, 1, 5); // SN 152
   static DTP35 = new DT().ctr(5).top(1, 1, 1, 4).mid(5, 1, 5, 5).bot(1, 1, 5, 0);
-  static DTP36 = DT.DTP35;
-  static DTP37 = DT.DTP35;
-  static DTP38 = DT.DTP35;
+  static DTP36 = DT.DTP35.clone().top(1, 1, 1, 5);
+  static DTP37 = DT.DTP36.clone().bot(1, 1, 5, 1);
+  static DTP38 = DT.DTP36.clone().bot(1, 1, 5, 2);
   static DTP39 = new DT().ctr(5).top(1, 1, 1, 5).mid(5, 1, 5, 5).bot(1, 1, 5, 3);
   static SN40  = new DT().ctr(1).top(1, 1, 5, 5).mid(1, 1, 5, 5).bot(4, 5, 1, 5); // SN 154
   static DTP40 = new DT().ctr(5).top(1, 2, 1, 5).mid(5, 1, 5, 5).bot(1, 1, 3, 5);
