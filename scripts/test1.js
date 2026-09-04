@@ -10,25 +10,50 @@ class ClickSteps {
     return this;
   }
 
-  async execute() {
+  async execute(gap = 50) {
     for (const step of this.steps) {
       rev.click(step.x, step.y);
-      await rev.sleep(10);
+      await rev.sleep(gap);
     }
   }
 
-  static claimIP = new ClickSteps()
-    .add(1188, 87)
-    .add(550, 520);
+  clone() {
+    const clone = new ClickSteps();
+    clone.steps = [...this.steps];
+    return clone;
+  }
 
-  static claimEP = new ClickSteps()
-    .add(1188, 87)
-    .add(550, 500);
+  static Revolution = new ClickSteps().add(1188, 87);
+  static ClaimIP = ClickSteps.Revolution.clone().add(550, 520);
+  static ClaimEP = ClickSteps.Revolution.clone().add(550, 500);
 
-  static resetUnity = new ClickSteps()
-    .add(1155, 205)
-    .add(214, 82)
-    .add(1087, 134);
+  static Eternal = new ClickSteps().add(1182, 164);
+
+  static EC   = ClickSteps.Eternal.clone().add(401, 83);
+  static EC1  = ClickSteps.EC.clone().add(112, 254);
+  static EC2  = ClickSteps.EC.clone().add(300, 268);
+  static EC3  = ClickSteps.EC.clone().add(542, 265);
+  static EC4  = ClickSteps.EC.clone().add(756, 268);
+  static EC5  = ClickSteps.EC.clone().add(118, 362);
+  static EC6  = ClickSteps.EC.clone().add(329, 388);
+  static EC7  = ClickSteps.EC.clone().add(548, 392);
+  static EC8  = ClickSteps.EC.clone().add(742, 384);
+  static EC9  = ClickSteps.EC.clone().add(161, 496);
+  static EC10 = ClickSteps.EC.clone().add(324, 502);
+
+  static StartEC = ClickSteps.EC.clone().add(995, 566);
+
+  static Dilation = ClickSteps.EC.clone().add(855, 85);
+
+  static toggleDilation = ClickSteps.Dilation.clone().add(201, 148);
+
+  static DilationTree = ClickSteps.Dilation.clone().add(1023, 79);
+
+  static Unity = new ClickSteps().add(1155, 205);
+
+  static UC = ClickSteps.Unity.clone().add(214, 82);
+
+  static ResetUnity = ClickSteps.UC.clone().add(1087, 134);
 }
 
 
@@ -40,23 +65,28 @@ function passThrough(v) {
 function mantissa(v) { return Number(v.split('e')[0]); }
 function exponent(v) { return BigInt(v.split('e')[1]); }
 
-async function wait_for(conditionFn, interval = 500) {
-  do { await rev.sleep(interval) } while (!await conditionFn());
+async function wait_for(conditionFn, interval = 500, timeout = 5000) {
+  do {
+    await rev.sleep(interval)
+    if ((timeout -= interval) <= 0) return;
+  } while (!await conditionFn());
 }
 
 async function wait_for_exponent(key, target, interval = 500) {
   await wait_for(async () => exponent(await rev.state(key)) >= target, interval);
 }
 
+async function print_state(key) {
+  console.log(JSON.stringify(await rev.state(key), null, 2));
+}
+
 
 class DT {
-  static applicationSteps = new ClickSteps()
-    .add(1192, 164)
-    .add(1025, 84)
-    .add(1019, 556)
-    .add(780, 332)
-    .add(780, 305)
-    .add(782, 328);
+  static applicationSteps = ClickSteps.DilationTree.clone()
+    .add(1014, 547)
+    .add(766, 329)
+    .add(766, 306)
+    .add(773, 332);
 
   constructor() {
     this.c  = 0;
@@ -150,26 +180,80 @@ class DT {
     ].join(';');
   }
 
+  clone() {
+    return new DT().ctr(this.c)
+      .top(this.t1, this.t2, this.t3, this.t4)
+      .mid(this.m1, this.m2, this.m3, this.m4)
+      .bot(this.b1, this.b2, this.b3, this.b4);
+  }
+
   async apply() {
     rev.write_clipboard(this.string);
     console.log(`Applied DT steps with string: ${this.string}`);
     await DT.applicationSteps.execute();
   }
+
+  static DTP1  = new DT().ctr(1);
+  static DTP2  = new DT().ctr(1).top(1, 0, 0, 0);
+  static DTP3  = new DT().ctr(1).top(1, 1, 0, 0);
+  static DTP4  = new DT().ctr(1).top(1, 1, 1, 0);
+  static SN5   = new DT().ctr(1).top(1, 1, 2, 0);  // SN 80
+  static DTP5  = new DT().ctr(1).bot(1, 1, 2, 0);
+  static DTP6  = DT.DTP5.clone().top(1, 0, 0, 0);
+  static DTP7  = DT.DTP6.clone().top(1, 1, 0, 0);
+  static SN8   = new DT().ctr(1).top(1, 1, 5, 0);  // SN 105
+  static DTP8  = DT.DTP7.clone().bot(1, 1, 3, 0);
+  static DTP9  = DT.DTP8.clone().bot(1, 1, 4, 0);
+  static DTP10 = DT.DTP9.clone().bot(1, 1, 5, 0);
+  static DTP11 = DT.DTP10.clone().mid(1, 0, 0, 0);
+  static DTP12 = DT.DTP11.clone().mid(2, 0, 0, 0);
+  static ETN13 = new DT().ctr(1).mid(1, 5, 1, 5); // ETN 1e8~1e10
+  static DTP13 = new DT().ctr(5).top(1, 1, 0, 0).bot(1, 1, 4, 0);
+  static DTP14 = new DT().ctr(5).top(1, 1, 1, 1).mid(1, 0, 0, 0).bot(1, 1, 1, 1);
+  static DTP15 = new DT().ctr(5).top(1, 1, 1, 1).mid(1, 0, 0, 0).bot(1, 1, 2, 1);
+  static SN16  = new DT().ctr(1).top(1, 1, 5, 0).bot(1, 1, 1, 5); // SN 120
+  static DTP16 = new DT().ctr(4).mid(1, 1, 5, 5);
+  static DTP17 = DT.DTP16.clone().ctr(5);
+  static SN18  = new DT().ctr(1).top(1, 1, 5, 2).bot(1, 1, 1, 5); // SN 128
+  static DTP18 = new DT().ctr(5).mid(2, 1, 5, 5);
+  static DTP19 = DT.DTP18.clone().mid(3, 1, 5, 5);
+  static DTP20 = DT.DTP19.clone().mid(4, 1, 5, 5);
+  static DTP21 = DT.DTP20.clone().mid(5, 1, 5, 5);
+  static SN22  = new DT().ctr(1).top(1, 1, 5, 5).bot(1, 2, 1, 5); // SN 149
+  static DTP22 = new DT().ctr(4).top(1, 1, 0, 0).mid(5, 1, 5, 5);
+  static DTP23 = DT.DTP22.clone().ctr(5);
+  static DTP24 = DT.DTP23;
+  static DTP25 = new DT().ctr(5).mid(5, 1, 5, 5).bot(1, 1, 2, 0);
+  static DTP26 = DT.DTP25.clone().bot(1, 1, 3, 0);
+  static DTP27 = DT.DTP26.clone().bot(1, 1, 4, 0);
+  static DTP28 = DT.DTP27.clone().bot(1, 1, 5, 0);
+  static DTP29 = new DT().ctr(5).top(1, 1, 0, 0).mid(5, 1, 5, 5).bot(1, 1, 4, 0);
+  static DTP30 = DT.DTP29.clone().bot(1, 1, 5, 0);
+  static DTP31 = new DT().ctr(5).top(1, 1, 1, 1).mid(5, 1, 5, 5).bot(1, 1, 4, 0);
+  static DTP32 = DT.DTP31.clone().bot(1, 1, 5, 0);
+  static DTP33 = new DT().ctr(5).top(1, 4, 0, 0).mid(5, 1, 5, 5).bot(1, 1, 5, 0);
+  static DTP34 = DT.DTP33.clone().top(1, 5, 0, 0);
+  static SN35  = new DT().ctr(1).top(1, 1, 5, 5).mid(1, 1, 5, 3).bot(1, 5, 1, 5); // SN 152
+  static DTP35 = new DT().ctr(5).top(1, 1, 1, 4).mid(5, 1, 5, 5).bot(1, 1, 5, 0);
+  static DTP36 = DT.DTP35;
+  static DTP37 = DT.DTP35;
+  static DTP38 = DT.DTP35;
+  static DTP39 = new DT().ctr(5).top(1, 1, 1, 5).mid(5, 1, 5, 5).bot(1, 1, 5, 3);
+  static SN40  = new DT().ctr(1).top(1, 1, 5, 5).mid(1, 1, 5, 5).bot(4, 5, 1, 5); // SN 154
+  static DTP40 = new DT().ctr(5).top(1, 2, 1, 5).mid(5, 1, 5, 5).bot(1, 1, 3, 5);
+  static DTP41 = new DT().ctr(1).top(1, 1, 1, 5).mid(1, 5, 5, 5).bot(5, 5, 1, 5);
 }
 
 
-const DT_AP = [
-
-];
-
-
-const DT_DP = [
-
-];
-
-
-const DT_SN = [
-
+const DT_STAGES = [
+  { dtp: 5,  state: "singularities", target: 80,  loadout: DT.SN5 },
+  { dtp: 8,  state: "singularities", target: 105, loadout: DT.SN8 },
+  { dtp: 13, state: "eternities",    target: 1e8, loadout: DT.ETN13 },
+  { dtp: 16, state: "singularities", target: 120, loadout: DT.SN16 },
+  { dtp: 18, state: "singularities", target: 128, loadout: DT.SN18 },
+  { dtp: 22, state: "singularities", target: 149, loadout: DT.SN22 },
+  { dtp: 35, state: "singularities", target: 152, loadout: DT.SN35 },
+  { dtp: 40, state: "singularities", target: 154, loadout: DT.SN40 },
 ];
 
 
@@ -178,30 +262,114 @@ let initialized = false;
 (async () => {
   if (!initialized) {
     rev.resize(1270, 600);
-    await ClickSteps.resetUnity.execute();
+    await ClickSteps.ResetUnity.execute();
     initialized = true;
   }
 
   // bootstrap the unity
-  if (await rev.state("EP") === "0e0") {
+  if (Number(await rev.state("EP")) === 0) {
     for (let i=0; i<2; i++) {
       await wait_for_exponent("infinityController.IPGain", 300n);
-      await ClickSteps.claimIP.execute();
+      await ClickSteps.ClaimIP.execute();
     }
 
     await rev.sleep(1000);
-    await ClickSteps.claimEP.execute();
+    await ClickSteps.ClaimEP.execute();
 
     for (let i=1; i<4; i++) {
-      await wait_for_exponent("eternityController.EPGain", 15n * BigInt(i));
-      await ClickSteps.claimEP.execute();
+      await wait_for_exponent("eternityController.EPGain", 10n * BigInt(i));
+      await ClickSteps.ClaimEP.execute();
     }
 
     return;
   }
 
-  // console.log('Applying DT steps');
-  // await new DT().ctr(1).top(1, 2, 3, 4).apply();
-  // console.log(JSON.stringify((await rev.state("eternity.dilationTree.bot.1")), null, 2));
-  rev.stop();
+  // eternal challenge 1-9
+  for (let cid=0; cid<9; cid++) {
+    const challenge = await rev.state(`gameData.eternity.challenges.${cid}`);
+    if (challenge.completeDiff === 5) continue;
+
+    for (let j = 0; j < 2; j++) {
+      await ClickSteps[`EC${cid+1}`].execute();
+      await ClickSteps.StartEC.execute();
+      await wait_for(async () => !await rev.state(`gameData.eternity.challenges.${cid}.inChallenge`), 50, 3000);
+      await ClickSteps.StartEC.execute();
+    }
+
+    if (cid < 8) for (let j = 0; j < 2; j++) {
+      await ClickSteps[`EC${cid+2}`].execute();
+      await ClickSteps.StartEC.execute();
+      await wait_for(async () => !await rev.state(`gameData.eternity.challenges.${cid+1}.inChallenge`), 50, 3000);
+      await ClickSteps.StartEC.execute();
+    }
+
+    await rev.sleep(2500);
+    await ClickSteps.ClaimEP.execute();
+    return;
+  }
+
+  // eternal challenge 10
+  const EC10 = await rev.state(`gameData.eternity.challenges.9`);
+  if (EC10.completeDiff !== 5) {
+    // enter dilation if not already in it
+    if (!await rev.state("gameData.eternity.inDilation")) {
+      await ClickSteps.toggleDilation.execute();
+      await rev.sleep(EC10.completeDiff === 0 ? 5000 : 500);
+    }
+
+    // exit dilation
+    await ClickSteps.toggleDilation.execute();
+
+    // start EC10
+    await ClickSteps.EC10.execute();
+    await ClickSteps.StartEC.execute();
+    await wait_for(async () => !await rev.state(`gameData.eternity.challenges.9.inChallenge`), 50, 3000);
+    await ClickSteps.StartEC.execute();
+    return;
+  }
+
+  // bootstrap the dilation
+  while (await rev.state("gameData.eternity.dtpBought") === 0) {
+    await ClickSteps.toggleDilation.execute();
+    await rev.sleep(500);
+    await ClickSteps.toggleDilation.execute();
+  }
+
+  // get at least 5 DTPs
+  const DTP = await rev.state("gameData.eternity.dtpBought");
+  if (DTP < 5) {
+    await DT[`DTP${DTP}`].apply();
+
+    for (let i = DTP; i < 5; i++) {
+      await ClickSteps.toggleDilation.execute();
+      await rev.sleep(1000);
+      await ClickSteps.toggleDilation.execute();
+    }
+
+    return;
+  }
+
+  // meet non-DTP guide milestones before buying more DTPs
+  const progress = {
+    singularities: Number(await rev.state("singularities")),
+    eternities: Number(await rev.state("eternities")),
+  };
+  for (const stage of DT_STAGES) {
+    if (DTP < stage.dtp || progress[stage.state] >= stage.target) continue;
+
+    await stage.loadout.apply();
+    await wait_for(async () => Number(await rev.state(stage.state)) >= stage.target, 500, 3000);
+    return;
+  }
+
+  if (DTP >= 41) {
+    await DT.DTP41.apply();
+    rev.stop();
+    return;
+  }
+
+  await DT[`DTP${DTP}`].apply();
+  await ClickSteps.toggleDilation.execute();
+  await rev.sleep(1000);
+  await ClickSteps.toggleDilation.execute();
 })
