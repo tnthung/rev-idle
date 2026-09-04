@@ -353,8 +353,8 @@ let initialized = false;
     for (const pos of Object.keys(unityInventory)) {
       const [x, y] = ZODIAC_POS[Number(pos)];
       await rev.drag(x, y, 613, 525);
-      rev.click(686, 525);
       await rev.sleep(500);
+      rev.click(686, 525);
     }
   }
 
