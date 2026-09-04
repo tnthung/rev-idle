@@ -1,6 +1,7 @@
 use crate::{
     capture::CaptureState,
     console::ScriptCommand,
+    global_state::GlobalState,
     hotkey::{ActionGate, PauseUpdate},
     telemetry,
     window::{post_click_to_game, Axis, Win32WindowControl, WindowControl},
@@ -327,12 +328,54 @@ impl ScriptSession {
                             return keys.length === 1 ? result[keys[0]] : result;
                         }",
                     )?;
-                    let state: Function = state_wrapper.call((state_raw, parse, freeze.clone()))?;
+                    let state: Function = state_wrapper.call((state_raw, parse.clone(), freeze.clone()))?;
                     rev.set("state", state)?;
                     rev.set(
                         "stop",
                         Function::new(ctx.clone(), move || stop_request.set(true))?,
                     )?;
+
+                    let global_get_raw = Function::new(ctx.clone(), |key: String| {
+                        GlobalState.get(&key).map(|value| value.to_string())
+                    })?;
+                    let global_set_raw = Function::new(ctx.clone(), |key: String, json: String| {
+                        let value: serde_json::Value = serde_json::from_str(&json).map_err(|error| {
+                            Error::new_from_js_message("string", "JSON value", error.to_string())
+                        })?;
+                        GlobalState.set(key, value);
+                        Ok::<(), Error>(())
+                    })?;
+                    let global_delete_raw = Function::new(ctx.clone(), |key: String| GlobalState.delete(&key))?;
+                    let global_keys_raw = Function::new(ctx.clone(), || GlobalState.keys())?;
+                    let global_wrapper: Function = ctx.eval(
+                        "(get, set, del, keys, parse) => new Proxy({}, {
+                            get: (_target, key) => {
+                                if (typeof key !== 'string') return undefined;
+                                const raw = get(key);
+                                return raw === undefined ? undefined : parse(raw);
+                            },
+                            set: (_target, key, value) => {
+                                if (typeof key !== 'string') return false;
+                                set(key, JSON.stringify(value === undefined ? null : value));
+                                return true;
+                            },
+                            has: (_target, key) => typeof key === 'string' && keys().includes(key),
+                            deleteProperty: (_target, key) => typeof key === 'string' && del(key),
+                            ownKeys: () => keys(),
+                            getOwnPropertyDescriptor: (_target, key) => {
+                                if (typeof key !== 'string' || !keys().includes(key)) return undefined;
+                                return { enumerable: true, configurable: true };
+                            },
+                        })",
+                    )?;
+                    let global: Value = global_wrapper.call((
+                        global_get_raw,
+                        global_set_raw,
+                        global_delete_raw,
+                        global_keys_raw,
+                        parse,
+                    ))?;
+                    rev.set("global", global)?;
 
                     let click_controls = controls.clone();
                     rev.set(
@@ -1500,6 +1543,63 @@ mod tests {
                 .is_err()
         );
         session.invoke(State::default(), mouse).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn global_round_trips_values_and_lists_keys() {
+        let session = ScriptSession::new(
+            r#"(() => {
+                rev.global.count = 1;
+                rev.global.nested = { a: [1, 2, 3] };
+                if (rev.global.count !== 1) throw new Error("number did not round-trip");
+                if (JSON.stringify(rev.global.nested) !== JSON.stringify({ a: [1, 2, 3] })) {
+                    throw new Error("object did not round-trip");
+                }
+                if (rev.global.missing !== undefined) throw new Error("missing key must be undefined");
+                if (!("count" in rev.global) || !("nested" in rev.global)) {
+                    throw new Error("has() must see stored keys");
+                }
+                const keys = Object.keys(rev.global);
+                if (!keys.includes("count") || !keys.includes("nested")) {
+                    throw new Error("Object.keys() must list stored keys");
+                }
+                delete rev.global.count;
+                if ("count" in rev.global) throw new Error("delete must remove the key");
+                delete rev.global.nested;
+            })"#,
+        )
+        .await
+        .unwrap();
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: Rc::new(RefCell::new(Vec::new())),
+        }));
+
+        session.invoke(State::default(), mouse).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn global_survives_a_new_script_session_simulating_reload() {
+        let first = ScriptSession::new(r#"(() => { rev.global.reload_probe = 42; })"#)
+            .await
+            .unwrap();
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: Rc::new(RefCell::new(Vec::new())),
+        }));
+        first.invoke(State::default(), mouse.clone()).await.unwrap();
+
+        // A fresh ScriptSession is exactly what `load`/`reload` builds: a new
+        // AsyncRuntime/AsyncContext, so a plain JS global would not survive it.
+        let second = ScriptSession::new(
+            r#"(() => {
+                if (rev.global.reload_probe !== 42) {
+                    throw new Error("global did not survive a new script session");
+                }
+                delete rev.global.reload_probe;
+            })"#,
+        )
+        .await
+        .unwrap();
+        second.invoke(State::default(), mouse).await.unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]

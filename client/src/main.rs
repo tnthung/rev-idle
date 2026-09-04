@@ -4,6 +4,7 @@ mod script;
 mod telemetry;
 mod hotkey;
 mod capture;
+mod global_state;
 
 use std::{
     io,
