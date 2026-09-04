@@ -58,6 +58,29 @@ fn unicode_clipboard_contents(text: &str) -> Result<Vec<u16>, String> {
     Ok(text.encode_utf16().chain(std::iter::once(0)).collect())
 }
 
+const CLIPBOARD_OPEN_ATTEMPTS: u32 = 10;
+const CLIPBOARD_OPEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
+
+fn open_clipboard_with_retry(owner: HWND) -> Result<(), String> {
+    let mut last_error = None;
+    for attempt in 0..CLIPBOARD_OPEN_ATTEMPTS {
+        match unsafe { OpenClipboard(Some(owner)) } {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt + 1 < CLIPBOARD_OPEN_ATTEMPTS {
+                    std::thread::sleep(CLIPBOARD_OPEN_RETRY_DELAY);
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "OpenClipboard failed: {}",
+        last_error.expect("loop always sets last_error before exhausting attempts")
+    ))
+}
+
 fn write_unicode_clipboard(text: &str) -> Result<(), String> {
     let owner = unsafe { GetConsoleWindow() };
     if owner.is_invalid() {
@@ -82,9 +105,9 @@ fn write_unicode_clipboard(text: &str) -> Result<(), String> {
         let _ = GlobalUnlock(memory);
     }
 
-    if let Err(error) = unsafe { OpenClipboard(Some(owner)) } {
+    if let Err(error) = open_clipboard_with_retry(owner) {
         free_global(memory);
-        return Err(format!("OpenClipboard failed: {error}"));
+        return Err(error);
     }
 
     let result = unsafe { EmptyClipboard() }
@@ -112,8 +135,7 @@ fn read_unicode_clipboard() -> Result<String, String> {
         return Err("GetConsoleWindow returned no console window".to_string());
     }
 
-    unsafe { OpenClipboard(Some(owner)) }
-        .map_err(|error| format!("OpenClipboard failed: {error}"))?;
+    open_clipboard_with_retry(owner)?;
 
     let result = (|| {
         let handle = unsafe { GetClipboardData(CF_UNICODETEXT.0 as u32) }
