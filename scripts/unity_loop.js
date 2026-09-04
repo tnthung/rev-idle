@@ -75,7 +75,7 @@ class ClickSteps {
 
   static toggleDilation = ClickSteps.Dilation.clone().click(201, 148);
 
-  static DilationTree = ClickSteps.Dilation.clone().click(1023, 79);
+  static DilationTree = ClickSteps.Eternal.clone().click(1023, 79);
 
   static Unity = new ClickSteps().click(1155, 205);
 
