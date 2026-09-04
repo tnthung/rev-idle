@@ -246,14 +246,14 @@ class DT {
 
 
 const DT_STAGES = [
-  { dtp: 5,  state: "singularities", target: 80,  loadout: DT.SN5 },
-  { dtp: 8,  state: "singularities", target: 105, loadout: DT.SN8 },
-  { dtp: 13, state: "eternities",    target: 1e8, loadout: DT.ETN13 },
-  { dtp: 16, state: "singularities", target: 120, loadout: DT.SN16 },
-  { dtp: 18, state: "singularities", target: 128, loadout: DT.SN18 },
-  { dtp: 22, state: "singularities", target: 149, loadout: DT.SN22 },
-  { dtp: 35, state: "singularities", target: 152, loadout: DT.SN35 },
-  { dtp: 40, state: "singularities", target: 154, loadout: DT.SN40 },
+  { dtp: 5,  state: "supernovaLv", target: 80,  loadout: DT.SN5 },
+  { dtp: 8,  state: "supernovaLv", target: 105, loadout: DT.SN8 },
+  { dtp: 13, state: "eters",       target: 1e8, loadout: DT.ETN13 },
+  { dtp: 16, state: "supernovaLv", target: 120, loadout: DT.SN16 },
+  { dtp: 18, state: "supernovaLv", target: 128, loadout: DT.SN18 },
+  { dtp: 22, state: "supernovaLv", target: 149, loadout: DT.SN22 },
+  { dtp: 35, state: "supernovaLv", target: 152, loadout: DT.SN35 },
+  { dtp: 40, state: "supernovaLv", target: 154, loadout: DT.SN40 },
 ];
 
 
@@ -262,7 +262,7 @@ let initialized = false;
 (async () => {
   if (!initialized) {
     rev.resize(1270, 600);
-    await ClickSteps.ResetUnity.execute();
+    // await ClickSteps.ResetUnity.execute();
     initialized = true;
   }
 
@@ -350,15 +350,12 @@ let initialized = false;
   }
 
   // meet non-DTP guide milestones before buying more DTPs
-  const progress = {
-    singularities: Number(await rev.state("singularities")),
-    eternities: Number(await rev.state("eternities")),
-  };
   for (const stage of DT_STAGES) {
-    if (DTP < stage.dtp || progress[stage.state] >= stage.target) continue;
-
+    const key = `gameData.eternity.${stage.state}`
+    if (DTP < stage.dtp || Number(await rev.state(key)) >= stage.target) continue;
     await stage.loadout.apply();
-    await wait_for(async () => Number(await rev.state(stage.state)) >= stage.target, 500, 3000);
+    await wait_for(async () => Number(await rev.state(key)) >= stage.target, 500, 3000);
+    await rev.sleep(4000);
     return;
   }
 
@@ -372,4 +369,5 @@ let initialized = false;
   await ClickSteps.toggleDilation.execute();
   await rev.sleep(1000);
   await ClickSteps.toggleDilation.execute();
+  await rev.sleep(4000);
 })
