@@ -435,10 +435,11 @@ let initialized = false;
   }
 
   // bootstrap the dilation
-  while (await rev.state("gameData.eternity.dtpBought") === 0) {
+  if (await rev.state("gameData.eternity.dtpBought") === 0) {
     await ClickSteps.toggleDilation.execute();
     await rev.sleep(500);
     await ClickSteps.toggleDilation.execute();
+    return;
   }
 
   // get at least 5 DTPs
