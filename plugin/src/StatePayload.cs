@@ -147,6 +147,11 @@ internal static class StatePayload
     private static string ResolveAlias(string path) => path switch
     {
         "score" => "gameData.score",
+        "scoreEternity" => "gameData.scoreEternity",
+        "scoreInfinity" => "gameData.scoreInfinity",
+        "scoreUnity" => "gameData.scoreUnity",
+        "scorePromotion" => "gameData.scorePromotion",
+        "scoreEquality" => "gameData.scoreEquality",
         "income" => "gameData.income",
         "IP" => "gameData.infinity.IP",
         "infinities" => "gameData.infinity.infs",
@@ -182,14 +187,21 @@ internal static class StatePayload
         "timeInfinity" => "gameData.timeInf",
         "timeEternity" => "gameData.timeEtr",
         "timeUnity" => "gameData.timeUnity",
+        "timeEquality" => "gameData.timeEquality",
         "timeTotal" => "gameData.timeTotal",
         "DT" => "gameData.eternity.dilationTree",
-        "DTP" => "gameData.eternity.dtpMax",
-        // EternityController is a static-only type with no path in from
-        // GameData (see ExtraRoots); these are the EP amounts a break would
-        // currently grant, not eternity.EP's already-banked total.
+        // "DTP" follows how the rest of the codebase already uses the term
+        // (dilation tree points owned, e.g. the unity_loop.js DTP loadouts) --
+        // not the cap. Use "DTPMax" for eternity.dtpMax.
+        "DTP" => "gameData.eternity.dtpBought",
+        "DTPMax" => "gameData.eternity.dtpMax",
+        // EternityController/InfinityController are static-only types with no
+        // path in from GameData (see ExtraRoots); these are the EP/IP amounts
+        // a break would currently grant, not the already-banked totals.
         "nextEP" => "eternityController.EPGain",
         "nextBrokenEP" => "eternityController.brokenEPGain",
+        "nextIP" => "infinityController.IPGain",
+        "nextBrokenIP" => "infinityController.brokenIPGain",
         _ => path
     };
 

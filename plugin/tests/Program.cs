@@ -223,7 +223,7 @@ static void StatePayloadResolvesSelectedPaths()
 {
     var data = new PathFixture
     {
-        eternity = new PathEternityFixture { dilationTree = new SerializerNestedFixture { Value = "tree" }, dtpMax = 12 },
+        eternity = new PathEternityFixture { dilationTree = new SerializerNestedFixture { Value = "tree" }, dtpBought = 5, dtpMax = 12 },
         infinity = new PathInfinityFixture { IP = 11 },
         kinds = new Dictionary<SerializerFixtureKind, string> { [SerializerFixtureKind.Second] = "enum" },
         names = new Dictionary<string, string> { ["primary"] = "name" },
@@ -231,13 +231,13 @@ static void StatePayloadResolvesSelectedPaths()
         rows = new List<SerializerNestedFixture> { new() { Value = "zero" }, new() { Value = "one" } }
     };
 
-    // "IP", "DT", "DTP" go through ResolveAlias (which expands to a
+    // "IP", "DT", "DTP", "DTPMax" go through ResolveAlias (which expands to a
     // gameData.-prefixed path); the rest are raw paths that must name the
     // gameData root explicitly themselves since there is no implicit root.
-    StatePayloadStatus status = StatePayload.Encode(data, new[] { "IP", "DT", "DTP", "gameData.rows.1.Value", "gameData.numbers.2", "gameData.names.primary", "gameData.kinds.Second", "IP" }, out byte[] payload);
+    StatePayloadStatus status = StatePayload.Encode(data, new[] { "IP", "DT", "DTP", "DTPMax", "gameData.rows.1.Value", "gameData.numbers.2", "gameData.names.primary", "gameData.kinds.Second", "IP" }, out byte[] payload);
 
     Equal(StatePayloadStatus.Success, status, nameof(StatePayloadResolvesSelectedPaths));
-    Equal("{\"IP\":11,\"DT\":{\"Value\":\"tree\"},\"DTP\":12,\"gameData.rows.1.Value\":\"one\",\"gameData.numbers.2\":\"number\",\"gameData.names.primary\":\"name\",\"gameData.kinds.Second\":\"enum\"}", Encoding.UTF8.GetString(payload), nameof(StatePayloadResolvesSelectedPaths));
+    Equal("{\"IP\":11,\"DT\":{\"Value\":\"tree\"},\"DTP\":5,\"DTPMax\":12,\"gameData.rows.1.Value\":\"one\",\"gameData.numbers.2\":\"number\",\"gameData.names.primary\":\"name\",\"gameData.kinds.Second\":\"enum\"}", Encoding.UTF8.GetString(payload), nameof(StatePayloadResolvesSelectedPaths));
 }
 
 static void StatePayloadDistinguishesInvalidPathsAndGetterFailures()
@@ -757,6 +757,7 @@ sealed class PathFixture
 sealed class PathEternityFixture
 {
     public SerializerNestedFixture dilationTree { get; init; } = new();
+    public int dtpBought { get; init; }
     public int dtpMax { get; init; }
 }
 

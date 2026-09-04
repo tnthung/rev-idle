@@ -14,6 +14,11 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | Alias | Canonical target |
 | --- | --- |
 | `score` | `gameData.score` |
+| `scoreEternity` | `gameData.scoreEternity` |
+| `scoreInfinity` | `gameData.scoreInfinity` |
+| `scoreUnity` | `gameData.scoreUnity` |
+| `scorePromotion` | `gameData.scorePromotion` |
+| `scoreEquality` | `gameData.scoreEquality` |
 | `income` | `gameData.income` |
 | `IP` | `gameData.infinity.IP` |
 | `infinities` | `gameData.infinity.infs` |
@@ -49,11 +54,15 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `timeInfinity` | `gameData.timeInf` |
 | `timeEternity` | `gameData.timeEtr` |
 | `timeUnity` | `gameData.timeUnity` |
+| `timeEquality` | `gameData.timeEquality` |
 | `timeTotal` | `gameData.timeTotal` |
 | `DT` | `gameData.eternity.dilationTree` |
-| `DTP` | `gameData.eternity.dtpMax` |
+| `DTP` | `gameData.eternity.dtpBought` |
+| `DTPMax` | `gameData.eternity.dtpMax` |
 | `nextEP` | `eternityController.EPGain` |
 | `nextBrokenEP` | `eternityController.brokenEPGain` |
+| `nextIP` | `infinityController.IPGain` |
+| `nextBrokenIP` | `infinityController.brokenIPGain` |
 
 ## Roots
 
