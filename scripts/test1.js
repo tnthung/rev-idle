@@ -43,7 +43,7 @@ class ClickSteps {
 
   static StartEC = ClickSteps.EC.clone().add(995, 566);
 
-  static Dilation = ClickSteps.EC.clone().add(855, 85);
+  static Dilation = ClickSteps.Eternal.clone().add(855, 85);
 
   static toggleDilation = ClickSteps.Dilation.clone().add(201, 148);
 
