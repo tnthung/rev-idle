@@ -779,6 +779,13 @@ async fn run_with_controls_and_lifecycle(
                 result = &mut invocation => {
                     match result {
                         Ok(stop_requested) => stop_requested,
+                        Err(_) if controls.actions_paused.is_paused() => {
+                            // F8 paused actions mid-invocation, which surfaces to the
+                            // script as a rejected rev.* call. That's an expected
+                            // interruption, not a script failure, so keep the session
+                            // alive instead of stopping it.
+                            false
+                        }
                         Err(error) => {
                             eprintln!("script invocation failed: {error}");
                             true
@@ -1845,7 +1852,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn pause_error_stops_the_active_script() {
+    async fn pause_error_does_not_stop_the_active_script() {
         use crate::console::ScriptCommand;
         use std::fs;
         use tokio::sync::{mpsc, watch};
@@ -1909,15 +1916,18 @@ mod tests {
                 )
                 .await
                 .is_err());
-                assert!(!gate.is_paused());
+                // Pausing mid-invocation must not tear down the session: the
+                // gate stays paused and the script keeps waiting to be resumed
+                // instead of being force-stopped.
+                assert!(gate.is_paused());
 
                 command_tx.send(ScriptCommand::Resume).await.unwrap();
                 assert!(tokio::time::timeout(
-                    Duration::from_millis(30),
+                    Duration::from_millis(200),
                     event_rx.recv(),
                 )
                     .await
-                    .is_err());
+                    .is_ok());
 
                 command_tx.send(ScriptCommand::Exit).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), runner)
