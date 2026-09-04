@@ -367,7 +367,7 @@ let initialized = false;
     rev.global.runStart = Date.now();
 
     for (let i=0; i<2; i++) {
-      await wait_for_exponent("infinityController.IPGain", 300n);
+      await wait_for_exponent("nextIP", 300n);
       await ClickSteps.ClaimIP.execute();
     }
 
@@ -375,7 +375,7 @@ let initialized = false;
     await ClickSteps.ClaimEP.execute();
 
     for (let i=1; i<4; i++) {
-      await wait_for_exponent("eternityController.EPGain", 10n * BigInt(i));
+      await wait_for_exponent("nextEP", 10n * BigInt(i));
       await ClickSteps.ClaimEP.execute();
     }
 
