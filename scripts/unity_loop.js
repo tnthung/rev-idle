@@ -303,8 +303,6 @@ const DT_STAGES = [
 
 
 let initialized = false;
-let unityCount = 0;
-let runStart = null;
 
 (async () => {
   if (!initialized) {
@@ -315,11 +313,11 @@ let runStart = null;
 
   // bootstrap the unity
   if (Number(await rev.state("EP")) === 0) {
-    if (runStart !== null)
-      console.log(`Previous run elapsed time: ${(Date.now() - runStart) / 1000}s`);
+    if (rev.global.runStart !== undefined)
+      console.log(`Previous run elapsed time: ${(Date.now() - rev.global.runStart) / 1000}s`);
 
     console.log(`Bootstrapping the unity`);
-    runStart = Date.now();
+    rev.global.runStart = Date.now();
 
     for (let i=0; i<2; i++) {
       await wait_for_exponent("infinityController.IPGain", 300n);
