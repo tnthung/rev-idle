@@ -10,8 +10,23 @@ class ClickSteps {
     return this;
   }
 
+  chain(step) {
+    this.steps.push(...step.steps);
+    return this;
+  }
+
+  wait(gap = 50) {
+    this.steps.push({ wait: gap })
+    return this;
+  }
+
   async execute(gap = 50) {
     for (const step of this.steps) {
+      if (step.wait) {
+        await rev.sleep(step.wait);
+        continue;
+      }
+
       rev.click(step.x, step.y);
       await rev.sleep(gap);
     }
@@ -22,6 +37,8 @@ class ClickSteps {
     clone.steps = [...this.steps];
     return clone;
   }
+
+  static Dismiss = new ClickSteps().wait(100).add(987, 583);
 
   static Revolution = new ClickSteps().add(1188, 87);
   static ClaimIP = ClickSteps.Revolution.clone().add(550, 520);
@@ -51,8 +68,9 @@ class ClickSteps {
 
   static Unity = new ClickSteps().add(1155, 205);
 
-  static UC = ClickSteps.Unity.clone().add(214, 82);
+  static Zodiac = ClickSteps.Unity.clone().add(63, 84);
 
+  static UC = ClickSteps.Unity.clone().add(214, 82);
   static ResetUnity = ClickSteps.UC.clone().add(1087, 134);
 }
 
@@ -68,8 +86,9 @@ function exponent(v) { return BigInt(v.split('e')[1]); }
 async function wait_for(conditionFn, interval = 500, timeout = 5000) {
   do {
     await rev.sleep(interval)
-    if ((timeout -= interval) <= 0) return;
+    if ((timeout -= interval) <= 0) return false;
   } while (!await conditionFn());
+  return true;
 }
 
 async function wait_for_exponent(key, target, interval = 500) {
@@ -85,8 +104,15 @@ class DT {
   static applicationSteps = ClickSteps.DilationTree.clone()
     .add(1014, 547)
     .add(766, 329)
+    .chain(ClickSteps.Dismiss)
     .add(766, 306)
-    .add(773, 332);
+    .add(773, 332)
+    .chain(ClickSteps.Dismiss);
+
+  static exportationSteps = ClickSteps.DilationTree.clone()
+    .add(1014, 547)
+    .add(766, 356)
+    .chain(ClickSteps.Dismiss);
 
   constructor() {
     this.c  = 0;
@@ -187,9 +213,19 @@ class DT {
       .bot(this.b1, this.b2, this.b3, this.b4);
   }
 
+  async match() {
+    await DT.exportationSteps.execute();
+    return rev.read_clipboard().trim() === this.string;
+  }
+
   async apply() {
+    if (await this.match()) {
+      await ClickSteps.Dismiss.execute();
+      return;
+    }
+
     rev.write_clipboard(this.string);
-    console.log(`Applied DT steps with string: ${this.string}`);
+    console.log(`Applied DT steps ${this.total} with string: ${this.string}`);
     await DT.applicationSteps.execute();
   }
 
@@ -258,16 +294,19 @@ const DT_STAGES = [
 
 
 let initialized = false;
+let unityCount = 0;
 
 (async () => {
   if (!initialized) {
     rev.resize(1270, 600);
-    // await ClickSteps.ResetUnity.execute();
+    await ClickSteps.ResetUnity.execute();
     initialized = true;
   }
 
   // bootstrap the unity
   if (Number(await rev.state("EP")) === 0) {
+    console.log(`Bootstrapping the unity ${unityCount++}`);
+
     for (let i=0; i<2; i++) {
       await wait_for_exponent("infinityController.IPGain", 300n);
       await ClickSteps.ClaimIP.execute();
@@ -289,18 +328,23 @@ let initialized = false;
     const challenge = await rev.state(`gameData.eternity.challenges.${cid}`);
     if (challenge.completeDiff === 5) continue;
 
-    for (let j = 0; j < 2; j++) {
-      await ClickSteps[`EC${cid+1}`].execute();
-      await ClickSteps.StartEC.execute();
-      await wait_for(async () => !await rev.state(`gameData.eternity.challenges.${cid}.inChallenge`), 50, 3000);
-      await ClickSteps.StartEC.execute();
-    }
+    for (let offset = 0; offset < 3; offset++) {
+      const offsetCid = cid + offset;
+      if (offsetCid >= 9) break;
 
-    if (cid < 8) for (let j = 0; j < 2; j++) {
-      await ClickSteps[`EC${cid+2}`].execute();
-      await ClickSteps.StartEC.execute();
-      await wait_for(async () => !await rev.state(`gameData.eternity.challenges.${cid+1}.inChallenge`), 50, 3000);
-      await ClickSteps.StartEC.execute();
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await rev.sleep(100);
+        if (await rev.state(`gameData.eternity.challenges.${offsetCid}.completeDiff`) === 5)
+          break;
+
+        await ClickSteps[`EC${offsetCid+1}`].execute();
+        await ClickSteps.StartEC.execute();
+
+        if (await wait_for(async () => !await rev.state(`gameData.eternity.challenges.${offsetCid}.inChallenge`), 100, 3000))
+          await ClickSteps.Dismiss.execute();
+        else
+          await ClickSteps.StartEC.execute();
+      }
     }
 
     await rev.sleep(2500);
@@ -323,8 +367,11 @@ let initialized = false;
     // start EC10
     await ClickSteps.EC10.execute();
     await ClickSteps.StartEC.execute();
-    await wait_for(async () => !await rev.state(`gameData.eternity.challenges.9.inChallenge`), 50, 3000);
-    await ClickSteps.StartEC.execute();
+
+    if (await wait_for(async () => !await rev.state(`gameData.eternity.challenges.9.inChallenge`), 50, 3000))
+      await ClickSteps.Dismiss.execute();
+    else
+      await ClickSteps.StartEC.execute();
     return;
   }
 
@@ -361,7 +408,7 @@ let initialized = false;
 
   if (DTP >= 41) {
     await DT.DTP41.apply();
-    rev.stop();
+    await rev.sleep(1000);
     return;
   }
 
