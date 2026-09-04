@@ -5,8 +5,13 @@ class ClickSteps {
     this.steps = [];
   }
 
-  add(x, y) {
-    this.steps.push({ x, y });
+  click(x, y) {
+    this.steps.push({ type: 'click', x, y });
+    return this;
+  }
+
+  drag(x1, y1, x2, y2) {
+    this.steps.push({ type: 'drag', x1, y1, x2, y2 });
     return this;
   }
 
@@ -16,19 +21,25 @@ class ClickSteps {
   }
 
   wait(gap = 50) {
-    this.steps.push({ wait: gap })
+    this.steps.push({ type: 'wait', wait: gap })
     return this;
   }
 
   async execute(gap = 50) {
     for (const step of this.steps) {
-      if (step.wait) {
-        await rev.sleep(step.wait);
-        continue;
+      switch (step.type) {
+        case 'click':
+          rev.click(step.x, step.y);
+          await rev.sleep(gap);
+          break;
+        case 'drag':
+          rev.drag(step.x1, step.y1, step.x2, step.y2);
+          await rev.sleep(gap);
+          break;
+        case 'wait':
+          await rev.sleep(step.wait);
+          break;
       }
-
-      rev.click(step.x, step.y);
-      await rev.sleep(gap);
     }
   }
 
@@ -38,40 +49,41 @@ class ClickSteps {
     return clone;
   }
 
-  static Dismiss = new ClickSteps().wait(100).add(987, 583);
+  static Dismiss = new ClickSteps().wait(100).click(987, 583);
 
-  static Revolution = new ClickSteps().add(1188, 87);
-  static ClaimIP = ClickSteps.Revolution.clone().add(550, 520);
-  static ClaimEP = ClickSteps.Revolution.clone().add(550, 500);
+  static Revolution = new ClickSteps().click(1188, 87);
+  static ClaimIP = ClickSteps.Revolution.clone().click(550, 520);
+  static ClaimEP = ClickSteps.Revolution.clone().click(550, 500);
 
-  static Eternal = new ClickSteps().add(1182, 164);
+  static Eternal = new ClickSteps().click(1182, 164);
 
-  static EC   = ClickSteps.Eternal.clone().add(401, 83);
-  static EC1  = ClickSteps.EC.clone().add(112, 254);
-  static EC2  = ClickSteps.EC.clone().add(300, 268);
-  static EC3  = ClickSteps.EC.clone().add(542, 265);
-  static EC4  = ClickSteps.EC.clone().add(756, 268);
-  static EC5  = ClickSteps.EC.clone().add(118, 362);
-  static EC6  = ClickSteps.EC.clone().add(329, 388);
-  static EC7  = ClickSteps.EC.clone().add(548, 392);
-  static EC8  = ClickSteps.EC.clone().add(742, 384);
-  static EC9  = ClickSteps.EC.clone().add(161, 496);
-  static EC10 = ClickSteps.EC.clone().add(324, 502);
+  static EC   = ClickSteps.Eternal.clone().click(401, 83);
+  static EC1  = ClickSteps.EC.clone().click(112, 254);
+  static EC2  = ClickSteps.EC.clone().click(300, 268);
+  static EC3  = ClickSteps.EC.clone().click(542, 265);
+  static EC4  = ClickSteps.EC.clone().click(756, 268);
+  static EC5  = ClickSteps.EC.clone().click(118, 362);
+  static EC6  = ClickSteps.EC.clone().click(329, 388);
+  static EC7  = ClickSteps.EC.clone().click(548, 392);
+  static EC8  = ClickSteps.EC.clone().click(742, 384);
+  static EC9  = ClickSteps.EC.clone().click(161, 496);
+  static EC10 = ClickSteps.EC.clone().click(324, 502);
 
-  static StartEC = ClickSteps.EC.clone().add(995, 566);
+  static StartEC = ClickSteps.EC.clone().click(995, 566);
 
-  static Dilation = ClickSteps.Eternal.clone().add(855, 85);
+  static Dilation = ClickSteps.Eternal.clone().click(855, 85);
 
-  static toggleDilation = ClickSteps.Dilation.clone().add(201, 148);
+  static toggleDilation = ClickSteps.Dilation.clone().click(201, 148);
 
-  static DilationTree = ClickSteps.Dilation.clone().add(1023, 79);
+  static DilationTree = ClickSteps.Dilation.clone().click(1023, 79);
 
-  static Unity = new ClickSteps().add(1155, 205);
+  static Unity = new ClickSteps().click(1155, 205);
 
-  static Zodiac = ClickSteps.Unity.clone().add(63, 84);
+  static Zodiac = ClickSteps.Unity.clone().click(63, 84);
+  static ZodiacShop = ClickSteps.Zodiac.clone().click(550, 444);
 
-  static UC = ClickSteps.Unity.clone().add(214, 82);
-  static ResetUnity = ClickSteps.UC.clone().add(1087, 134);
+  static UC = ClickSteps.Unity.clone().click(214, 82);
+  static ResetUnity = ClickSteps.UC.clone().click(1087, 134);
 }
 
 
@@ -102,16 +114,16 @@ async function print_state(key) {
 
 class DT {
   static applicationSteps = ClickSteps.DilationTree.clone()
-    .add(1014, 547)
-    .add(766, 329)
+    .click(1014, 547)
+    .click(766, 329)
     .chain(ClickSteps.Dismiss)
-    .add(766, 306)
-    .add(773, 332)
+    .click(766, 306)
+    .click(773, 332)
     .chain(ClickSteps.Dismiss);
 
   static exportationSteps = ClickSteps.DilationTree.clone()
-    .add(1014, 547)
-    .add(766, 356)
+    .click(1014, 547)
+    .click(766, 356)
     .chain(ClickSteps.Dismiss);
 
   constructor() {
@@ -302,6 +314,30 @@ const DT_STAGES = [
 ];
 
 
+const ZODIAC_POS = [
+  [795, 345],
+  [843, 349],
+  [885, 349],
+  [923, 349],
+  [974, 347],
+  [1010, 347],
+  [1065, 350],
+  [793, 399],
+  [849, 403],
+  [882, 392],
+  [930, 395],
+  [970, 393],
+  [1014, 390],
+  [1059, 394],
+  [798, 443],
+  [847, 441],
+  [879, 440],
+  [931, 440],
+  [974, 440],
+  [1015, 439],
+];
+
+
 let initialized = false;
 
 (async () => {
@@ -309,6 +345,17 @@ let initialized = false;
     rev.resize(1270, 600);
     // await ClickSteps.ResetUnity.execute();
     initialized = true;
+  }
+
+  const unityInventory = await rev.state("gameData.unity.inventory");
+  if (Object.values(unityInventory).length >= 4) {
+    await ClickSteps.ZodiacShop.execute();
+    for (const pos of Object.keys(unityInventory)) {
+      const [x, y] = ZODIAC_POS[Number(pos)];
+      await rev.drag(x, y, 613, 525);
+      rev.click(686, 525);
+      await rev.sleep(500);
+    }
   }
 
   // bootstrap the unity
@@ -415,6 +462,11 @@ let initialized = false;
     await stage.loadout.apply();
     await wait_for(async () => Number(await rev.state(key)) >= stage.target, 500, 3000);
     await rev.sleep(4000);
+    return;
+  }
+
+  if (DTP > 40) {
+    await rev.sleep(1000);
     return;
   }
 
