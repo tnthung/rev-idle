@@ -186,6 +186,117 @@ internal static class UnityUiClickDispatcher
         return true;
     }
 
+    internal static bool TryDispatchDrag(nint window, DragCommand command, out string result)
+    {
+        if (window == 0 || !GetClientRect(window, out Rect client))
+        {
+            result = $"invalid bounds at ({command.StartX}, {command.StartY})";
+            return false;
+        }
+
+        int clientWidth = client.Right - client.Left;
+        int clientHeight = client.Bottom - client.Top;
+
+        if (!InputBridgeProtocol.TryMapToUnity(
+                new ClickCommand(command.RequestId, command.StartX, command.StartY),
+                clientWidth, clientHeight, Screen.width, Screen.height,
+                out float startX, out float startY) ||
+            !InputBridgeProtocol.TryMapToUnity(
+                new ClickCommand(command.RequestId, command.EndX, command.EndY),
+                clientWidth, clientHeight, Screen.width, Screen.height,
+                out float endX, out float endY))
+        {
+            result = $"invalid bounds for drag ({command.StartX}, {command.StartY}) -> ({command.EndX}, {command.EndY})";
+            return false;
+        }
+
+        EventSystem? eventSystem = EventSystem.current;
+        if (eventSystem is null)
+        {
+            result = "no EventSystem";
+            return false;
+        }
+
+        var pointerData = new PointerEventData(eventSystem)
+        {
+            button = PointerEventData.InputButton.Left,
+            pressPosition = new Vector2(startX, startY),
+            position = new Vector2(startX, startY)
+        };
+
+        var raycasts = new Il2CppSystem.Collections.Generic.List<RaycastResult>();
+        eventSystem.RaycastAll(pointerData, raycasts);
+
+        var draggable = new bool[raycasts.Count];
+        var dragTargets = new GameObject?[raycasts.Count];
+        for (int index = 0; index < raycasts.Count; index++)
+        {
+            GameObject? candidate = raycasts[index].gameObject;
+            if (candidate is null)
+                continue;
+
+            GameObject? target = ExecuteEvents.GetEventHandler<IDragHandler>(candidate);
+            if (target is null)
+                continue;
+
+            draggable[index] = true;
+            dragTargets[index] = target;
+        }
+
+        int draggableIndex = FindFirstClickableIndex(draggable);
+        if (draggableIndex < 0)
+        {
+            result = $"no drag handler at ({command.StartX}, {command.StartY})";
+            return false;
+        }
+
+        RaycastResult hit = raycasts[draggableIndex];
+        GameObject dragTarget = dragTargets[draggableIndex]!;
+        pointerData.pointerCurrentRaycast = hit;
+        pointerData.pointerPressRaycast = hit;
+        pointerData.pointerDrag = dragTarget;
+
+        ExecuteEvents.Execute(dragTarget, pointerData, ExecuteEvents.beginDragHandler);
+
+        pointerData.delta = new Vector2(endX - startX, endY - startY);
+        pointerData.position = new Vector2(endX, endY);
+        ExecuteEvents.Execute(dragTarget, pointerData, ExecuteEvents.dragHandler);
+
+        var dropRaycasts = new Il2CppSystem.Collections.Generic.List<RaycastResult>();
+        eventSystem.RaycastAll(pointerData, dropRaycasts);
+
+        GameObject? dropTarget = null;
+        for (int index = 0; index < dropRaycasts.Count; index++)
+        {
+            GameObject? candidate = dropRaycasts[index].gameObject;
+            if (candidate is null)
+                continue;
+
+            dropTarget = ExecuteEvents.GetEventHandler<IDropHandler>(candidate);
+            if (dropTarget is not null)
+            {
+                pointerData.pointerCurrentRaycast = dropRaycasts[index];
+                break;
+            }
+        }
+
+        string dropDescription;
+        if (dropTarget is not null)
+        {
+            ExecuteEvents.Execute(dropTarget, pointerData, ExecuteEvents.dropHandler);
+            dropDescription = $"dropped on '{dropTarget.name}'";
+        }
+        else
+        {
+            dropDescription = "no drop handler at destination";
+        }
+
+        ExecuteEvents.Execute(dragTarget, pointerData, ExecuteEvents.endDragHandler);
+
+        result = $"dragged '{dragTarget.name}' from ({command.StartX}, {command.StartY}) to ({command.EndX}, {command.EndY}), {dropDescription}";
+        return true;
+    }
+
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool GetClientRect(nint window, out Rect client);
 

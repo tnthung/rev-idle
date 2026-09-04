@@ -2,11 +2,14 @@ namespace RevIdle.ScoreTelemetry;
 
 internal readonly record struct ClickCommand(ulong RequestId, uint X, uint Y);
 internal readonly record struct ScrollCommand(ulong RequestId, uint X, uint Y, int Length, uint Axis);
+internal readonly record struct DragCommand(ulong RequestId, uint StartX, uint StartY, uint EndX, uint EndY);
 
 internal static class InputBridgeProtocol
 {
     internal const uint MessageId = 0x8417;
     internal const uint ScrollMessageId = 0x8418;
+    internal const uint DragStartMessageId = 0x8419;
+    internal const uint DragEndMessageId = 0x841A;
 
     internal static bool TryDecode(nuint requestId, nint packedCoordinates, out ClickCommand command)
     {
@@ -62,4 +65,10 @@ internal static class InputBridgeProtocol
         unityY = screenHeight - 1f - command.Y * (float)screenHeight / clientHeight;
         return true;
     }
+}
+
+internal static class DragCommandFactory
+{
+    internal static DragCommand FromEndpoints(ClickCommand start, ClickCommand end) =>
+        new(end.RequestId, start.X, start.Y, end.X, end.Y);
 }

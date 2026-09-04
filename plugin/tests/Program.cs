@@ -44,7 +44,10 @@ ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
 ScrollProtocolRejectsZeroRequestId();
 ScrollQueuePreservesOrderAndRejectsDuplicates();
 DispatcherFindsFirstScrollableRaycast();
-System.Console.WriteLine("38 tests passed.");
+DragCommandFactoryCombinesStartAndEndEndpoints();
+DragQueuePairsStartAndEndByRequestIdAndRejectsDuplicates();
+DragQueueIgnoresEndWithoutMatchingStart();
+System.Console.WriteLine("41 tests passed.");
 
 static void InvalidPortsDisableServer()
 {
@@ -653,6 +656,50 @@ static void DispatcherFindsFirstScrollableRaycast()
 {
     const string testName = nameof(DispatcherFindsFirstScrollableRaycast);
     Equal(1, UnityUiClickDispatcher.FindFirstScrollableIndex(new[] { false, true, false }), testName);
+}
+
+static void DragCommandFactoryCombinesStartAndEndEndpoints()
+{
+    const string testName = nameof(DragCommandFactoryCombinesStartAndEndEndpoints);
+    var start = new ClickCommand(7, 100, 200);
+    var end = new ClickCommand(7, 300, 400);
+    DragCommand drag = DragCommandFactory.FromEndpoints(start, end);
+    Equal(7UL, drag.RequestId, testName);
+    Equal(100U, drag.StartX, testName);
+    Equal(200U, drag.StartY, testName);
+    Equal(300U, drag.EndX, testName);
+    Equal(400U, drag.EndY, testName);
+}
+
+static void DragQueuePairsStartAndEndByRequestIdAndRejectsDuplicates()
+{
+    const string testName = nameof(DragQueuePairsStartAndEndByRequestIdAndRejectsDuplicates);
+    var queue = new DragCommandQueue();
+
+    Equal(true, queue.TryBeginDrag(new ClickCommand(5, 10, 20)), testName);
+    Equal(false, queue.TryBeginDrag(new ClickCommand(5, 99, 99)), testName);
+    Equal(false, queue.TryDequeue(out _), testName);
+
+    Equal(true, queue.TryEndDrag(new ClickCommand(5, 30, 40)), testName);
+    Equal(false, queue.TryEndDrag(new ClickCommand(5, 30, 40)), testName);
+
+    Equal(true, queue.TryDequeue(out DragCommand command), testName);
+    Equal(5UL, command.RequestId, testName);
+    Equal(10U, command.StartX, testName);
+    Equal(20U, command.StartY, testName);
+    Equal(30U, command.EndX, testName);
+    Equal(40U, command.EndY, testName);
+
+    queue.Clear();
+    Equal(false, queue.TryDequeue(out _), testName);
+}
+
+static void DragQueueIgnoresEndWithoutMatchingStart()
+{
+    const string testName = nameof(DragQueueIgnoresEndWithoutMatchingStart);
+    var queue = new DragCommandQueue();
+    Equal(false, queue.TryEndDrag(new ClickCommand(9, 1, 1)), testName);
+    Equal(false, queue.TryDequeue(out _), testName);
 }
 
 static void Near(float expected, float actual, string testName)

@@ -14,13 +14,18 @@ internal sealed class Win32InputBridge : IDisposable
 
     private readonly ClickCommandQueue _queue;
     private readonly ScrollCommandQueue _scrollQueue;
+    private readonly DragCommandQueue _dragQueue;
     private nint _window;
     private bool _disposed;
 
-    internal Win32InputBridge(ClickCommandQueue queue, ScrollCommandQueue? scrollQueue = null)
+    internal Win32InputBridge(
+        ClickCommandQueue queue,
+        ScrollCommandQueue? scrollQueue = null,
+        DragCommandQueue? dragQueue = null)
     {
         _queue = queue;
         _scrollQueue = scrollQueue ?? new ScrollCommandQueue();
+        _dragQueue = dragQueue ?? new DragCommandQueue();
     }
 
     internal nint Window => _window;
@@ -111,6 +116,7 @@ internal sealed class Win32InputBridge : IDisposable
         _disposed = true;
         _queue.Clear();
         _scrollQueue.Clear();
+        _dragQueue.Clear();
 
         nint window = _window;
         if (window == 0)
@@ -172,6 +178,24 @@ internal sealed class Win32InputBridge : IDisposable
                 InputBridgeProtocol.TryDecodeScroll(wParam, lParam, out ScrollCommand scrollCommand))
             {
                 scrollBridge._scrollQueue.TryEnqueue(scrollCommand);
+                return 0;
+            }
+
+            if (message == InputBridgeProtocol.DragStartMessageId &&
+                _active is Win32InputBridge dragStartBridge &&
+                IsCallbackIdentityValid(dragStartBridge._disposed, window, dragStartBridge._window, subclassId) &&
+                InputBridgeProtocol.TryDecode(wParam, lParam, out ClickCommand dragStart))
+            {
+                dragStartBridge._dragQueue.TryBeginDrag(dragStart);
+                return 0;
+            }
+
+            if (message == InputBridgeProtocol.DragEndMessageId &&
+                _active is Win32InputBridge dragEndBridge &&
+                IsCallbackIdentityValid(dragEndBridge._disposed, window, dragEndBridge._window, subclassId) &&
+                InputBridgeProtocol.TryDecode(wParam, lParam, out ClickCommand dragEnd))
+            {
+                dragEndBridge._dragQueue.TryEndDrag(dragEnd);
                 return 0;
             }
         }

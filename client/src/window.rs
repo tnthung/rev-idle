@@ -39,6 +39,8 @@ const GAME_EXECUTABLE: &str = "Revolution Idle.exe";
 const CONSOLE_WINDOW_CLASS: &str = "ConsoleWindowClass";
 const INPUT_BRIDGE_MESSAGE: u32 = 0x8417;
 const SCROLL_BRIDGE_MESSAGE: u32 = 0x8418;
+const DRAG_START_BRIDGE_MESSAGE: u32 = 0x8419;
+const DRAG_END_BRIDGE_MESSAGE: u32 = 0x841A;
 
 fn free_global(memory: HGLOBAL) {
     unsafe {
@@ -194,6 +196,24 @@ where
     .map_err(|error| format!("PostMessageW(INPUT_BRIDGE_MESSAGE) failed: {error}"))
 }
 
+fn post_bridge_drag_endpoint_with<F>(
+    message: u32,
+    x: i32,
+    y: i32,
+    request_id: usize,
+    post: F,
+) -> Result<(), String>
+where
+    F: FnOnce(u32, WPARAM, LPARAM) -> windows::core::Result<()>,
+{
+    post(
+        message,
+        WPARAM(request_id),
+        LPARAM(pack_bridge_coordinates(x, y)),
+    )
+    .map_err(|error| format!("PostMessageW(0x{message:x}) failed: {error}"))
+}
+
 fn pack_bridge_scroll(length: i32, axis: Axis, request_id: usize) -> usize {
     let axis_code = match axis {
         Axis::Vertical => 0u64,
@@ -298,6 +318,16 @@ pub trait WindowControl {
         _axis: Axis,
     ) -> Result<(), String> {
         Err("window scrolling is not supported".to_string())
+    }
+
+    fn drag(
+        &self,
+        _x1: i32,
+        _y1: i32,
+        _x2: i32,
+        _y2: i32,
+    ) -> Result<(), String> {
+        Err("window dragging is not supported".to_string())
     }
 }
 
@@ -424,6 +454,32 @@ pub(crate) fn post_scroll_to_game(
     )
 }
 
+pub(crate) fn post_drag_to_game(x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
+    let hwnd = find_game_window()?;
+    let request_id = request_id_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("system clock is before UNIX epoch: {error}"))?
+            .as_nanos(),
+        std::process::id(),
+    );
+
+    post_bridge_drag_endpoint_with(
+        DRAG_START_BRIDGE_MESSAGE,
+        x1,
+        y1,
+        request_id,
+        |message, wparam, lparam| unsafe { PostMessageW(Some(hwnd), message, wparam, lparam) },
+    )?;
+    post_bridge_drag_endpoint_with(
+        DRAG_END_BRIDGE_MESSAGE,
+        x2,
+        y2,
+        request_id,
+        |message, wparam, lparam| unsafe { PostMessageW(Some(hwnd), message, wparam, lparam) },
+    )
+}
+
 pub(crate) fn screen_to_client_position(
     screen_x: i32,
     screen_y: i32,
@@ -547,6 +603,10 @@ impl WindowControl for Win32WindowControl {
     fn scroll(&self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
         post_scroll_to_game(x, y, length, axis)
     }
+
+    fn drag(&self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
+        post_drag_to_game(x1, y1, x2, y2)
+    }
 }
 
 #[cfg(test)]
@@ -657,6 +717,29 @@ mod tests {
         assert_eq!(
             received,
             vec![(0x8418, 0x00000023ffffffff, 0x00000050000004b0)]
+        );
+    }
+
+    #[test]
+    fn background_drag_posts_start_and_end_bridge_events_with_shared_request_id() {
+        let mut received = Vec::new();
+        post_bridge_drag_endpoint_with(DRAG_START_BRIDGE_MESSAGE, 1200, 80, 17, |message, wparam, lparam| {
+            received.push((message, wparam.0, lparam.0 as u64));
+            Ok(())
+        })
+        .unwrap();
+        post_bridge_drag_endpoint_with(DRAG_END_BRIDGE_MESSAGE, 600, 400, 17, |message, wparam, lparam| {
+            received.push((message, wparam.0, lparam.0 as u64));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            received,
+            vec![
+                (0x8419, 17, 0x00000050000004b0),
+                (0x841a, 17, 0x0000019000000258),
+            ]
         );
     }
 }

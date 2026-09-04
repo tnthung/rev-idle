@@ -404,6 +404,23 @@ impl ScriptSession {
                         )?,
                     )?;
 
+                    let drag_window = controls.window.clone();
+                    let drag_paused = controls.actions_paused.clone();
+                    rev.set(
+                        "drag",
+                        Function::new(
+                            ctx.clone(),
+                            move |x1: f64, y1: f64, x2: f64, y2: f64| {
+                                let x1 = validate_coordinate(x1)?;
+                                let y1 = validate_coordinate(y1)?;
+                                let x2 = validate_coordinate(x2)?;
+                                let y2 = validate_coordinate(y2)?;
+                                ensure_actions_running(&drag_paused)?;
+                                drag_window.drag(x1, y1, x2, y2).map_err(host_error)
+                            },
+                        )?,
+                    )?;
+
                     let clipboard_window = controls.window.clone();
                     let clipboard_paused = controls.actions_paused.clone();
                     rev.set(

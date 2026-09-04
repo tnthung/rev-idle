@@ -77,10 +77,12 @@ public sealed class ScoreTicker : MonoBehaviour
     private const float BridgeRetrySeconds = 1f;
     private const int MaxClicksPerFrame = 32;
     private const int MaxScrollsPerFrame = 32;
+    private const int MaxDragsPerFrame = 32;
 
     private float _bridgeRetryRemaining;
     private readonly ClickCommandQueue _clicks = new();
     private readonly ScrollCommandQueue _scrolls = new();
+    private readonly DragCommandQueue _drags = new();
     private Win32InputBridge? _bridge;
 
     public ScoreTicker(IntPtr pointer) : base(pointer)
@@ -93,6 +95,7 @@ public sealed class ScoreTicker : MonoBehaviour
         TryAttachBridge(delta);
         DispatchQueuedClicks();
         DispatchQueuedScrolls();
+        DispatchQueuedDrags();
 
         Plugin.CompletePending();
     }
@@ -128,7 +131,7 @@ public sealed class ScoreTicker : MonoBehaviour
             return;
         }
 
-        var bridge = new Win32InputBridge(_clicks, _scrolls);
+        var bridge = new Win32InputBridge(_clicks, _scrolls, _drags);
         if (bridge.TryAttach())
         {
             _bridge = bridge;
@@ -191,12 +194,38 @@ public sealed class ScoreTicker : MonoBehaviour
         }
     }
 
+    private void DispatchQueuedDrags()
+    {
+        Win32InputBridge? bridge = _bridge;
+        if (bridge is null || !bridge.IsAttached)
+            return;
+
+        int processed = 0;
+        while (processed < MaxDragsPerFrame && _drags.TryDequeue(out DragCommand command))
+        {
+            try
+            {
+                if (UnityUiClickDispatcher.TryDispatchDrag(bridge.Window, command, out string result))
+                    Plugin.LogBridgeInfo(result);
+                else
+                    Plugin.LogBridgeError(result);
+            }
+            catch (Exception exception)
+            {
+                Plugin.LogBridgeError($"request {command.RequestId} failed: {exception.Message}");
+            }
+
+            processed++;
+        }
+    }
+
     private void StopBridge()
     {
         _bridge?.Dispose();
         _bridge = null;
         _clicks.Clear();
         _scrolls.Clear();
+        _drags.Clear();
     }
 
 }
