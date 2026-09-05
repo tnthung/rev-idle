@@ -359,8 +359,12 @@ export default (async () => {
   try {
     if (!initialized) {
       rev.resize(1270, 600);
-      // await ClickSteps.ResetUnity.execute();
       initialized = true;
+    }
+
+    if (rev.global.runStart !== undefined && Date.now() - rev.global.runStart > 5*60*1000) {
+      console.log(`Run exceeded 5 minutes, resetting`);
+      await ClickSteps.ResetUnity.execute();
     }
 
     const unityInventory = await rev.state("gameData.unity.inventory");
