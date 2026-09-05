@@ -506,6 +506,15 @@ let initialized = false;
         }
 
         await rev.sleep(1000);
+
+        if (unspent !== 0) {
+          await ClickSteps.toggleDilation.execute();
+          await rev.sleep(1000);
+          await ClickSteps.toggleDilation.execute();
+        }
+
+        if (Number(await rev.state("EP")) === 0)
+          return;
       }
 
       await ClickSteps.ClaimEP.execute();
