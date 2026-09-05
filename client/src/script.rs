@@ -11,20 +11,24 @@ use rquickjs::{
     function::Rest,
     function::Async,
     function::Opt,
+    loader::{ImportAttributes, Loader, Resolver},
+    module::Declared,
     promise::MaybePromise,
     AsyncContext,
     AsyncRuntime,
     CaughtError,
+    Ctx,
     Error,
     FromJs,
     Function,
+    Module,
     Object,
     Persistent,
     Value,
 };
 use std::{
     cell::{Cell, RefCell},
-    path::Path,
+    path::{Component, Path, PathBuf},
     rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -195,6 +199,69 @@ fn parse_scroll_axis(axis: Opt<Value>) -> Result<Axis, Error> {
     }
 }
 
+/// Resolves the relative `import`/`export` specifiers scripts use to share
+/// code with sibling files (e.g. `import { Action } from './_unity_loop.js'`).
+/// Only relative specifiers are supported; there is no package-style module
+/// resolution for this project's scripts.
+/// Joins `name` onto `base_dir`, collapsing `.`/`..` components instead of
+/// leaving them as literal path segments (plain `Path::join` does not
+/// normalize them, which would otherwise produce paths like `scripts\./lib`).
+fn join_normalized(base_dir: &Path, name: &str) -> PathBuf {
+    let mut result = base_dir.to_path_buf();
+    for component in Path::new(name).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                result.pop();
+            }
+            other => result.push(other.as_os_str()),
+        }
+    }
+    result
+}
+
+struct ScriptModuleResolver;
+
+impl Resolver for ScriptModuleResolver {
+    fn resolve<'js>(
+        &mut self,
+        _ctx: &Ctx<'js>,
+        base: &str,
+        name: &str,
+        _attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<String> {
+        if !(name.starts_with("./") || name.starts_with("../")) {
+            return Err(Error::new_resolving_message(
+                base,
+                name,
+                "only relative imports (starting with ./ or ../) are supported",
+            ));
+        }
+
+        let base_dir = Path::new(base).parent().unwrap_or_else(|| Path::new("."));
+        let mut resolved = join_normalized(base_dir, name);
+        if resolved.extension().is_none() {
+            resolved.set_extension("js");
+        }
+        Ok(resolved.to_string_lossy().into_owned())
+    }
+}
+
+struct ScriptModuleLoader;
+
+impl Loader for ScriptModuleLoader {
+    fn load<'js>(
+        &mut self,
+        ctx: &Ctx<'js>,
+        path: &str,
+        _attributes: Option<ImportAttributes<'js>>,
+    ) -> rquickjs::Result<Module<'js, Declared>> {
+        let source = std::fs::read_to_string(path)
+            .map_err(|error| Error::new_loading_message(path, error.to_string()))?;
+        Module::declare(ctx.clone(), path, source)
+    }
+}
+
 fn format_console_message(args: Rest<Value>) -> rquickjs::Result<String> {
     args.0
         .into_iter()
@@ -232,51 +299,73 @@ struct ScriptSession {
 
 impl ScriptSession {
     #[cfg(test)]
-    async fn new(source: &str) -> rquickjs::Result<Self> {
+    async fn new(source: &str) -> Result<Self, String> {
         Self::new_with_client(
             source,
+            "test.js",
             reqwest::Client::builder()
                 .no_proxy()
                 .timeout(Duration::from_secs(2))
                 .build()
-                .map_err(|error| Error::new_from_js_message("client", "HTTP client", error.to_string()))?,
+                .map_err(|error| error.to_string())?,
         )
         .await
     }
 
-    async fn new_with_client(source: &str, client: reqwest::Client) -> rquickjs::Result<Self> {
-        let runtime = AsyncRuntime::new()?;
-        let context = AsyncContext::full(&runtime).await?;
+    /// `name` is the module specifier the entry script is declared under; it
+    /// also anchors relative `import`s from that script's own directory (see
+    /// `ScriptModuleResolver`). Production callers pass the script's real
+    /// path; tests pass a synthetic name since none of them import anything.
+    async fn new_with_client(source: &str, name: &str, client: reqwest::Client) -> Result<Self, String> {
+        let runtime = AsyncRuntime::new().map_err(|error| error.to_string())?;
+        runtime.set_loader(ScriptModuleResolver, ScriptModuleLoader).await;
+        let context = AsyncContext::full(&runtime).await.map_err(|error| error.to_string())?;
         let source = source.to_owned();
+        let name = name.to_owned();
 
         let (script, parse, freeze) = context
             .async_with(async move |ctx| {
-                let console = Object::new(ctx.clone())?;
-                console.set(
-                    "log",
-                    Function::new(ctx.clone(), move |args: Rest<Value>| {
-                        println!("{}", format_console_message(args)?);
-                        Ok::<(), rquickjs::Error>(())
-                    })?,
-                )?;
-                console.set(
-                    "error",
-                    Function::new(ctx.clone(), move |args: Rest<Value>| {
-                        eprintln!("{}", format_console_message(args)?);
-                        Ok::<(), rquickjs::Error>(())
-                    })?,
-                )?;
-                ctx.globals().set("console", console)?;
+                let result: rquickjs::Result<_> = async {
+                    let console = Object::new(ctx.clone())?;
+                    console.set(
+                        "log",
+                        Function::new(ctx.clone(), move |args: Rest<Value>| {
+                            println!("{}", format_console_message(args)?);
+                            Ok::<(), rquickjs::Error>(())
+                        })?,
+                    )?;
+                    console.set(
+                        "error",
+                        Function::new(ctx.clone(), move |args: Rest<Value>| {
+                            eprintln!("{}", format_console_message(args)?);
+                            Ok::<(), rquickjs::Error>(())
+                        })?,
+                    )?;
+                    ctx.globals().set("console", console)?;
 
-                let parse: Function = ctx.eval("JSON.parse")?;
-                let freeze: Function = ctx.eval("Object.freeze")?;
-                let script: Function = ctx.eval(source)?;
+                    let parse: Function = ctx.eval("JSON.parse")?;
+                    let freeze: Function = ctx.eval("Object.freeze")?;
 
-                Ok::<_, rquickjs::Error>((
-                    Persistent::save(&ctx, script),
-                    Persistent::save(&ctx, parse),
-                    Persistent::save(&ctx, freeze),
-                ))
+                    let (module, promise) = Module::declare(ctx.clone(), name, source)?.eval()?;
+                    promise.into_future::<()>().await?;
+                    let namespace = module.namespace()?;
+                    let script: Function = namespace.get("default").map_err(|_| {
+                        Error::new_from_js_message(
+                            "module",
+                            "JavaScript",
+                            "script must `export default` the function to run",
+                        )
+                    })?;
+
+                    Ok((
+                        Persistent::save(&ctx, script),
+                        Persistent::save(&ctx, parse),
+                        Persistent::save(&ctx, freeze),
+                    ))
+                }
+                .await;
+
+                result.map_err(|error| CaughtError::from_error(&ctx, error).to_string())
             })
             .await?;
 
@@ -543,7 +632,7 @@ async fn load_path(path: &Path, client: reqwest::Client) -> Result<ScriptSession
         .await
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
 
-    ScriptSession::new_with_client(&source, client)
+    ScriptSession::new_with_client(&source, &path.to_string_lossy(), client)
         .await
         .map_err(|error| format!("failed to load {}: {error}", path.display()))
 }
@@ -1087,7 +1176,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn resize_and_click_sends_one_event_without_window_work() {
-        let session = ScriptSession::new(r#"(() => { rev.resize(1280, 720); rev.click(10, 20, "right"); })"#).await.unwrap();
+        let session = ScriptSession::new(r#"export default (() => { rev.resize(1280, 720); rev.click(10, 20, "right"); })"#).await.unwrap();
         let (controls, events) = recording_controls();
         session.invoke(State::default(), controls).await.unwrap();
         assert_eq!(*events.borrow(), vec![HostEvent::Resize(1280, 720), HostEvent::Click(10, 20, Button::Right)]);
@@ -1115,7 +1204,7 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
         let session = ScriptSession::new(
-            r#"(async () => {
+            r#"export default (async () => {
                 const state = await rev.state("score", "items");
                 if (!Object.isFrozen(state)) throw new Error("state is not frozen");
                 if (state.score !== 42 || state.items[1].ok !== true || state.items[2] !== null) {
@@ -1155,7 +1244,7 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
         let session = ScriptSession::new(
-            r#"(async () => {
+            r#"export default (async () => {
                 const state = await rev.state("EP");
                 if (state !== "0e0") throw new Error("single-key state was not unwrapped: " + JSON.stringify(state));
             })"#,
@@ -1188,7 +1277,7 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
         let session = ScriptSession::new(
-            r#"(async () => {
+            r#"export default (async () => {
                 Object.freeze = (value) => value;
                 const state = await rev.state();
                 if (!Object.isFrozen(state)) throw new Error("state is not natively frozen");
@@ -1222,7 +1311,7 @@ mod tests {
             stream.write_all(response.as_bytes()).unwrap();
         });
         let session = ScriptSession::new(
-            r#"(async () => {
+            r#"export default (async () => {
                 JSON.parse = () => ({ score: -1 });
                 const state = await rev.state();
                 if (state.score !== 42) throw new Error("state did not use native parse");
@@ -1253,7 +1342,7 @@ mod tests {
             );
             stream.write_all(response.as_bytes()).unwrap();
         });
-        let session = ScriptSession::new(r#"(async () => await rev.state())"#)
+        let session = ScriptSession::new(r#"export default (async () => await rev.state())"#)
             .await
             .unwrap();
         let (controls, _) = recording_controls();
@@ -1265,14 +1354,14 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn resize_rejects_invalid_dimensions_without_window_work() {
-        for source in [r#"(() => rev.resize(0, 720))"#, r#"(() => rev.resize(-1, 720))"#, r#"(() => rev.resize(1.5, 720))"#, r#"(() => rev.resize(Infinity, 720))"#] {
+        for source in [r#"export default (() => rev.resize(0, 720))"#, r#"export default (() => rev.resize(-1, 720))"#, r#"export default (() => rev.resize(1.5, 720))"#, r#"export default (() => rev.resize(Infinity, 720))"#] {
             let (controls, events) = recording_controls();
             let session = ScriptSession::new(source).await.unwrap();
             assert!(session.invoke(State::default(), controls).await.is_err());
             assert!(events.borrow().is_empty());
         }
         let (controls, events) = recording_controls();
-        let session = ScriptSession::new(r#"(() => rev.resize(1280, 720))"#).await.unwrap();
+        let session = ScriptSession::new(r#"export default (() => rev.resize(1280, 720))"#).await.unwrap();
         session.invoke(State::default(), controls).await.unwrap();
         assert_eq!(*events.borrow(), vec![HostEvent::Resize(1280, 720)]);
     }
@@ -1280,7 +1369,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn script_errors_include_message_and_stack() {
         let session = ScriptSession::new(
-            r#"(() => { function fail() { throw new Error("boom"); } fail(); })"#,
+            r#"export default (() => { function fail() { throw new Error("boom"); } fail(); })"#,
         )
         .await
         .unwrap();
@@ -1299,7 +1388,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn async_script_errors_include_message_and_stack() {
         let session = ScriptSession::new(
-            r#"(async () => { await rev.sleep(0); function fail() { throw new Error("async boom"); } fail(); })"#,
+            r#"export default (async () => { await rev.sleep(0); function fail() { throw new Error("async boom"); } fail(); })"#,
         )
         .await
         .unwrap();
@@ -1357,7 +1446,7 @@ mod tests {
             "rev-idle-no-initial-script-test-{}.js",
             std::process::id(),
         ));
-        fs::write(&path, r#"(() => rev.click(1, 1, "left"))"#).unwrap();
+        fs::write(&path, r#"export default (() => rev.click(1, 1, "left"))"#).unwrap();
 
         let clicks = Rc::new(RefCell::new(Vec::new()));
         let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
@@ -1406,9 +1495,154 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn script_can_import_a_sibling_module_via_relative_path() {
+        use std::fs;
+
+        let root = std::env::temp_dir().join(format!(
+            "rev-idle-import-test-{}",
+            std::process::id(),
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let helper_path = root.join("helper.js");
+        let entry_path = root.join("entry.js");
+
+        fs::write(
+            &helper_path,
+            r#"export function clickHelper() { rev.click(7, 8, "right"); }"#,
+        )
+        .unwrap();
+        fs::write(
+            &entry_path,
+            r#"
+                import { clickHelper } from './helper.js';
+                export default (() => clickHelper());
+            "#,
+        )
+        .unwrap();
+
+        let clicks = Rc::new(RefCell::new(Vec::new()));
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: clicks.clone(),
+        }));
+        let (command_tx, command_rx) = mpsc::channel(8);
+        let (_state_tx, state_rx) = watch::channel(State::default());
+        let local = tokio::task::LocalSet::new();
+        let observed_clicks = clicks.clone();
+
+        local
+            .run_until(async move {
+                let runner = tokio::task::spawn_local(run_with_mouse(
+                    command_rx,
+                    state_rx,
+                    entry_path.clone(),
+                    mouse,
+                    Duration::from_millis(5),
+                ));
+
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    loop {
+                        if !observed_clicks.borrow().is_empty() {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+
+                command_tx.send(ScriptCommand::Exit).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), runner)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            })
+            .await;
+
+        assert_eq!(
+            clicks.borrow().as_slice(),
+            &[Click { x: 7, y: 8, button: Button::Right }]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn import_from_a_subdirectory_resolves_without_an_explicit_js_extension() {
+        use std::fs;
+
+        let root = std::env::temp_dir().join(format!(
+            "rev-idle-import-subdir-test-{}",
+            std::process::id(),
+        ));
+        let lib_dir = root.join("lib");
+        fs::create_dir_all(&lib_dir).unwrap();
+        let helper_path = lib_dir.join("action.js");
+        let entry_path = root.join("entry.js");
+
+        fs::write(
+            &helper_path,
+            r#"export function clickHelper() { rev.click(9, 10, "middle"); }"#,
+        )
+        .unwrap();
+        fs::write(
+            &entry_path,
+            r#"
+                import { clickHelper } from './lib/action';
+                export default (() => clickHelper());
+            "#,
+        )
+        .unwrap();
+
+        let clicks = Rc::new(RefCell::new(Vec::new()));
+        let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+            clicks: clicks.clone(),
+        }));
+        let (command_tx, command_rx) = mpsc::channel(8);
+        let (_state_tx, state_rx) = watch::channel(State::default());
+        let local = tokio::task::LocalSet::new();
+        let observed_clicks = clicks.clone();
+
+        local
+            .run_until(async move {
+                let runner = tokio::task::spawn_local(run_with_mouse(
+                    command_rx,
+                    state_rx,
+                    entry_path.clone(),
+                    mouse,
+                    Duration::from_millis(5),
+                ));
+
+                tokio::time::timeout(Duration::from_secs(1), async {
+                    loop {
+                        if !observed_clicks.borrow().is_empty() {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+
+                command_tx.send(ScriptCommand::Exit).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), runner)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            })
+            .await;
+
+        assert_eq!(
+            clicks.borrow().as_slice(),
+            &[Click { x: 9, y: 10, button: Button::Middle }]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn passes_fresh_state_and_preserves_globals() {
         let source = r#"
-            (async () => {
+            export default (async () => {
                 if (!Object.isFrozen(rev)) {
                     throw new Error("rev and state must be frozen");
                 }
@@ -1463,7 +1697,7 @@ mod tests {
     async fn source_replacing_freeze_still_receives_frozen_host_objects() {
         let session = ScriptSession::new(
             r#"
-                (() => {
+                export default (() => {
                     Object.freeze = (value) => value;
                     return (() => {
                         if (!Object.isFrozen(rev)) {
@@ -1491,7 +1725,7 @@ mod tests {
     async fn invocation_replacing_freeze_does_not_affect_later_host_objects() {
         let session = ScriptSession::new(
             r#"
-                (() => {
+                export default (() => {
                     if (!Object.isFrozen(rev)) {
                         throw new Error("rev and state must be frozen");
                     }
@@ -1519,7 +1753,7 @@ mod tests {
     async fn invocation_error_does_not_reset_globals() {
         let session = ScriptSession::new(
             r#"
-                (() => {
+                export default (() => {
                     globalThis.count = (globalThis.count ?? 0) + 1;
                     if (globalThis.count === 1) {
                         throw new Error("first call");
@@ -1548,7 +1782,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn global_round_trips_values_and_lists_keys() {
         let session = ScriptSession::new(
-            r#"(() => {
+            r#"export default (() => {
                 rev.global.count = 1;
                 rev.global.nested = { a: [1, 2, 3] };
                 if (rev.global.count !== 1) throw new Error("number did not round-trip");
@@ -1579,7 +1813,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn global_survives_a_new_script_session_simulating_reload() {
-        let first = ScriptSession::new(r#"(() => { rev.global.reload_probe = 42; })"#)
+        let first = ScriptSession::new(r#"export default (() => { rev.global.reload_probe = 42; })"#)
             .await
             .unwrap();
         let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
@@ -1590,7 +1824,7 @@ mod tests {
         // A fresh ScriptSession is exactly what `load`/`reload` builds: a new
         // AsyncRuntime/AsyncContext, so a plain JS global would not survive it.
         let second = ScriptSession::new(
-            r#"(() => {
+            r#"export default (() => {
                 if (rev.global.reload_probe !== 42) {
                     throw new Error("global did not survive a new script session");
                 }
@@ -1605,7 +1839,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn missing_state_fields_are_null() {
         let session = ScriptSession::new(
-            r#"(() => {
+            r#"export default (() => {
                 if (typeof rev.state !== "function") {
                     throw new Error("state must be callable");
                 }
@@ -1623,7 +1857,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn console_log_and_error_accept_multiple_values() {
         let session = ScriptSession::new(
-            r#"(() => {
+            r#"export default (() => {
                 console.log("hello", { answer: 42 });
                 console.error("problem", 7);
             })"#,
@@ -1640,7 +1874,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn sleep_is_awaited_and_non_callable_source_is_rejected() {
         let session = ScriptSession::new(
-            "(async () => { await rev.sleep(20); })",
+            "export default (async () => { await rev.sleep(20); })",
         )
         .await
         .unwrap();
@@ -1668,10 +1902,10 @@ mod tests {
         let clicks = Rc::new(RefCell::new(Vec::new()));
 
         for source in [
-            r#"(() => rev.click(1, 2, "side"))"#,
-            r#"(() => rev.click(1.5, 2, "left"))"#,
-            r#"(() => rev.sleep(-1))"#,
-            r#"(() => rev.sleep(1.5))"#,
+            r#"export default (() => rev.click(1, 2, "side"))"#,
+            r#"export default (() => rev.click(1.5, 2, "left"))"#,
+            r#"export default (() => rev.sleep(-1))"#,
+            r#"export default (() => rev.sleep(1.5))"#,
         ] {
             let session = ScriptSession::new(source).await.unwrap();
             let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
@@ -1687,7 +1921,7 @@ mod tests {
     async fn clickn_repeats_clicks_and_allows_zero_clicks() {
         let session = ScriptSession::new(
             r#"
-                (async () => {
+                export default (async () => {
                     await rev.clickn(10, 20, 3, "right");
                     await rev.clickn(30, 40, 0);
                 })
@@ -1718,7 +1952,7 @@ mod tests {
     async fn scroll_posts_through_window_control_for_named_axes_and_short_aliases() {
         let session = ScriptSession::new(
             r#"
-                (async () => {
+                export default (async () => {
                     await rev.scroll(10, 20, 2, "vertical");
                     await rev.scroll(-30, 40, -1, "h");
                     await rev.scroll(50, -60, 3, "v");
@@ -1746,14 +1980,14 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn repeated_click_and_scroll_arguments_are_validated() {
         for source in [
-            r#"(() => rev.clickn(1, 2, -1))"#,
-            r#"(() => rev.clickn(1, 2, 1.5))"#,
-            r#"(() => rev.clickn(1, 2, Infinity))"#,
-            r#"(() => rev.scroll(1.5, 2, 1))"#,
-            r#"(() => rev.scroll(1, Infinity, 1))"#,
-            r#"(() => rev.scroll(1, 2, 1.5))"#,
-            r#"(() => rev.scroll(1, 2, 1, "diagonal"))"#,
-            r#"(() => rev.scroll(1, 2, 1, null))"#,
+            r#"export default (() => rev.clickn(1, 2, -1))"#,
+            r#"export default (() => rev.clickn(1, 2, 1.5))"#,
+            r#"export default (() => rev.clickn(1, 2, Infinity))"#,
+            r#"export default (() => rev.scroll(1.5, 2, 1))"#,
+            r#"export default (() => rev.scroll(1, Infinity, 1))"#,
+            r#"export default (() => rev.scroll(1, 2, 1.5))"#,
+            r#"export default (() => rev.scroll(1, 2, 1, "diagonal"))"#,
+            r#"export default (() => rev.scroll(1, 2, 1, null))"#,
         ] {
             let session = ScriptSession::new(source).await.unwrap();
             let (controls, events) = recording_controls();
@@ -1766,7 +2000,7 @@ mod tests {
     async fn click_button_defaults_accepts_valid_and_rejects_invalid_values() {
         let session = ScriptSession::new(
             r#"
-                (() => {
+                export default (() => {
                     for (const button of [null, "side", true, 1, {}, []]) {
                         let threw = false;
                         try {
@@ -1850,7 +2084,7 @@ mod tests {
         fs::write(
             &first,
             r#"
-                (() => {
+                export default (() => {
                     globalThis.count = (globalThis.count ?? 0) + 1;
                     rev.click(globalThis.count, 0);
                 })
@@ -1860,7 +2094,7 @@ mod tests {
         fs::write(
             &second,
             r#"
-                (() => {
+                export default (() => {
                     globalThis.count = (globalThis.count ?? 0) + 1;
                     rev.click(globalThis.count, 0, "right");
                 })
@@ -1980,7 +2214,7 @@ mod tests {
         ));
         fs::write(
             &path,
-            r#"(async () => { await rev.sleep(30); rev.click(1, 1); })"#,
+            r#"export default (async () => { await rev.sleep(30); rev.click(1, 1); })"#,
         )
         .unwrap();
 
@@ -2071,8 +2305,8 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let first = root.join("first.js");
         let second = root.join("second.js");
-        fs::write(&first, r#"(() => rev.click(1, 1))"#).unwrap();
-        fs::write(&second, r#"(() => rev.click(2, 2, "right"))"#).unwrap();
+        fs::write(&first, r#"export default (() => rev.click(1, 1))"#).unwrap();
+        fs::write(&second, r#"export default (() => rev.click(2, 2, "right"))"#).unwrap();
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         struct LifecycleMouse(mpsc::UnboundedSender<()>);
@@ -2321,7 +2555,7 @@ mod tests {
             "rev-idle-stop-test-{}.js",
             std::process::id(),
         ));
-        fs::write(&path, r#"(() => { rev.stop(); rev.click(1, 1); })"#).unwrap();
+        fs::write(&path, r#"export default (() => { rev.stop(); rev.click(1, 1); })"#).unwrap();
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         struct StopMouse(mpsc::UnboundedSender<()>);
@@ -2385,7 +2619,7 @@ mod tests {
         ));
         fs::write(
             &sleeping_path,
-            r#"(async () => {
+            r#"export default (async () => {
                 rev.click(1, 1);
                 await rev.sleep(5000);
                 rev.click(2, 2);
@@ -2396,7 +2630,7 @@ mod tests {
             "rev-idle-stop-sleep-followup-{}.js",
             std::process::id(),
         ));
-        fs::write(&followup_path, r#"(() => rev.click(3, 3))"#).unwrap();
+        fs::write(&followup_path, r#"export default (() => rev.click(3, 3))"#).unwrap();
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         struct ClickMouse(mpsc::UnboundedSender<(i32, i32)>);
@@ -2472,7 +2706,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn write_clipboard_forwards_text_to_host() {
         let session = ScriptSession::new(
-            r#"(() => rev.write_clipboard("hello 世界"))"#,
+            r#"export default (() => rev.write_clipboard("hello 世界"))"#,
         )
         .await
         .unwrap();
@@ -2489,7 +2723,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn read_clipboard_returns_host_text() {
         let session = ScriptSession::new(
-            r#"(async () => {
+            r#"export default (async () => {
                 rev.write_clipboard("round trip");
                 const text = await rev.read_clipboard();
                 if (text !== "round trip") throw new Error("unexpected clipboard text: " + text);
@@ -2514,7 +2748,7 @@ mod tests {
         fs::write(
             &path,
             r#"
-                (() => {
+                export default (() => {
                     rev.click(1, 0, "left");
                     throw new Error("stop after this invocation");
                 })
@@ -2626,7 +2860,7 @@ mod tests {
 
                 fs::write(
                     &missing,
-                    r#"(() => rev.click(1, 1, "left"))"#,
+                    r#"export default (() => rev.click(1, 1, "left"))"#,
                 )
                 .unwrap();
                 command_tx.send(ScriptCommand::Reload).await.unwrap();
@@ -2660,5 +2894,44 @@ mod tests {
         capture_state.set_enabled(true);
         disable_capture_if_running(&capture_state, true, false);
         assert!(!capture_state.is_enabled());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_time_failures_report_a_detailed_message_not_a_bare_exception() {
+        let missing_import = ScriptSession::new(
+            r#"
+                import { x } from './missing.js';
+                export default (() => {});
+            "#,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(
+            missing_import.contains("missing.js"),
+            "missing import error lacked detail: {missing_import}"
+        );
+
+        let throwing_top_level = ScriptSession::new(
+            r#"
+                throw new Error("boom at module top level");
+            "#,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(
+            throwing_top_level.contains("boom at module top level"),
+            "top-level throw error lacked detail: {throwing_top_level}"
+        );
+
+        let syntax_error = ScriptSession::new(r#"export default (() => { const }"#)
+            .await
+            .err()
+            .unwrap();
+        assert_ne!(
+            syntax_error, "Exception generated by QuickJS",
+            "syntax error should include the parser's own message"
+        );
     }
 }

@@ -355,7 +355,7 @@ const ZODIAC_POS = [
 
 let initialized = false;
 
-(async () => {
+export default (async () => {
   try {
     if (!initialized) {
       rev.resize(1270, 600);
