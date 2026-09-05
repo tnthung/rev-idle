@@ -167,7 +167,9 @@ async fn main() -> io::Result<()> {
                                 capture_state.set_enabled(false);
                                 let _ = command_tx.send(console::ScriptCommand::Stop).await;
                             }
-                            CtrlCAction::StopCapture => capture_state.set_enabled(false),
+                            CtrlCAction::StopCapture => {
+                                let _ = command_tx.send(console::ScriptCommand::Capture).await;
+                            }
                             CtrlCAction::Ignore => {}
                         }
                     }
