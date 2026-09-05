@@ -100,12 +100,6 @@ fn host_error(message: String) -> Error {
     Error::new_from_js_message("host control", "JavaScript", message)
 }
 
-fn ensure_actions_running(paused: &ActionGate) -> Result<(), Error> {
-    if paused.is_paused() {
-        Err(Error::new_from_js_message("actions", "JavaScript", "actions are paused"))
-    } else { Ok(()) }
-}
-
 fn validate_coordinate(value: f64) -> Result<i32, Error> {
     if !value.is_finite()
         || value.fract() != 0.0
@@ -152,7 +146,13 @@ fn click_with_controls(
     y: i32,
     button: Button,
 ) -> Result<(), Error> {
-    ensure_actions_running(&controls.actions_paused)?;
+    // A paused action is silently skipped rather than rejected: rejecting
+    // would surface as a thrown/rejected JS exception on the script's next
+    // host call, but pausing (F8) is a routine, frequent user action, not a
+    // script error worth an exception a script would need to catch.
+    if controls.actions_paused.is_paused() {
+        return Ok(());
+    }
     controls
         .mouse
         .borrow_mut()
@@ -271,6 +271,34 @@ fn format_console_message(args: Rest<Value>) -> rquickjs::Result<String> {
                     .as_string()
                     .expect("string value must have a string representation")
                     .to_string()
+            } else if value.is_error() {
+                // `JSON.stringify` on an Error is always "{}" (message/stack
+                // aren't enumerable own properties), so format it like the
+                // console normally would instead of falling through below.
+                // Unlike V8, QuickJS's `error.stack` holds only the trace
+                // (no leading "Name: message" line), so build that header
+                // from `name`/`message` ourselves and append the trace.
+                match value.as_exception() {
+                    Some(exception) => {
+                        let name = exception
+                            .as_object()
+                            .get::<_, Coerced<std::string::String>>("name")
+                            .map(|coerced| coerced.0)
+                            .unwrap_or_else(|_| "Error".to_string());
+                        let header = match exception.message() {
+                            Some(message) if !message.is_empty() => format!("{name}: {message}"),
+                            _ => name,
+                        };
+                        Ok(match exception.stack() {
+                            Some(stack) if !stack.is_empty() => format!("{header}\n{stack}"),
+                            _ => header,
+                        })
+                    }
+                    None => {
+                        let ctx = value.ctx().clone();
+                        Ok(Coerced::<std::string::String>::from_js(&ctx, value)?.0)
+                    }
+                }
             } else if value.is_object() {
                 let ctx = value.ctx().clone();
                 match ctx.json_stringify(value.clone())? {
@@ -290,6 +318,8 @@ struct ScriptSession {
     // Rust drops fields in declaration order. Persistent roots must be gone
     // before their context and runtime.
     script: Persistent<Function<'static>>,
+    before_pause: Option<Persistent<Function<'static>>>,
+    after_resume: Option<Persistent<Function<'static>>>,
     parse: Persistent<Function<'static>>,
     freeze: Persistent<Function<'static>>,
     context: AsyncContext,
@@ -323,7 +353,7 @@ impl ScriptSession {
         let source = source.to_owned();
         let name = name.to_owned();
 
-        let (script, parse, freeze) = context
+        let (script, before_pause, after_resume, parse, freeze) = context
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<_> = async {
                     let console = Object::new(ctx.clone())?;
@@ -356,9 +386,15 @@ impl ScriptSession {
                             "script must `export default` the function to run",
                         )
                     })?;
+                    // Both hooks are optional: a script that doesn't export
+                    // them just runs without any pause/resume handler.
+                    let before_pause: Option<Function> = namespace.get("beforePause").ok();
+                    let after_resume: Option<Function> = namespace.get("afterResume").ok();
 
                     Ok((
                         Persistent::save(&ctx, script),
+                        before_pause.map(|hook| Persistent::save(&ctx, hook)),
+                        after_resume.map(|hook| Persistent::save(&ctx, hook)),
                         Persistent::save(&ctx, parse),
                         Persistent::save(&ctx, freeze),
                     ))
@@ -371,12 +407,44 @@ impl ScriptSession {
 
         Ok(Self {
             script,
+            before_pause,
+            after_resume,
             parse,
             freeze,
             context,
             _runtime: runtime,
             client,
         })
+    }
+
+    /// Calls an optional lifecycle hook (`beforePause`/`afterResume`) if the
+    /// script exported one, awaiting it if it returns a promise. A no-op
+    /// (`Ok(())`) when the script didn't export that hook.
+    async fn run_hook(&self, hook: &Option<Persistent<Function<'static>>>) -> Result<(), String> {
+        let Some(hook) = hook else { return Ok(()) };
+        let hook = hook.clone();
+
+        self.context
+            .async_with(async move |ctx| {
+                let result: rquickjs::Result<()> = async {
+                    let hook: Function = hook.restore(&ctx)?;
+                    let result: MaybePromise = hook.call(())?;
+                    let _: Value = result.into_future().await?;
+                    Ok(())
+                }
+                .await;
+
+                result.map_err(|error| CaughtError::from_error(&ctx, error).to_string())
+            })
+            .await
+    }
+
+    async fn run_before_pause(&self) -> Result<(), String> {
+        self.run_hook(&self.before_pause).await
+    }
+
+    async fn run_after_resume(&self) -> Result<(), String> {
+        self.run_hook(&self.after_resume).await
     }
 
     async fn invoke<S, C: Into<HostControls>>(
@@ -530,7 +598,9 @@ impl ScriptSession {
                                 let y = validate_coordinate(y)?;
                                 let length = validate_scroll_length(length)?;
                                 let axis = parse_scroll_axis(axis)?;
-                                ensure_actions_running(&scroll_paused)?;
+                                if scroll_paused.is_paused() {
+                                    return Ok(());
+                                }
                                 scroll_window.scroll(x, y, length, axis).map_err(host_error)
                             },
                         )?,
@@ -547,7 +617,9 @@ impl ScriptSession {
                                 let y1 = validate_coordinate(y1)?;
                                 let x2 = validate_coordinate(x2)?;
                                 let y2 = validate_coordinate(y2)?;
-                                ensure_actions_running(&drag_paused)?;
+                                if drag_paused.is_paused() {
+                                    return Ok(());
+                                }
                                 drag_window.drag(x1, y1, x2, y2).map_err(host_error)
                             },
                         )?,
@@ -558,7 +630,9 @@ impl ScriptSession {
                     rev.set(
                         "write_clipboard",
                         Function::new(ctx.clone(), move |text: String| {
-                            ensure_actions_running(&clipboard_paused)?;
+                            if clipboard_paused.is_paused() {
+                                return Ok(());
+                            }
                             clipboard_window.write_clipboard(&text).map_err(host_error)
                         })?,
                     )?;
@@ -568,7 +642,9 @@ impl ScriptSession {
                     rev.set(
                         "read_clipboard",
                         Function::new(ctx.clone(), move || {
-                            ensure_actions_running(&read_clipboard_paused)?;
+                            if read_clipboard_paused.is_paused() {
+                                return Ok(std::string::String::new());
+                            }
                             read_clipboard_window.read_clipboard().map_err(host_error)
                         })?,
                     )?;
@@ -576,10 +652,12 @@ impl ScriptSession {
                     let resize_window = controls.window.clone();
                     let resize_paused = controls.actions_paused.clone();
                     rev.set("resize", Function::new(ctx.clone(), move |width: f64, height: f64| {
-                        ensure_actions_running(&resize_paused)?;
                         if !width.is_finite() || width.fract() != 0.0 || width <= 0.0 || width > i32::MAX as f64
                             || !height.is_finite() || height.fract() != 0.0 || height <= 0.0 || height > i32::MAX as f64 {
                             return Err(Error::new_from_js_message("number", "positive finite 32-bit integer dimensions", "invalid window dimensions"));
+                        }
+                        if resize_paused.is_paused() {
+                            return Ok(());
                         }
                         resize_window.resize_client(width as i32, height as i32).map_err(host_error)
                     })?)?;
@@ -744,9 +822,10 @@ async fn run_with_controls_and_lifecycle(
                     apply_hotkey_update_and_report(
                         update,
                         &controls.actions_paused,
-                        session.is_some(),
+                        session.as_ref(),
                         &mut paused,
-                    );
+                    )
+                    .await;
                     disable_capture_if_running(&capture_state, session.is_some(), paused);
                     continue;
                 }
@@ -776,9 +855,10 @@ async fn run_with_controls_and_lifecycle(
                             apply_hotkey_update_and_report(
                                 update,
                                 &controls.actions_paused,
-                                session.is_some(),
+                                session.as_ref(),
                                 &mut paused,
-                            );
+                            )
+                            .await;
                             disable_capture_if_running(&capture_state, session.is_some(), paused);
                         }
                         Err(_) => hotkey_channel_open = false,
@@ -849,6 +929,11 @@ async fn run_with_controls_and_lifecycle(
                         controls.actions_paused.set_paused(true);
                         println!("script is already paused");
                     } else {
+                        if let Some(active) = session.as_ref()
+                            && let Err(error) = active.run_before_pause().await
+                        {
+                            eprintln!("beforePause hook failed: {error}");
+                        }
                         controls.actions_paused.set_paused(true);
                         paused = true;
                         println!("script paused");
@@ -863,6 +948,11 @@ async fn run_with_controls_and_lifecycle(
                         controls.actions_paused.set_paused(false);
                         paused = false;
                         println!("script resumed");
+                        if let Some(active) = session.as_ref()
+                            && let Err(error) = active.run_after_resume().await
+                        {
+                            eprintln!("afterResume hook failed: {error}");
+                        }
                     } else {
                         controls.actions_paused.set_paused(false);
                         println!("script is already running");
@@ -907,9 +997,10 @@ async fn run_with_controls_and_lifecycle(
                         apply_hotkey_update_and_report(
                             update,
                             &controls.actions_paused,
-                            session.is_some(),
+                            session.as_ref(),
                             &mut paused,
-                        );
+                        )
+                        .await;
                         disable_capture_if_running(&capture_state, session.is_some(), paused);
                     }
                 }
@@ -929,10 +1020,14 @@ async fn run_with_controls_and_lifecycle(
                     match result {
                         Ok(stop_requested) => stop_requested,
                         Err(_) if controls.actions_paused.is_paused() => {
-                            // F8 paused actions mid-invocation, which surfaces to the
-                            // script as a rejected rev.* call. That's an expected
-                            // interruption, not a script failure, so keep the session
-                            // alive instead of stopping it.
+                            // A host action (rev.click/scroll/drag/...) can still
+                            // observe the gate flipping to paused in the narrow
+                            // window between the hotkey thread setting it and this
+                            // select noticing (see the hotkey_pauses branch below);
+                            // those calls no-op rather than throw, but treat any
+                            // stray rejection here the same way: an expected
+                            // interruption, not a script failure, so the session
+                            // stays alive instead of being stopped.
                             false
                         }
                         Err(error) => {
@@ -940,6 +1035,31 @@ async fn run_with_controls_and_lifecycle(
                             true
                         }
                     }
+                }
+                // F8 flips the shared ActionGate immediately, from a separate
+                // thread, before this update is even published here — so by
+                // the time we observe it, the pause has already taken effect.
+                // Cancel the in-flight invocation right away (same trick as
+                // Stop/Exit below) instead of letting it run until its next
+                // rev.* call or its own completion. `changed()` marks the
+                // update as seen, so (unlike the plain command case) this
+                // arm must finish processing it itself rather than leaving
+                // it for the top of the loop to pick up.
+                changed = hotkey_pauses.changed(), if hotkey_channel_open => {
+                    if changed.is_err() {
+                        hotkey_channel_open = false;
+                    } else {
+                        let update = *hotkey_pauses.borrow_and_update();
+                        apply_hotkey_update_and_report(
+                            update,
+                            &controls.actions_paused,
+                            Some(active),
+                            &mut paused,
+                        )
+                        .await;
+                        disable_capture_if_running(&capture_state, true, paused);
+                    }
+                    false
                 }
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
@@ -1032,23 +1152,28 @@ fn apply_hotkey_update(
     }
 }
 
-fn apply_hotkey_update_and_report(
+/// Applies a hotkey-driven pause/resume update and prints its result. The
+/// `ActionGate` itself was already flipped by the hotkey handler before this
+/// update was published, so unlike the `Pause`/`Resume` commands there is no
+/// window to run `beforePause` before actions actually stop; the hooks still
+/// run here so scripts see hotkey-triggered pauses the same as command ones.
+async fn apply_hotkey_update_and_report(
     update: PauseUpdate,
     gate: &ActionGate,
-    session_running: bool,
+    session: Option<&ScriptSession>,
     lifecycle_paused: &mut bool,
 ) {
     let was_paused = *lifecycle_paused;
     if !apply_hotkey_update(
         update,
         gate,
-        session_running,
+        session.is_some(),
         lifecycle_paused,
     ) {
         return;
     }
 
-    if !session_running {
+    if session.is_none() {
         println!("no script is running");
     } else if *lifecycle_paused == was_paused {
         if *lifecycle_paused {
@@ -1057,9 +1182,19 @@ fn apply_hotkey_update_and_report(
             println!("script is already running");
         }
     } else if *lifecycle_paused {
+        if let Some(active) = session
+            && let Err(error) = active.run_before_pause().await
+        {
+            eprintln!("beforePause hook failed: {error}");
+        }
         println!("script paused");
     } else {
         println!("script resumed");
+        if let Some(active) = session
+            && let Err(error) = active.run_after_resume().await
+        {
+            eprintln!("afterResume hook failed: {error}");
+        }
     }
 }
 
@@ -1872,6 +2007,24 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn console_message_formats_errors_by_message_instead_of_json_stringify() {
+        let runtime = AsyncRuntime::new().unwrap();
+        let context = AsyncContext::full(&runtime).await.unwrap();
+
+        let message = context
+            .async_with(async move |ctx| {
+                let error: Value = ctx.eval("new Error('boom')").unwrap();
+                format_console_message(Rest(vec![error])).unwrap()
+            })
+            .await;
+
+        // `JSON.stringify(new Error(...))` is "{}" because Error properties
+        // aren't enumerable, so a naive object formatter loses the message.
+        assert_ne!(message, "{}", "error should not be formatted as an empty object");
+        assert!(message.contains("boom"), "expected the error message in: {message}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn sleep_is_awaited_and_non_callable_source_is_rejected() {
         let session = ScriptSession::new(
             "export default (async () => { await rev.sleep(20); })",
@@ -2280,6 +2433,236 @@ mod tests {
                     .await
                     .is_ok());
 
+                command_tx.send(ScriptCommand::Exit).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), runner)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            })
+            .await;
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn pause_and_resume_hooks_run_around_the_actual_transition() {
+        use crate::console::ScriptCommand;
+        use std::fs;
+        use tokio::sync::{mpsc, watch};
+
+        let path = std::env::temp_dir().join(format!(
+            "rev-idle-hooks-test-{}.js",
+            std::process::id(),
+        ));
+        fs::write(
+            &path,
+            r#"
+                export default (async () => { rev.click(0, 0); await rev.sleep(5); });
+                export function beforePause() { rev.click(9, 9); }
+                export function afterResume() { rev.click(8, 8); }
+            "#,
+        )
+        .unwrap();
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        struct HookMouse(mpsc::UnboundedSender<(i32, i32)>);
+        impl MouseInput for HookMouse {
+            fn click_at(
+                &mut self,
+                x: i32,
+                y: i32,
+                _button: Button,
+            ) -> Result<(), String> {
+                self.0.send((x, y)).map_err(|error| error.to_string())
+            }
+        }
+
+        let mouse: SharedMouse = Rc::new(RefCell::new(HookMouse(event_tx)));
+        let (command_tx, command_rx) = mpsc::channel(8);
+        let (_state_tx, state_rx) = watch::channel(State::default());
+        let local = tokio::task::LocalSet::new();
+        let runner_path = path.clone();
+
+        local
+            .run_until(async move {
+                let runner = tokio::task::spawn_local(run_with_mouse(
+                    command_rx,
+                    state_rx,
+                    runner_path,
+                    mouse,
+                    Duration::from_millis(2),
+                ));
+
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    (0, 0),
+                    "script should click before its first sleep"
+                );
+
+                command_tx.send(ScriptCommand::Pause).await.unwrap();
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    (9, 9),
+                    "beforePause hook should run when the script actually pauses"
+                );
+
+                // Drain any trailing click from an invocation already in
+                // flight, then confirm the script does not click again while
+                // paused (i.e. the pause itself took effect after the hook).
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                while event_rx.try_recv().is_ok() {}
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(30), event_rx.recv())
+                        .await
+                        .is_err(),
+                    "script must not click again while paused"
+                );
+
+                command_tx.send(ScriptCommand::Resume).await.unwrap();
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    (8, 8),
+                    "afterResume hook should run when the script actually resumes"
+                );
+
+                command_tx.send(ScriptCommand::Exit).await.unwrap();
+                tokio::time::timeout(Duration::from_secs(1), runner)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+            })
+            .await;
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hotkey_pause_cancels_the_in_flight_invocation_immediately() {
+        use crate::console::ScriptCommand;
+        use crate::global_state::GlobalState;
+        use std::fs;
+        use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+        use tokio::sync::{mpsc, watch};
+
+        // F8 flips the shared `ActionGate` directly from a separate OS
+        // thread (see hotkey.rs), independently of the script runner's own
+        // loop, so this simulates a hotkey press exactly the way that
+        // worker does: mutate the gate, then publish the resulting update.
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let hook_key = format!(
+            "hotkey-cancel-test-marker-{}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed),
+        );
+        let path = std::env::temp_dir().join(format!(
+            "rev-idle-hotkey-cancel-test-{}.js",
+            std::process::id(),
+        ));
+        // beforePause signals through rev.global rather than a click: the
+        // ActionGate is already closed by the time this hook runs (that's
+        // the whole point of F8 taking effect immediately), so its own
+        // rev.click would be silently skipped same as the cancelled
+        // invocation's — rev.global isn't gated, so it still proves the
+        // hook ran, and ran promptly rather than after the cancelled sleep.
+        fs::write(
+            &path,
+            format!(
+                r#"
+                export default (async () => {{ rev.click(1, 1); await rev.sleep(2000); rev.click(2, 2); }});
+                export function beforePause() {{ rev.global['{hook_key}'] = true; }}
+                "#
+            ),
+        )
+        .unwrap();
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        struct HotkeyMouse(mpsc::UnboundedSender<(i32, i32)>);
+        impl MouseInput for HotkeyMouse {
+            fn click_at(
+                &mut self,
+                x: i32,
+                y: i32,
+                _button: Button,
+            ) -> Result<(), String> {
+                self.0.send((x, y)).map_err(|error| error.to_string())
+            }
+        }
+
+        let gate = ActionGate::default();
+        let controls = HostControls {
+            mouse: Rc::new(RefCell::new(HotkeyMouse(event_tx))),
+            window: Rc::new(FakeWindow),
+            actions_paused: gate.clone(),
+        };
+        let (command_tx, command_rx) = mpsc::channel(8);
+        let (_state_tx, state_rx) = watch::channel(State::default());
+        let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+        let runner_path = path.clone();
+        let local = tokio::task::LocalSet::new();
+
+        local
+            .run_until(async move {
+                let runner = tokio::task::spawn_local(run_with_controls(
+                    command_rx,
+                    state_rx,
+                    pause_rx,
+                    Some(runner_path),
+                    controls,
+                    Duration::from_millis(2),
+                ));
+
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                        .await
+                        .unwrap()
+                        .unwrap(),
+                    (1, 1),
+                    "script should click before its long sleep"
+                );
+
+                // Simulate F8 partway through the 2s sleep: hotkey.rs itself
+                // flips the gate via `toggle()`, private to that module, but
+                // `set_paused` produces the same update from an unpaused gate.
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                pause_tx.send_replace(gate.set_paused(true));
+                assert!(gate.is_paused());
+
+                // If the invocation merely ran to the end of its sleep and
+                // only then got interrupted, this marker wouldn't appear
+                // for ~2s. Seeing it almost immediately proves the sleep
+                // itself was cancelled, not just skipped over.
+                let saw_hook_marker = tokio::time::timeout(Duration::from_millis(300), async {
+                    while GlobalState.get(&hook_key).is_none() {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await;
+                assert!(
+                    saw_hook_marker.is_ok(),
+                    "beforePause should run right after the hotkey pause, not after the cancelled sleep"
+                );
+
+                // The cancelled invocation's remaining click must never
+                // arrive, even after its original sleep would have elapsed.
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(2200), event_rx.recv())
+                        .await
+                        .is_err(),
+                    "the cancelled invocation's remaining click must not fire"
+                );
+
+                GlobalState.delete(&hook_key);
                 command_tx.send(ScriptCommand::Exit).await.unwrap();
                 tokio::time::timeout(Duration::from_secs(1), runner)
                     .await
