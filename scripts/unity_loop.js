@@ -488,7 +488,7 @@ let initialized = false;
     }
 
     if (DTP > 40) {
-      const start = Date.now();
+      let start = Date.now();
       while ((Date.now() - start) < 60000) {
         const currentDT = await DT.current();
         const unspent = await rev.state("dtpFree");
@@ -508,6 +508,7 @@ let initialized = false;
         await rev.sleep(1000);
 
         if (unspent !== 0) {
+          start = Date.now();
           await ClickSteps.toggleDilation.execute();
           await rev.sleep(1000);
           await ClickSteps.toggleDilation.execute();
