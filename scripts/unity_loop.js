@@ -312,20 +312,22 @@ class DT {
   static DTP38 = DT.DTP36.clone().bot(1, 1, 5, 2);
   static DTP39 = new DT().ctr(5).top(1, 1, 1, 5).mid(5, 1, 5, 5).bot(1, 1, 5, 3);
   static SN40  = new DT().ctr(1).top(1, 1, 5, 5).mid(1, 1, 5, 5).bot(4, 5, 1, 5); // SN 154
+  static AP40  = new DT().ctr(1).top(1, 1, 1, 5).mid(1, 4, 5, 5).bot(5, 5, 1, 5); // AP 370k
   static DTP40 = new DT().ctr(5).top(1, 2, 1, 5).mid(5, 1, 5, 5).bot(1, 1, 3, 5);
   static DTP41 = new DT().ctr(1).top(1, 1, 1, 5).mid(1, 5, 5, 5).bot(5, 5, 1, 5);
 }
 
 
 const DT_STAGES = [
-  { dtp: 5,  state: "supernovaLv", target: 80,  loadout: DT.SN5 },
-  { dtp: 8,  state: "supernovaLv", target: 105, loadout: DT.SN8 },
-  { dtp: 13, state: "eters",       target: 1e8, loadout: DT.ETN13 },
-  { dtp: 16, state: "supernovaLv", target: 120, loadout: DT.SN16 },
-  { dtp: 18, state: "supernovaLv", target: 128, loadout: DT.SN18 },
-  { dtp: 22, state: "supernovaLv", target: 149, loadout: DT.SN22 },
-  { dtp: 35, state: "supernovaLv", target: 152, loadout: DT.SN35 },
-  { dtp: 40, state: "supernovaLv", target: 154, loadout: DT.SN40 },
+  { dtp: 5,  state: "supernovaLv", target: 80,    loadout: DT.SN5 },
+  { dtp: 8,  state: "supernovaLv", target: 105,   loadout: DT.SN8 },
+  { dtp: 13, state: "eters",       target: 1e8,   loadout: DT.ETN13 },
+  { dtp: 16, state: "supernovaLv", target: 120,   loadout: DT.SN16 },
+  { dtp: 18, state: "supernovaLv", target: 128,   loadout: DT.SN18 },
+  { dtp: 22, state: "supernovaLv", target: 149,   loadout: DT.SN22 },
+  { dtp: 35, state: "supernovaLv", target: 152,   loadout: DT.SN35 },
+  { dtp: 40, state: "supernovaLv", target: 154,   loadout: DT.SN40 },
+  { dtp: 40, state: "APbought",    target: 3.7e5, loadout: DT.AP40 },
 ];
 
 
@@ -362,8 +364,8 @@ export default (async () => {
       initialized = true;
     }
 
-    if (rev.global.runStart !== undefined && Date.now() - rev.global.runStart > 5*60*1000) {
-      console.log(`Run exceeded 5 minutes, resetting`);
+    if (rev.global.runStart !== undefined && Date.now() - rev.global.runStart > 6*60*1000) {
+      console.log(`Run exceeded 6 minutes, resetting`);
       await ClickSteps.ResetUnity.execute();
     }
 
@@ -438,7 +440,7 @@ export default (async () => {
         // enter dilation if not already in it
         if (!await rev.state("gameData.eternity.inDilation")) {
           await ClickSteps.toggleDilation.execute();
-          await rev.sleep(EC10.completeDiff === 0 ? 5000 : 500);
+          await rev.sleep(EC10.completeDiff === 0 ? 3000 : 500);
         }
 
         // exit dilation
