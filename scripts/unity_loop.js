@@ -540,3 +540,15 @@ export default (async () => {
     console.error(error);
   }
 })
+
+
+let pauseStart;
+
+export function beforePause() {
+  pauseStart = Date.now();
+}
+
+export function afterResume() {
+  const duration = Date.now() - pauseStart;
+  rev.global.runStart += duration;
+}
