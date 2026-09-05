@@ -364,7 +364,7 @@ let initialized = false;
     }
 
     const unityInventory = await rev.state("gameData.unity.inventory");
-    if (Object.values(unityInventory).length >= 4) {
+    if (Object.values(unityInventory).length >= 20) {
       await ClickSteps.ZodiacShop.execute();
       for (const pos of Object.keys(unityInventory)) {
         const [x, y] = ZODIAC_POS[Number(pos)];
