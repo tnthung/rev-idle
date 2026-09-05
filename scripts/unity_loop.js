@@ -511,13 +511,14 @@ export default (async () => {
           }
         }
 
-        await rev.sleep(1000);
-
         if (unspent !== 0) {
           start = Date.now();
           await ClickSteps.toggleDilation.execute();
-          await rev.sleep(1000);
+          await rev.sleep(5000);
           await ClickSteps.toggleDilation.execute();
+        } else {
+          await rev.sleep(10000);
+          await ClickSteps.ClaimEP.execute();
         }
 
         if (Number(await rev.state("EP")) === 0)
