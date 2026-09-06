@@ -375,14 +375,16 @@ export default (async () => {
     }
 
     const unityInventory = await rev.state("gameData.unity.inventory");
-    if (Object.values(unityInventory).length >= 20) {
+    for (const [pos, zodiac] of Object.entries(unityInventory)) {
+      if (zodiac.rarity === "Legendary") continue;
+      if (zodiac.rarity === "Mythic") continue;
+      if (zodiac.rarity === "Godly") continue;
+      if (zodiac.rarity === "Divine") continue;
+      const [x, y] = ZODIAC_POS[Number(pos)];
       await ClickSteps.ZodiacShop.execute();
-      for (const pos of Object.keys(unityInventory)) {
-        const [x, y] = ZODIAC_POS[Number(pos)];
-        await rev.drag(x, y, 613, 525);
-        await rev.sleep(500);
-        rev.click(686, 525);
-      }
+      await rev.drag(x, y, 613, 525);
+      await rev.sleep(500);
+      rev.click(686, 525);
     }
 
     // bootstrap the unity
