@@ -411,7 +411,7 @@ export default (async () => {
         while (await rev.state(`gameData.eternity.challenges.${cid}.completeDiff`) < 5) {
           await ClickSteps[`EC${cid+1}`].execute();
           await ClickSteps.StartEC.execute();
-          await rev.sleep(200);
+          await rev.sleep(100);
 
           if (await rev.state(`gameData.eternity.challenges.${cid}.inChallenge`)) {
             await ClickSteps.StartEC.execute();
@@ -431,31 +431,23 @@ export default (async () => {
     }
 
     // eternal challenge 10
-    const EC10 = await rev.state(`gameData.eternity.challenges.9`);
-    if (EC10.completeDiff !== 5) {
-      for (let i=0; i< (await rev.state("dilationMaxScoreCurrent") == 0 ? 3 : 1); i++) {
-        // enter dilation if not already in it
-        if (!await rev.state("gameData.eternity.inDilation")) {
-          await ClickSteps.toggleDilation.execute();
-          await rev.sleep(EC10.completeDiff === 0 ? 3000 : 500);
-        }
+    if (await rev.state("gameData.eternity.challenges.9.completeDiff") < 5) {
+      await ClickSteps.toggleDilation.execute();
+      await rev.sleep(750);
+      await ClickSteps.toggleDilation.execute();
 
-        // exit dilation
-        await ClickSteps.toggleDilation.execute();
-      }
-
-      // start EC10 twice
-      for (let i=0; i<2; i++) {
+      while (await rev.state("gameData.eternity.challenges.9.completeDiff") < 5) {
         await ClickSteps.EC10.execute();
         await ClickSteps.StartEC.execute();
+        await rev.sleep(100);
 
-        if (await wait_for(async () => !await rev.state(`gameData.eternity.challenges.9.inChallenge`), 50, 3000))
-          await ClickSteps.Dismiss.execute();
-        else
+        if (await rev.state(`gameData.eternity.challenges.9.inChallenge`)) {
           await ClickSteps.StartEC.execute();
-      }
+          return;
+        }
 
-      return;
+        await ClickSteps.Dismiss.execute();
+      }
     }
 
     // bootstrap the dilation
