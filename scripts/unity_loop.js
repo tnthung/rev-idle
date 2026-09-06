@@ -500,14 +500,14 @@ export default (async () => {
         const unspent = await rev.state("dtpFree");
 
         for (let i = 0; i < unspent; i++) {
-          if (currentDT.b3 < 5) {
+          if (currentDT.t3 < 5) {
+            await DT.IncT3.execute();
+          } else if (currentDT.b3 < 5) {
             await DT.IncB3.execute();
           } else if (currentDT.t2 < 5) {
             await DT.IncT2.execute();
           } else if (currentDT.b1 < 5) {
             await DT.IncB1.execute();
-          } else if (currentDT.t3 < 5) {
-            await DT.IncT3.execute();
           }
         }
 
