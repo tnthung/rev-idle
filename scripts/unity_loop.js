@@ -404,33 +404,30 @@ export default (async () => {
       return;
     }
 
-    // eternal challenge 1-9
-    for (let cid=0; cid<9; cid++) {
-      const challenge = await rev.state(`gameData.eternity.challenges.${cid}`);
-      if (challenge.completeDiff === 5) continue;
+    { // eternal challenge 1-9
+      let allECComplete = true;
 
-      for (let offset = 0; offset < 3; offset++) {
-        const offsetCid = cid + offset;
-        if (offsetCid >= 9) break;
-
-        for (let attempt = 0; attempt < 2; attempt++) {
-          await rev.sleep(100);
-          if (await rev.state(`gameData.eternity.challenges.${offsetCid}.completeDiff`) === 5)
-            break;
-
-          await ClickSteps[`EC${offsetCid+1}`].execute();
+      EC: for (let cid=0; cid<9; cid++) {
+        while (await rev.state(`gameData.eternity.challenges.${cid}.completeDiff`) < 5) {
+          await ClickSteps[`EC${cid+1}`].execute();
           await ClickSteps.StartEC.execute();
+          await rev.sleep(200);
 
-          if (await wait_for(async () => !await rev.state(`gameData.eternity.challenges.${offsetCid}.inChallenge`), 100, 3000))
-            await ClickSteps.Dismiss.execute();
-          else
+          if (await rev.state(`gameData.eternity.challenges.${cid}.inChallenge`)) {
             await ClickSteps.StartEC.execute();
+            allECComplete = false;
+            continue EC;
+          }
+
+          await ClickSteps.Dismiss.execute();
         }
       }
 
-      await rev.sleep(2500);
-      await ClickSteps.ClaimEP.execute();
-      return;
+      if (!allECComplete) {
+        await rev.sleep(2500);
+        await ClickSteps.ClaimEP.execute();
+        return;
+      }
     }
 
     // eternal challenge 10
