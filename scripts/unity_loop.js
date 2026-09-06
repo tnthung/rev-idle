@@ -362,6 +362,11 @@ export default (async () => {
     if (!initialized) {
       rev.resize(1270, 600);
       initialized = true;
+
+      if (rev.global.runStart !== undefined) {
+        const stopDuration = Date.now() - rev.global.runStart;
+        rev.global.runStart += stopDuration;
+      }
     }
 
     if (rev.global.runStart !== undefined && Date.now() - rev.global.runStart > 6*60*1000) {
