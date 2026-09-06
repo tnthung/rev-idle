@@ -414,8 +414,11 @@ export default (async () => {
 
       EC: for (let cid=0; cid<9; cid++) {
         while (await rev.state(`gameData.eternity.challenges.${cid}.completeDiff`) < 5) {
-          await ClickSteps[`EC${cid+1}`].execute();
-          await ClickSteps.StartEC.execute();
+          if (!await rev.state(`gameData.eternity.challenges.${cid}.inChallenge`)) {
+            await ClickSteps[`EC${cid+1}`].execute();
+            await ClickSteps.StartEC.execute();
+          }
+
           await rev.sleep(100);
 
           if (await rev.state(`gameData.eternity.challenges.${cid}.inChallenge`)) {
@@ -442,8 +445,11 @@ export default (async () => {
       await ClickSteps.toggleDilation.execute();
 
       while (await rev.state("gameData.eternity.challenges.9.completeDiff") < 5) {
-        await ClickSteps.EC10.execute();
-        await ClickSteps.StartEC.execute();
+        if (!await rev.state("gameData.eternity.challenges.9.inChallenge")) {
+          await ClickSteps.EC10.execute();
+          await ClickSteps.StartEC.execute();
+        }
+
         await rev.sleep(100);
 
         if (await rev.state(`gameData.eternity.challenges.9.inChallenge`)) {
