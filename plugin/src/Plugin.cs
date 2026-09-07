@@ -1,6 +1,7 @@
 using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
+using System.Text.Json;
 using UnityEngine;
 
 namespace RevIdle.ScoreTelemetry;
@@ -33,40 +34,54 @@ public sealed class Plugin : BasePlugin
 
     internal static void LogBridgeError(string message) => _logger?.LogError($"[InputBridge] {message}");
 
-    internal static void CompletePending()
+    internal static void CompletePending(nint window)
     {
         try
         {
             if (_server is null)
                 return;
-            CompletePending(_server, static () => GameController.data);
+            CompletePending(_server, static () => GameController.data, window);
         }
         catch (Exception exception)
         {
-            _logger?.LogError($"State request completion failed: {exception}");
+            _logger?.LogError($"Request completion failed: {exception}");
         }
     }
 
-    internal static bool CompletePending(HttpScoreServer server, Func<object?> getData) => server.CompletePending(keys =>
+    internal static bool CompletePending(HttpScoreServer server, Func<object?> getData, nint window = 0) => server.CompletePendingRequest(request =>
     {
-        object? data;
-        try { data = getData(); }
-        catch (Exception exception)
+        if (request.Kind == HttpScoreServer.RequestKind.State)
         {
-            _logger?.LogError($"State data access failed: {exception}");
-            return (500, Array.Empty<byte>());
+            object? data;
+            try { data = getData(); }
+            catch (Exception exception)
+            {
+                _logger?.LogError($"State data access failed: {exception}");
+                return (500, Array.Empty<byte>());
+            }
+            if (data is null)
+                return (503, Array.Empty<byte>());
+            StatePayloadStatus status = StatePayload.Encode(data, request.Keys, out byte[] payload);
+            if (status == StatePayloadStatus.SerializationFailure)
+                _logger?.LogError("State serialization failed.");
+            return status switch
+            {
+                StatePayloadStatus.Success => (200, payload),
+                StatePayloadStatus.InvalidPath => (400, Array.Empty<byte>()),
+                _ => (500, Array.Empty<byte>())
+            };
         }
-        if (data is null)
-            return (503, Array.Empty<byte>());
-        StatePayloadStatus status = StatePayload.Encode(data, keys, out byte[] payload);
-        if (status == StatePayloadStatus.SerializationFailure)
-            _logger?.LogError("State serialization failed.");
-        return status switch
+
+        if (request.Kind == HttpScoreServer.RequestKind.Invoke)
         {
-            StatePayloadStatus.Success => (200, payload),
-            StatePayloadStatus.InvalidPath => (400, Array.Empty<byte>()),
-            _ => (500, Array.Empty<byte>())
-        };
+            if (!UnityUiClickDispatcher.TryInvoke(request.Name!, out string error))
+                return (400, JsonSerializer.SerializeToUtf8Bytes(new { error }));
+            return (200, System.Text.Encoding.UTF8.GetBytes("{}"));
+        }
+
+        if (!UnityUiClickDispatcher.TryCapture(window, request.X, request.Y, out string? name, out string? path, out string captureResult))
+            return (400, JsonSerializer.SerializeToUtf8Bytes(new { error = captureResult }));
+        return (200, JsonSerializer.SerializeToUtf8Bytes(new { name, path }));
     });
 
     internal static void StopServer() => _server?.Dispose();
@@ -97,7 +112,7 @@ public sealed class ScoreTicker : MonoBehaviour
         DispatchQueuedScrolls();
         DispatchQueuedDrags();
 
-        Plugin.CompletePending();
+        Plugin.CompletePending(_bridge?.Window ?? 0);
     }
 
     public void OnDestroy()

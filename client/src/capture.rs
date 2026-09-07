@@ -73,7 +73,34 @@ fn post_quit(thread_id: u32) -> Result<(), String> {
         .map_err(|error| format!("PostThreadMessageW failed: {error}"))
 }
 
-fn run_capture_loop(hook: HHOOK) -> Result<(), String> {
+async fn describe_capture(client: &reqwest::Client, x: i32, y: i32) -> String {
+    #[derive(serde::Deserialize)]
+    struct Target {
+        name: Option<String>,
+        path: Option<String>,
+    }
+
+    let target = async {
+        let response = client.get("http://127.0.0.1:19841/capture")
+            .query(&[("x", x), ("y", y)])
+            .send().await.map_err(|error| error.to_string())?;
+        let status = response.status();
+        let body = response.text().await.map_err(|error| error.to_string())?;
+        if !status.is_success() {
+            return Err(format!("{status}: {body}"));
+        }
+        serde_json::from_str::<Target>(&body).map_err(|error| error.to_string())
+    }.await;
+    match target {
+        Ok(Target { name: Some(name), path: Some(path) }) =>
+            format!("click: {x}, {y}; button: {name:?}; path: {path:?}"),
+        Ok(Target { name: Some(name), .. }) => format!("click: {x}, {y}; button: {name:?}"),
+        Ok(_) => format!("click: {x}, {y}; button: <none>"),
+        Err(error) => format!("click: {x}, {y}; button lookup failed: {error}"),
+    }
+}
+
+fn run_capture_loop(hook: HHOOK, client: reqwest::Client, runtime: tokio::runtime::Handle) -> Result<(), String> {
     let mut result = Ok(());
     loop {
         let mut message = MSG::default();
@@ -96,7 +123,10 @@ fn run_capture_loop(hook: HHOOK) -> Result<(), String> {
                 .ok()
                 .flatten()
             {
-                println!("click: {x}, {y}");
+                let client = client.clone();
+                runtime.spawn(async move {
+                    println!("{}", describe_capture(&client, x, y).await);
+                });
             }
         }
     }
@@ -126,8 +156,9 @@ pub(crate) struct CaptureWorker {
 }
 
 impl CaptureWorker {
-    pub(crate) fn start() -> Result<Self, String> {
+    pub(crate) fn start(client: reqwest::Client) -> Result<Self, String> {
         let (startup_tx, startup_rx) = std_mpsc::channel();
+        let runtime = tokio::runtime::Handle::current();
         let handle = thread::spawn(move || {
             let thread_id = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
             let mut message = MSG::default();
@@ -151,7 +182,7 @@ impl CaptureWorker {
                     return Err(error);
                 }
             };
-            let result = run_capture_loop(hook);
+            let result = run_capture_loop(hook, client, runtime);
             CAPTURE_THREAD_ID.store(0, Ordering::Release);
             result
         });
@@ -209,6 +240,39 @@ impl Drop for CaptureWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn capture_description_includes_target_and_preserves_coordinates_on_failure() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for (status, body, expected) in [
+            ("200 OK", r#"{"name":"Buy DTP","path":"Canvas/Buy DTP"}"#, "button: \"Buy DTP\"; path: \"Canvas/Buy DTP\""),
+            ("200 OK", r#"{"name":null,"path":null}"#, "button: <none>"),
+            ("503 Service Unavailable", r#"{"error":"no EventSystem"}"#, "button lookup failed"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let client = reqwest::Client::builder()
+                .proxy(reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap())
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = vec![0; 4096];
+                let length = stream.read(&mut request).await.unwrap();
+                stream.write_all(format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                ).as_bytes()).await.unwrap();
+                String::from_utf8(request[..length].to_vec()).unwrap()
+            });
+            let description = describe_capture(&client, 123, 456).await;
+            assert!(description.starts_with("click: 123, 456; "), "{description}");
+            assert!(description.contains(expected), "{description}");
+            assert_eq!(server.await.unwrap().lines().next().unwrap(),
+                "GET http://127.0.0.1:19841/capture?x=123&y=456 HTTP/1.1");
+        }
+    }
 
     #[test]
     fn only_left_button_down_is_a_capture_event() {

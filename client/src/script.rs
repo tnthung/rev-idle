@@ -487,6 +487,32 @@ impl ScriptSession {
                     )?;
                     let state: Function = state_wrapper.call((state_raw, parse.clone(), freeze.clone()))?;
                     rev.set("state", state)?;
+                    let invoke_client = self.client.clone();
+                    let invoke_controls = controls.clone();
+                    rev.set(
+                        "invoke",
+                        Function::new(ctx.clone(), Async(move |name: String| {
+                            let client = invoke_client.clone();
+                            let controls = invoke_controls.clone();
+                            async move {
+                                if name.trim().is_empty() {
+                                    return Err(host_error("button name must not be empty".to_owned()));
+                                }
+                                if controls.actions_paused.is_paused() {
+                                    return Ok(());
+                                }
+                                let response = client.post("http://127.0.0.1:19841/invoke")
+                                    .query(&[("name", name)])
+                                    .send().await.map_err(|error| host_error(error.to_string()))?;
+                                let status = response.status();
+                                let body = response.text().await.map_err(|error| host_error(error.to_string()))?;
+                                if !status.is_success() {
+                                    return Err(host_error(format!("invoke failed ({status}): {body}")));
+                                }
+                                Ok(())
+                            }
+                        }))?,
+                    )?;
                     rev.set(
                         "stop",
                         Function::new(ctx.clone(), move || stop_request.set(true))?,
@@ -1365,6 +1391,56 @@ mod tests {
 
         session.invoke(State::default(), controls).await.unwrap();
         server.join().unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rev_invoke_sends_button_name_and_reports_plugin_errors() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for (status, body) in [("200 OK", "{}"), ("409 Conflict", r#"{"error":"ambiguous button name"}"#)] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let client = reqwest::Client::builder()
+                .proxy(reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap())
+                .timeout(Duration::from_secs(2))
+                .build()
+                .unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = vec![0; 4096];
+                let length = stream.read(&mut request).await.unwrap();
+                stream.write_all(format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                ).as_bytes()).await.unwrap();
+                String::from_utf8(request[..length].to_vec()).unwrap()
+            });
+            let session = ScriptSession::new_with_client(
+                r#"export default (async () => await rev.invoke("Buy DTP & More"))"#,
+                "invoke-test.js",
+                client,
+            ).await.unwrap();
+            let (controls, _) = recording_controls();
+            let result = session.invoke(State::default(), controls).await;
+            if status == "200 OK" {
+                result.unwrap();
+            } else {
+                assert!(result.unwrap_err().contains("ambiguous button name"));
+            }
+            assert_eq!(server.await.unwrap().lines().next().unwrap(),
+                "POST http://127.0.0.1:19841/invoke?name=Buy+DTP+%26+More HTTP/1.1");
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn rev_invoke_skips_paused_actions_and_rejects_empty_names() {
+        let session = ScriptSession::new(r#"export default (async () => await rev.invoke("Buy"))"#).await.unwrap();
+        let (controls, _) = recording_controls();
+        controls.actions_paused.set_paused(true);
+        session.invoke(State::default(), controls).await.unwrap();
+
+        let session = ScriptSession::new(r#"export default (async () => await rev.invoke(" "))"#).await.unwrap();
+        let (controls, _) = recording_controls();
+        assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("button name"));
     }
 
     #[tokio::test(flavor = "current_thread")]

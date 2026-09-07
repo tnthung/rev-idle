@@ -124,7 +124,7 @@ async fn main() -> io::Result<()> {
     let console_commands = command_tx.clone();
     let hotkey = hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx)
         .map_err(io::Error::other)?;
-    let capture = capture::CaptureWorker::start().map_err(io::Error::other)?;
+    let capture = capture::CaptureWorker::start(client.clone()).map_err(io::Error::other)?;
     let local = LocalSet::new();
 
     local

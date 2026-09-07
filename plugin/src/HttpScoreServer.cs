@@ -3,20 +3,30 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 
 namespace RevIdle.ScoreTelemetry;
 
 internal sealed class HttpScoreServer : IDisposable
 {
+    internal enum RequestKind
+    {
+        State,
+        Invoke,
+        Capture
+    }
+
+    internal sealed record PendingRequest(RequestKind Kind, IReadOnlyList<string> Keys, string? Name, int X, int Y);
+
     private sealed class Pending
     {
-        public Pending(IReadOnlyList<string> keys)
+        public Pending(PendingRequest request)
         {
-            Keys = keys;
+            Request = request;
             Completion = new TaskCompletionSource<(int StatusCode, byte[] Body)>(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
-        public IReadOnlyList<string> Keys { get; }
+        public PendingRequest Request { get; }
         public TaskCompletionSource<(int StatusCode, byte[] Body)> Completion { get; }
     }
 
@@ -46,13 +56,18 @@ internal sealed class HttpScoreServer : IDisposable
     }
 
     public bool CompletePending(Func<IReadOnlyList<string>, (int StatusCode, byte[] Body)> complete)
+        => CompletePendingRequest(request => request.Kind == RequestKind.State
+            ? complete(request.Keys)
+            : (503, Array.Empty<byte>()));
+
+    public bool CompletePendingRequest(Func<PendingRequest, (int StatusCode, byte[] Body)> complete)
     {
         while (_pending.TryDequeue(out Pending? pending))
         {
             if (pending.Completion.Task.IsCompleted)
                 continue;
-            try { pending.Completion.TrySetResult(complete(pending.Keys)); }
-            catch (Exception exception) { pending.Completion.TrySetException(exception); }
+            try { pending.Completion.TrySetResult(complete(pending.Request)); }
+            catch (Exception exception) { pending.Completion.TrySetResult((500, JsonSerializer.SerializeToUtf8Bytes(new { error = exception.Message }))); }
             return true;
         }
         return false;
@@ -101,33 +116,59 @@ internal sealed class HttpScoreServer : IDisposable
                     await WriteResponse(stream, 400, "Bad Request", Array.Empty<byte>(), true).ConfigureAwait(false);
                     return;
                 }
-                if (request[0] != "GET")
+                if (request[0] != "GET" && request[0] != "POST")
                 {
                     await WriteResponse(stream, 405, "Method Not Allowed", Array.Empty<byte>(), true).ConfigureAwait(false);
                     return;
                 }
                 string[] target = request[1].Split('?', 2, StringSplitOptions.None);
-                if (target[0] != "/state")
-                {
-                    await WriteResponse(stream, 404, "Not Found", Array.Empty<byte>(), true).ConfigureAwait(false);
-                    return;
-                }
-                List<string> keys = new();
+                List<(string Key, string Value)> parameters = new();
                 if (target.Length == 2)
                 {
                     foreach (string parameter in target[1].Split('&', StringSplitOptions.RemoveEmptyEntries))
                     {
                         string[] pair = parameter.Split('=', 2, StringSplitOptions.None);
-                        if (pair.Length != 2 || pair[0] != "key")
+                        if (pair.Length != 2)
                         {
                             await WriteResponse(stream, 400, "Bad Request", Array.Empty<byte>(), true).ConfigureAwait(false);
                             return;
                         }
-                        keys.Add(WebUtility.UrlDecode(pair[1]));
+                        parameters.Add((pair[0], WebUtility.UrlDecode(pair[1])));
                     }
                 }
+
+                PendingRequest pendingRequest;
+                if (target[0] == "/state" && request[0] == "GET")
+                {
+                    if (parameters.Any(parameter => parameter.Key != "key"))
+                    {
+                        await WriteResponse(stream, 400, "Bad Request", Array.Empty<byte>(), true).ConfigureAwait(false);
+                        return;
+                    }
+                    pendingRequest = new(RequestKind.State, parameters.Select(parameter => parameter.Value).ToArray(), null, 0, 0);
+                }
+                else if (target[0] == "/invoke" && request[0] == "POST" && parameters.Count == 1 && parameters[0].Key == "name" && !string.IsNullOrWhiteSpace(parameters[0].Value))
+                {
+                    pendingRequest = new(RequestKind.Invoke, Array.Empty<string>(), parameters[0].Value, 0, 0);
+                }
+                else if (target[0] == "/capture" && request[0] == "GET" && parameters.Count == 2 &&
+                    parameters.Count(parameter => parameter.Key == "x") == 1 && parameters.Count(parameter => parameter.Key == "y") == 1 &&
+                    int.TryParse(parameters.First(parameter => parameter.Key == "x").Value, NumberStyles.None, CultureInfo.InvariantCulture, out int captureX) &&
+                    int.TryParse(parameters.First(parameter => parameter.Key == "y").Value, NumberStyles.None, CultureInfo.InvariantCulture, out int captureY))
+                {
+                    pendingRequest = new(RequestKind.Capture, Array.Empty<string>(), null, captureX, captureY);
+                }
+                else
+                {
+                    int statusCode = target[0] is "/state" or "/invoke" or "/capture"
+                        ? (target[0] == "/state" && request[0] != "GET" || target[0] == "/invoke" && request[0] != "POST" || target[0] == "/capture" && request[0] != "GET" ? 405 : 400)
+                        : 404;
+                    await WriteResponse(stream, statusCode, statusCode == 404 ? "Not Found" : statusCode == 405 ? "Method Not Allowed" : "Bad Request",
+                        Array.Empty<byte>(), true).ConfigureAwait(false);
+                    return;
+                }
                 bool close = lines.Skip(1).Any(line => line.StartsWith("Connection:", StringComparison.OrdinalIgnoreCase) && line.Contains("close", StringComparison.OrdinalIgnoreCase));
-                Pending pending = new(keys);
+                Pending pending = new(pendingRequest);
                 _pending.Enqueue(pending);
                 using CancellationTokenSource responseTimeout = CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token);
                 responseTimeout.CancelAfter(TimeoutMilliseconds);
@@ -136,7 +177,11 @@ internal sealed class HttpScoreServer : IDisposable
                     (int statusCode, byte[] body) = await pending.Completion.Task.WaitAsync(responseTimeout.Token).ConfigureAwait(false);
                     await WriteResponse(stream, statusCode, statusCode == 200 ? "OK" : statusCode == 503 ? "Service Unavailable" : "Error", body, close).ConfigureAwait(false);
                 }
-                catch (OperationCanceledException) { return; }
+                catch (OperationCanceledException)
+                {
+                    pending.Completion.TrySetCanceled();
+                    return;
+                }
                 if (close)
                     return;
             }

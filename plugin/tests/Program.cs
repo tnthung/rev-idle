@@ -47,7 +47,73 @@ DispatcherFindsFirstScrollableRaycast();
 DragCommandFactoryCombinesStartAndEndEndpoints();
 DragQueuePairsStartAndEndByRequestIdAndRejectsDuplicates();
 DragQueueIgnoresEndWithoutMatchingStart();
-System.Console.WriteLine("41 tests passed.");
+await ServerQueuesUiRequests();
+await ServerRejectsInvalidUiRequests();
+await ServerDropsTimedOutInvocations();
+System.Console.WriteLine("44 tests passed.");
+
+static async Task ServerQueuesUiRequests()
+{
+    foreach (string request in new[] { "POST /invoke?name=Buy+DTP%2F%26", "GET /capture?y=456&x=123" })
+    {
+        using HttpScoreServer server = CreateServer();
+        using TcpClient client = new();
+        await client.ConnectAsync(IPAddress.Loopback, server.Port);
+        await using NetworkStream stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes($"{request} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+        HttpScoreServer.PendingRequest? captured = null;
+        for (int attempt = 0; attempt < 100 && captured is null; attempt++)
+        {
+            server.CompletePendingRequest(pending =>
+            {
+                captured = pending;
+                return (200, Encoding.UTF8.GetBytes("{}"));
+            });
+            if (captured is null)
+                await Task.Delay(10);
+        }
+        Equal(true, captured is not null, nameof(ServerQueuesUiRequests));
+        if (request.StartsWith("POST", StringComparison.Ordinal))
+        {
+            Equal(HttpScoreServer.RequestKind.Invoke, captured!.Kind, nameof(ServerQueuesUiRequests));
+            Equal("Buy DTP/&", captured.Name, nameof(ServerQueuesUiRequests));
+        }
+        else
+        {
+            Equal(HttpScoreServer.RequestKind.Capture, captured!.Kind, nameof(ServerQueuesUiRequests));
+            Equal(123, captured.X, nameof(ServerQueuesUiRequests));
+            Equal(456, captured.Y, nameof(ServerQueuesUiRequests));
+        }
+        Equal(200, (await new ResponseReader(stream).ReadResponse()).StatusCode, nameof(ServerQueuesUiRequests));
+    }
+}
+
+static async Task ServerRejectsInvalidUiRequests()
+{
+    using HttpScoreServer server = CreateServer();
+    foreach ((string request, int status) in new[] {
+        ("GET /invoke?name=Buy", 405), ("POST /capture?x=1&y=2", 405),
+        ("POST /invoke?name=+", 400), ("POST /invoke?name=A&name=B", 400),
+        ("GET /capture?x=1&x=2", 400), ("GET /capture?x=-1&y=2", 400)
+    })
+    {
+        HttpResponse response = await RequestWithServer(server, $"{request} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        Equal(status, response.StatusCode, nameof(ServerRejectsInvalidUiRequests));
+        Equal(false, server.CompletePendingRequest(_ => throw new InvalidOperationException("invalid request was queued")), nameof(ServerRejectsInvalidUiRequests));
+    }
+}
+
+static async Task ServerDropsTimedOutInvocations()
+{
+    using HttpScoreServer server = CreateServer();
+    using TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    await using NetworkStream stream = client.GetStream();
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("POST /invoke?name=Buy HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(4));
+    Equal(0, await stream.ReadAsync(new byte[1], timeout.Token), nameof(ServerDropsTimedOutInvocations));
+    Equal(false, server.CompletePendingRequest(_ => throw new InvalidOperationException("expired invocation ran")), nameof(ServerDropsTimedOutInvocations));
+}
 
 static void InvalidPortsDisableServer()
 {

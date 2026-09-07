@@ -68,6 +68,20 @@ cargo +1.97.1 run --manifest-path client/Cargo.toml --bin window_message_probe
 
 Add `--focus` only when explicit window focus is desired.
 
+## Invoke UI buttons
+
+Run `capture` in the client and click a button to print its client coordinates, GameObject name, and hierarchy path. Use the printed name in a script:
+
+```javascript
+await rev.invoke("button_name");
+```
+
+Names are case-sensitive. Active buttons take precedence over inactive duplicates. If a name still matches multiple buttons, pass the printed path instead. Paths identify the current scene and hierarchy; capture again after those change. Hidden and inactive Unity UI Buttons can be invoked, but must still pass `IsInteractable()`. Invocation calls the registered `onClick` event on Unity's main thread without moving the mouse or raycasting. Errors reject the promise; paused scripts skip the action.
+
+Capture performs a read-only raycast asynchronously; the normal mouse click still reaches the game. If that click changes the UI before the lookup runs, capture can report the new UI at those coordinates. Coordinates remain in the output if the lookup fails.
+
+Both features require the updated plugin: `POST /invoke?name=...` invokes a button, and `GET /capture?x=...&y=...` returns its name and path without invoking it.
+
 ## Read state
 
 The HTTP endpoint is `GET http://127.0.0.1:19841/state`. In PowerShell, request all values or only the values you need:

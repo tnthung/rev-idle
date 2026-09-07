@@ -1,11 +1,104 @@
 using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.UI;
 
 namespace RevIdle.ScoreTelemetry;
 
 internal static class UnityUiClickDispatcher
 {
+    internal static bool TryInvoke(string name, out string result)
+    {
+        List<Button> matches = new();
+        foreach (Button candidateButton in Resources.FindObjectsOfTypeAll<Button>())
+        {
+            if (candidateButton.gameObject.scene.IsValid() &&
+                (candidateButton.name == name || GetPath(candidateButton.gameObject) == name))
+                matches.Add(candidateButton);
+        }
+
+        if (matches.Count > 1 && matches.Any(button => button.IsActive()))
+            matches.RemoveAll(button => !button.IsActive());
+
+        if (matches.Count == 0)
+        {
+            result = $"invoke target not found: '{name}'";
+            return false;
+        }
+        if (matches.Count != 1)
+        {
+            result = $"invoke target is ambiguous: '{name}' matches {matches.Count} objects; use a path: {string.Join(", ", matches.Select(button => GetPath(button.gameObject)))}";
+            return false;
+        }
+
+        Button targetButton = matches[0];
+        if (!targetButton.IsInteractable())
+        {
+            result = $"invoke target is not interactable: '{name}'";
+            return false;
+        }
+
+        targetButton.onClick.Invoke();
+        result = $"invoked '{GetPath(targetButton.gameObject)}'";
+        return true;
+    }
+
+    internal static bool TryCapture(nint window, int x, int y, out string? name, out string? path, out string result)
+    {
+        name = null;
+        path = null;
+        if (window == 0 || !GetClientRect(window, out Rect client))
+        {
+            result = $"invalid bounds at ({x}, {y})";
+            return false;
+        }
+
+        if (!InputBridgeProtocol.TryMapToUnity(
+                new ClickCommand(1, unchecked((uint)x), unchecked((uint)y)), client.Right - client.Left, client.Bottom - client.Top,
+                Screen.width, Screen.height, out float unityX, out float unityY))
+        {
+            result = $"invalid bounds at ({x}, {y})";
+            return false;
+        }
+
+        EventSystem? eventSystem = EventSystem.current;
+        if (eventSystem is null)
+        {
+            result = "no EventSystem";
+            return false;
+        }
+
+        var pointerData = new PointerEventData(eventSystem) { position = new Vector2(unityX, unityY) };
+        var raycasts = new Il2CppSystem.Collections.Generic.List<RaycastResult>();
+        eventSystem.RaycastAll(pointerData, raycasts);
+        for (int index = 0; index < raycasts.Count; index++)
+        {
+            GameObject? candidate = raycasts[index].gameObject;
+            GameObject? target = candidate is null ? null : ExecuteEvents.GetEventHandler<IPointerClickHandler>(candidate);
+            if (target is null)
+                continue;
+            name = target.name;
+            path = GetPath(target);
+            result = $"captured '{name}' at ({x}, {y})";
+            return true;
+        }
+
+        result = $"no clickable handler at ({x}, {y})";
+        return true;
+    }
+
+    private static string GetPath(GameObject target)
+    {
+        string path = $"{Uri.EscapeDataString(target.name)}[{target.transform.GetSiblingIndex()}]";
+        Transform? parent = target.transform.parent;
+        while (parent is not null)
+        {
+            path = $"{Uri.EscapeDataString(parent.name)}[{parent.GetSiblingIndex()}]/{path}";
+            parent = parent.parent;
+        }
+        return $"scene:{target.scene.handle}/{path}";
+    }
+
     internal static int FindFirstClickableIndex(IReadOnlyList<bool> clickable)
     {
         for (int index = 0; index < clickable.Count; index++)
