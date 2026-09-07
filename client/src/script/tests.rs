@@ -170,10 +170,10 @@ async fn rev_state_parses_mixed_json_and_freezes_only_top_level() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rev_invoke_sends_button_name_and_reports_plugin_errors() {
+async fn rev_invoke_sends_button_path_and_reports_plugin_errors() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    for (status, body) in [("200 OK", "{}"), ("409 Conflict", r#"{"error":"ambiguous button name"}"#)] {
+    for (status, body) in [("200 OK", "{}"), ("409 Conflict", r#"{"error":"path lookup failed"}"#)] {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let client = reqwest::Client::builder()
             .proxy(reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap())
@@ -191,7 +191,7 @@ async fn rev_invoke_sends_button_name_and_reports_plugin_errors() {
             String::from_utf8(request[..length].to_vec()).unwrap()
         });
         let session = ScriptSession::new_with_client(
-            r#"export default (async () => await rev.invoke("Buy DTP & More"))"#,
+            r#"export default (async () => await rev.invoke("Canvas/Buy DTP & More"))"#,
             "invoke-test.js",
             client,
         ).await.unwrap();
@@ -200,15 +200,15 @@ async fn rev_invoke_sends_button_name_and_reports_plugin_errors() {
         if status == "200 OK" {
             result.unwrap();
         } else {
-            assert!(result.unwrap_err().contains("ambiguous button name"));
+            assert!(result.unwrap_err().contains("path lookup failed"));
         }
         assert_eq!(server.await.unwrap().lines().next().unwrap(),
-            "POST http://127.0.0.1:19841/invoke?name=Buy+DTP+%26+More HTTP/1.1");
+            "POST http://127.0.0.1:19841/invoke?path=Canvas%2FBuy+DTP+%26+More HTTP/1.1");
     }
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rev_invoke_skips_paused_actions_and_rejects_empty_names() {
+async fn rev_invoke_skips_paused_actions_and_rejects_empty_paths() {
     let session = ScriptSession::new(r#"export default (async () => await rev.invoke("Buy"))"#).await.unwrap();
     let (controls, _) = recording_controls();
     controls.actions_paused.set_paused(true);
@@ -216,7 +216,81 @@ async fn rev_invoke_skips_paused_actions_and_rejects_empty_names() {
 
     let session = ScriptSession::new(r#"export default (async () => await rev.invoke(" "))"#).await.unwrap();
     let (controls, _) = recording_controls();
-    assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("button name"));
+    assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("button path"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rev_transfer_sends_source_and_destination_paths() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap())
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let length = stream.read(&mut request).await.unwrap();
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
+        String::from_utf8(request[..length].to_vec()).unwrap()
+    });
+    let session = ScriptSession::new_with_client(
+        r#"export default (async () => await rev.transfer("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0"))"#,
+        "transfer-test.js",
+        client,
+    ).await.unwrap();
+    let (controls, _) = recording_controls();
+    session.invoke(State::default(), controls).await.unwrap();
+    assert_eq!(server.await.unwrap().lines().next().unwrap(),
+        "POST http://127.0.0.1:19841/transfer?source=scene%3A1%2FCanvas%5B0%5D%2FInventory%2F3&destination=scene%3A1%2FCanvas%5B0%5D%2FCombine%2F0 HTTP/1.1");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rev_transfer_reports_errors_and_skips_when_paused_or_given_blank_paths() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap())
+        .timeout(Duration::from_secs(2))
+        .build()
+        .unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let length = stream.read(&mut request).await.unwrap();
+        stream.write_all(b"HTTP/1.1 409 Conflict\r\nContent-Length: 18\r\nConnection: close\r\n\r\npath lookup failed").await.unwrap();
+        String::from_utf8(request[..length].to_vec()).unwrap()
+    });
+    let session = ScriptSession::new_with_client(
+        r#"export default (async () => await rev.transfer("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0"))"#,
+        "transfer-error-test.js",
+        client.clone(),
+    ).await.unwrap();
+    let (controls, _) = recording_controls();
+    let error = session.invoke(State::default(), controls).await.unwrap_err();
+    assert!(error.contains("path lookup failed"));
+    assert!(server.await.unwrap().starts_with("POST "));
+
+    for script in [
+        r#"export default (async () => await rev.transfer(" ", "scene:1/Canvas[0]/Combine/0"))"#,
+        r#"export default (async () => await rev.transfer("scene:1/Canvas[0]/Inventory/3", " "))"#,
+    ] {
+        let session = ScriptSession::new_with_client(script, "transfer-invalid-test.js", client.clone()).await.unwrap();
+        let (controls, _) = recording_controls();
+        assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("slot paths"));
+    }
+
+    let session = ScriptSession::new_with_client(
+        r#"export default (async () => await rev.transfer("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0"))"#,
+        "transfer-paused-test.js",
+        client,
+    ).await.unwrap();
+    let (controls, _) = recording_controls();
+    controls.actions_paused.set_paused(true);
+    session.invoke(State::default(), controls).await.unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]

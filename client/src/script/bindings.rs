@@ -204,17 +204,37 @@ pub(super) fn create_rev<'js>(
     let invoke_controls = controls.clone();
     rev.set(
         "invoke",
-        Function::new(ctx.clone(), Async(move |name: String| {
+        Function::new(ctx.clone(), Async(move |path: String| {
             let client = invoke_client.clone();
             let controls = invoke_controls.clone();
             async move {
-                if name.trim().is_empty() {
-                    return Err(host_error("button name must not be empty".to_owned()));
+                if path.trim().is_empty() {
+                    return Err(host_error("button path must not be empty".to_owned()));
                 }
                 if controls.actions_paused.is_paused() {
                     return Ok(());
                 }
-                crate::bridge::invoke(&client, name).await.map_err(host_error)
+                crate::bridge::invoke(&client, path).await.map_err(host_error)
+            }
+        }))?,
+    )?;
+    let transfer_client = client.clone();
+    let transfer_controls = controls.clone();
+    rev.set(
+        "transfer",
+        Function::new(ctx.clone(), Async(move |source: String, destination: String| {
+            let client = transfer_client.clone();
+            let controls = transfer_controls.clone();
+            async move {
+                if source.trim().is_empty() || destination.trim().is_empty() {
+                    return Err(host_error("slot paths must not be empty".to_owned()));
+                }
+                if controls.actions_paused.is_paused() {
+                    return Ok(());
+                }
+                crate::bridge::transfer(&client, source, destination)
+                    .await
+                    .map_err(host_error)
             }
         }))?,
     )?;

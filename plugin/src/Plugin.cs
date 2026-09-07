@@ -74,14 +74,21 @@ public sealed class Plugin : BasePlugin
 
         if (request.Kind == HttpScoreServer.RequestKind.Invoke)
         {
-            if (!UnityUiClickDispatcher.TryInvoke(request.Name!, out string error))
+            if (!UnityUiClickDispatcher.TryInvoke(request.Path!, out string error))
                 return (400, JsonSerializer.SerializeToUtf8Bytes(new { error }));
             return (200, System.Text.Encoding.UTF8.GetBytes("{}"));
         }
 
-        if (!UnityUiClickDispatcher.TryCapture(window, request.X, request.Y, out string? name, out string? path, out string captureResult))
+        if (request.Kind == HttpScoreServer.RequestKind.Transfer)
+        {
+            if (!UnityUiClickDispatcher.TryTransfer(request.Path!, request.Destination!, out string error))
+                return (400, JsonSerializer.SerializeToUtf8Bytes(new { error }));
+            return (200, System.Text.Encoding.UTF8.GetBytes("{}"));
+        }
+
+        if (!UnityUiClickDispatcher.TryCapture(window, request.X, request.Y, out string? type, out string? path, out string captureResult))
             return (400, JsonSerializer.SerializeToUtf8Bytes(new { error = captureResult }));
-        return (200, JsonSerializer.SerializeToUtf8Bytes(new { name, path }));
+        return (200, JsonSerializer.SerializeToUtf8Bytes(new { type, path }));
     });
 
     internal static void StopServer() => _server?.Dispose();

@@ -85,11 +85,11 @@ async fn describe_capture(client: &reqwest::Client, x: i32, y: i32) -> String {
     use crate::bridge::CaptureTarget;
 
     match crate::bridge::request_capture(client, x, y).await {
-        Ok(CaptureTarget { name: Some(name), path: Some(path) }) =>
-            format!("click: {x}, {y}; button: {name:?}; path: {path:?}"),
-        Ok(CaptureTarget { name: Some(name), .. }) => format!("click: {x}, {y}; button: {name:?}"),
-        Ok(_) => format!("click: {x}, {y}; button: <none>"),
-        Err(error) => format!("click: {x}, {y}; button lookup failed: {error}"),
+        Ok(CaptureTarget { target_type: Some(target_type), path: Some(path) })
+            if target_type == "button" || target_type == "slot" =>
+            format!("click: {x}, {y}; {target_type}: {path:?}"),
+        Ok(_) => format!("click: {x}, {y}"),
+        Err(error) => format!("click: {x}, {y}; lookup failed: {error}"),
     }
 }
 
@@ -255,9 +255,10 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         for (status, body, expected) in [
-            ("200 OK", r#"{"name":"Buy DTP","path":"Canvas/Buy DTP"}"#, "button: \"Buy DTP\"; path: \"Canvas/Buy DTP\""),
-            ("200 OK", r#"{"name":null,"path":null}"#, "button: <none>"),
-            ("503 Service Unavailable", r#"{"error":"no EventSystem"}"#, "button lookup failed"),
+            ("200 OK", r#"{"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}"#, "click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\""),
+            ("200 OK", r#"{"type":"slot","path":"scene:1/Canvas[0]/Slot"}"#, "click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\""),
+            ("200 OK", r#"{"type":null,"path":null}"#, "click: 123, 456"),
+            ("503 Service Unavailable", r#"{"error":"no EventSystem"}"#, "click: 123, 456; lookup failed: 503 Service Unavailable: {\"error\":\"no EventSystem\"}"),
         ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let client = reqwest::Client::builder()
@@ -276,8 +277,7 @@ mod tests {
                 String::from_utf8(request[..length].to_vec()).unwrap()
             });
             let description = describe_capture(&client, 123, 456).await;
-            assert!(description.starts_with("click: 123, 456; "), "{description}");
-            assert!(description.contains(expected), "{description}");
+            assert_eq!(description, expected);
             assert_eq!(server.await.unwrap().lines().next().unwrap(),
                 "GET http://127.0.0.1:19841/capture?x=123&y=456 HTTP/1.1");
         }

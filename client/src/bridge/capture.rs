@@ -1,6 +1,7 @@
 #[derive(serde::Deserialize)]
 pub(crate) struct CaptureTarget {
-    pub(crate) name: Option<String>,
+    #[serde(rename = "type")]
+    pub(crate) target_type: Option<String>,
     pub(crate) path: Option<String>,
 }
 

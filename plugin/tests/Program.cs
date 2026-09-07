@@ -54,7 +54,7 @@ System.Console.WriteLine("44 tests passed.");
 
 static async Task ServerQueuesUiRequests()
 {
-    foreach (string request in new[] { "POST /invoke?name=Buy+DTP%2F%26", "GET /capture?y=456&x=123" })
+    foreach (string request in new[] { "POST /invoke?path=scene%3A1%2FBuy+DTP%5B0%5D", "GET /capture?y=456&x=123", "POST /transfer?destination=scene%3A1%2FSlot%5B1%5D&source=scene%3A1%2FSlot%5B0%5D" })
     {
         using HttpScoreServer server = CreateServer();
         using TcpClient client = new();
@@ -73,10 +73,16 @@ static async Task ServerQueuesUiRequests()
                 await Task.Delay(10);
         }
         Equal(true, captured is not null, nameof(ServerQueuesUiRequests));
-        if (request.StartsWith("POST", StringComparison.Ordinal))
+        if (request.StartsWith("POST /invoke", StringComparison.Ordinal))
         {
             Equal(HttpScoreServer.RequestKind.Invoke, captured!.Kind, nameof(ServerQueuesUiRequests));
-            Equal("Buy DTP/&", captured.Name, nameof(ServerQueuesUiRequests));
+            Equal("scene:1/Buy DTP[0]", captured.Path, nameof(ServerQueuesUiRequests));
+        }
+        else if (request.StartsWith("POST /transfer", StringComparison.Ordinal))
+        {
+            Equal(HttpScoreServer.RequestKind.Transfer, captured!.Kind, nameof(ServerQueuesUiRequests));
+            Equal("scene:1/Slot[0]", captured.Path, nameof(ServerQueuesUiRequests));
+            Equal("scene:1/Slot[1]", captured.Destination, nameof(ServerQueuesUiRequests));
         }
         else
         {
@@ -92,8 +98,11 @@ static async Task ServerRejectsInvalidUiRequests()
 {
     using HttpScoreServer server = CreateServer();
     foreach ((string request, int status) in new[] {
-        ("GET /invoke?name=Buy", 405), ("POST /capture?x=1&y=2", 405),
-        ("POST /invoke?name=+", 400), ("POST /invoke?name=A&name=B", 400),
+        ("GET /invoke?path=Buy", 405), ("POST /capture?x=1&y=2", 405),
+        ("POST /invoke?path=+", 400), ("POST /invoke?path=A&path=B", 400),
+        ("POST /invoke?name=Buy", 400),
+        ("GET /transfer?source=A&destination=B", 405), ("POST /transfer?source=A", 400),
+        ("POST /transfer?source=A&destination=+", 400), ("POST /transfer?source=A&source=B", 400),
         ("GET /capture?x=1&x=2", 400), ("GET /capture?x=-1&y=2", 400)
     })
     {
@@ -109,7 +118,7 @@ static async Task ServerDropsTimedOutInvocations()
     using TcpClient client = new();
     await client.ConnectAsync(IPAddress.Loopback, server.Port);
     await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("POST /invoke?name=Buy HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
+    await stream.WriteAsync(Encoding.ASCII.GetBytes("POST /invoke?path=Buy HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
     using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(4));
     Equal(0, await stream.ReadAsync(new byte[1], timeout.Token), nameof(ServerDropsTimedOutInvocations));
     Equal(false, server.CompletePendingRequest(_ => throw new InvalidOperationException("expired invocation ran")), nameof(ServerDropsTimedOutInvocations));

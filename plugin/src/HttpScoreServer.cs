@@ -13,10 +13,11 @@ internal sealed class HttpScoreServer : IDisposable
     {
         State,
         Invoke,
-        Capture
+        Capture,
+        Transfer
     }
 
-    internal sealed record PendingRequest(RequestKind Kind, IReadOnlyList<string> Keys, string? Name, int X, int Y);
+    internal sealed record PendingRequest(RequestKind Kind, IReadOnlyList<string> Keys, string? Path, int X, int Y, string? Destination = null);
 
     private sealed class Pending
     {
@@ -147,9 +148,16 @@ internal sealed class HttpScoreServer : IDisposable
                     }
                     pendingRequest = new(RequestKind.State, parameters.Select(parameter => parameter.Value).ToArray(), null, 0, 0);
                 }
-                else if (target[0] == "/invoke" && request[0] == "POST" && parameters.Count == 1 && parameters[0].Key == "name" && !string.IsNullOrWhiteSpace(parameters[0].Value))
+                else if (target[0] == "/invoke" && request[0] == "POST" && parameters.Count == 1 && parameters[0].Key == "path" && !string.IsNullOrWhiteSpace(parameters[0].Value))
                 {
                     pendingRequest = new(RequestKind.Invoke, Array.Empty<string>(), parameters[0].Value, 0, 0);
+                }
+                else if (target[0] == "/transfer" && request[0] == "POST" && parameters.Count == 2 &&
+                    parameters.Count(parameter => parameter.Key == "source") == 1 && parameters.Count(parameter => parameter.Key == "destination") == 1 &&
+                    parameters.All(parameter => !string.IsNullOrWhiteSpace(parameter.Value)))
+                {
+                    pendingRequest = new(RequestKind.Transfer, Array.Empty<string>(), parameters.First(parameter => parameter.Key == "source").Value, 0, 0,
+                        parameters.First(parameter => parameter.Key == "destination").Value);
                 }
                 else if (target[0] == "/capture" && request[0] == "GET" && parameters.Count == 2 &&
                     parameters.Count(parameter => parameter.Key == "x") == 1 && parameters.Count(parameter => parameter.Key == "y") == 1 &&
@@ -160,8 +168,8 @@ internal sealed class HttpScoreServer : IDisposable
                 }
                 else
                 {
-                    int statusCode = target[0] is "/state" or "/invoke" or "/capture"
-                        ? (target[0] == "/state" && request[0] != "GET" || target[0] == "/invoke" && request[0] != "POST" || target[0] == "/capture" && request[0] != "GET" ? 405 : 400)
+                    int statusCode = target[0] is "/state" or "/invoke" or "/capture" or "/transfer"
+                        ? (target[0] == "/state" && request[0] != "GET" || target[0] == "/invoke" && request[0] != "POST" || target[0] == "/capture" && request[0] != "GET" || target[0] == "/transfer" && request[0] != "POST" ? 405 : 400)
                         : 404;
                     await WriteResponse(stream, statusCode, statusCode == 404 ? "Not Found" : statusCode == 405 ? "Method Not Allowed" : "Bad Request",
                         Array.Empty<byte>(), true).ConfigureAwait(false);

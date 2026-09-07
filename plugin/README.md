@@ -68,19 +68,20 @@ cargo +1.97.1 run --manifest-path client/Cargo.toml --bin window_message_probe
 
 Add `--focus` only when explicit window focus is desired.
 
-## Invoke UI buttons
+## Capture, invoke, and transfer UI elements
 
-Run `capture` in the client and click a button to print its client coordinates, GameObject name, and hierarchy path. Use the printed name in a script:
+Run `capture` in the client and click an element. Capture consumes the click and prints client coordinates followed by `button: "<path>"` or `slot: "<path>"`. It checks buttons first, then drop slots, including their parent objects. If neither exists, it prints only coordinates. Use the printed paths in scripts:
 
 ```javascript
-await rev.invoke("button_name");
+await rev.invoke(buttonPath);
+await rev.transfer(sourceSlotPath, destinationSlotPath);
 ```
 
-Names are case-sensitive. Active buttons take precedence over inactive duplicates. If a name still matches multiple buttons, pass the printed path instead. Paths identify the current scene and hierarchy; capture again after those change. Hidden and inactive Unity UI Buttons can be invoked, but must still pass `IsInteractable()`. Invocation calls the registered `onClick` event on Unity's main thread without moving the mouse or raycasting. Errors reject the promise; paused scripts skip the action.
+Only exact, case-sensitive paths are accepted; name lookup is not supported. Paths include the scene handle and escaped object names with sibling indexes. Capture again after scene or hierarchy changes. Hidden and inactive Unity UI Buttons can be invoked, but must still pass `IsInteractable()`. Invocation calls the registered `onClick` event on Unity's main thread without moving the mouse or raycasting. Errors reject the promise; paused scripts skip the action.
 
-Capture performs a read-only raycast asynchronously; the normal mouse click still reaches the game. If that click changes the UI before the lookup runs, capture can report the new UI at those coordinates. Coordinates remain in the output if the lookup fails.
+Transfer requires two distinct slot objects with one drop handler each and exactly one draggable item in the source. Lookup includes hidden and inactive objects; no screen coordinates or raycasts are used. The plugin calls the item's drag lifecycle and the destination's drop handler directly on Unity's main thread, without activating the panels. The game controls compatibility, validation, and occupied-slot behavior. A resolved promise means handlers were called, not that the game accepted or completed the transfer; check game state before depending on the result. Slots and items must already be instantiated and initialized by the game; hidden-panel transfers remain subject to the handlers' own requirements.
 
-Both features require the updated plugin: `POST /invoke?name=...` invokes a button, and `GET /capture?x=...&y=...` returns its name and path without invoking it.
+These features require the updated client and plugin: `POST /invoke?path=...` invokes a button, `POST /transfer?source=...&destination=...` dispatches a transfer, and `GET /capture?x=...&y=...` returns `{ "type": "button" | "slot" | null, "path": string | null }` without interacting with the target.
 
 ## Read state
 

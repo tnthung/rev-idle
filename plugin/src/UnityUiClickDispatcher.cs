@@ -7,34 +7,31 @@ namespace RevIdle.ScoreTelemetry;
 
 internal static class UnityUiClickDispatcher
 {
-    internal static bool TryInvoke(string name, out string result)
+    internal static bool TryInvoke(string path, out string result)
     {
         List<Button> matches = new();
         foreach (Button candidateButton in Resources.FindObjectsOfTypeAll<Button>())
         {
             if (candidateButton.gameObject.scene.IsValid() &&
-                (candidateButton.name == name || GetPath(candidateButton.gameObject) == name))
+                GetPath(candidateButton.gameObject) == path)
                 matches.Add(candidateButton);
         }
 
-        if (matches.Count > 1 && matches.Any(button => button.IsActive()))
-            matches.RemoveAll(button => !button.IsActive());
-
         if (matches.Count == 0)
         {
-            result = $"invoke target not found: '{name}'";
+            result = $"invoke target not found: '{path}'";
             return false;
         }
         if (matches.Count != 1)
         {
-            result = $"invoke target is ambiguous: '{name}' matches {matches.Count} objects; use a path: {string.Join(", ", matches.Select(button => GetPath(button.gameObject)))}";
+            result = $"invoke target is ambiguous: '{path}' matches {matches.Count} buttons";
             return false;
         }
 
         Button targetButton = matches[0];
         if (!targetButton.IsInteractable())
         {
-            result = $"invoke target is not interactable: '{name}'";
+            result = $"invoke target is not interactable: '{path}'";
             return false;
         }
 
@@ -43,9 +40,9 @@ internal static class UnityUiClickDispatcher
         return true;
     }
 
-    internal static bool TryCapture(nint window, int x, int y, out string? name, out string? path, out string result)
+    internal static bool TryCapture(nint window, int x, int y, out string? type, out string? path, out string result)
     {
-        name = null;
+        type = null;
         path = null;
         if (window == 0 || !GetClientRect(window, out Rect client))
         {
@@ -74,16 +71,133 @@ internal static class UnityUiClickDispatcher
         for (int index = 0; index < raycasts.Count; index++)
         {
             GameObject? candidate = raycasts[index].gameObject;
-            GameObject? target = candidate is null ? null : ExecuteEvents.GetEventHandler<IPointerClickHandler>(candidate);
+            Button? target = candidate is null ? null : candidate.GetComponentInParent<Button>();
             if (target is null)
                 continue;
-            name = target.name;
+            type = "button";
+            path = GetPath(target.gameObject);
+            result = $"captured button '{path}' at ({x}, {y})";
+            return true;
+        }
+        for (int index = 0; index < raycasts.Count; index++)
+        {
+            GameObject? candidate = raycasts[index].gameObject;
+            GameObject? target = candidate is null ? null : ExecuteEvents.GetEventHandler<IDropHandler>(candidate);
+            if (target is null)
+                continue;
+            type = "slot";
             path = GetPath(target);
-            result = $"captured '{name}' at ({x}, {y})";
+            result = $"captured slot '{path}' at ({x}, {y})";
             return true;
         }
 
-        result = $"no clickable handler at ({x}, {y})";
+        result = $"no button or slot at ({x}, {y})";
+        return true;
+    }
+
+    internal static bool TryTransfer(string source, string destination, out string result)
+    {
+        if (source == destination)
+        {
+            result = "transfer source and destination must be different slots";
+            return false;
+        }
+
+        List<GameObject> sources = new();
+        List<GameObject> destinations = new();
+        foreach (Transform candidate in Resources.FindObjectsOfTypeAll<Transform>())
+        {
+            if (!candidate.gameObject.scene.IsValid())
+                continue;
+            string path = GetPath(candidate.gameObject);
+            if (path == source)
+                sources.Add(candidate.gameObject);
+            if (path == destination)
+                destinations.Add(candidate.gameObject);
+        }
+        if (sources.Count != 1 || destinations.Count != 1)
+        {
+            result = $"transfer requires unique slot paths: source matched {sources.Count}, destination matched {destinations.Count}";
+            return false;
+        }
+
+        GameObject sourceSlot = sources[0];
+        GameObject destinationSlot = destinations[0];
+        var sourceHandlers = sourceSlot.GetComponents<Component>()
+            .Select(component => component.TryCast<IDropHandler>()).Where(handler => handler is not null).ToArray();
+        var destinationHandlers = destinationSlot.GetComponents<Component>()
+            .Select(component => component.TryCast<IDropHandler>()).Where(handler => handler is not null).ToArray();
+        if (sourceHandlers.Length != 1 || destinationHandlers.Length != 1)
+        {
+            result = $"transfer paths must each have one drop handler: source has {sourceHandlers.Length}, destination has {destinationHandlers.Length}";
+            return false;
+        }
+
+        List<Component> items = new();
+        foreach (Component candidate in sourceSlot.GetComponentsInChildren<Component>(true))
+        {
+            if (candidate.TryCast<IDragHandler>() is null)
+                continue;
+            Transform? parent = candidate.transform;
+            while (parent is not null)
+            {
+                if (parent.gameObject.GetComponents<Component>().Any(component => component.TryCast<IDropHandler>() is not null))
+                {
+                    if (parent.gameObject == sourceSlot)
+                        items.Add(candidate);
+                    break;
+                }
+                parent = parent.parent;
+            }
+        }
+        if (items.Count != 1)
+        {
+            result = $"transfer source must contain exactly one draggable item; found {items.Count}";
+            return false;
+        }
+
+        EventSystem? eventSystem = EventSystem.current;
+        if (eventSystem is null)
+        {
+            result = "no EventSystem";
+            return false;
+        }
+
+        GameObject item = items[0].gameObject;
+        IBeginDragHandler? beginDrag = items[0].TryCast<IBeginDragHandler>();
+        IEndDragHandler? endDrag = items[0].TryCast<IEndDragHandler>();
+        if (beginDrag is null || endDrag is null)
+        {
+            result = "transfer source item must have begin-drag and end-drag handlers";
+            return false;
+        }
+        var pointerData = new PointerEventData(eventSystem)
+        {
+            button = PointerEventData.InputButton.Left,
+            pointerDrag = item,
+            pointerEnter = item,
+            pointerCurrentRaycast = new RaycastResult { gameObject = item },
+            pointerPressRaycast = new RaycastResult { gameObject = item },
+            useDragThreshold = false
+        };
+        try
+        {
+            // Direct calls retain the game's handlers without ExecuteEvents' active-object filter.
+            items[0].TryCast<IInitializePotentialDragHandler>()?.OnInitializePotentialDrag(pointerData);
+            beginDrag.OnBeginDrag(pointerData);
+            pointerData.dragging = true;
+            items[0].Cast<IDragHandler>().OnDrag(pointerData);
+            pointerData.pointerEnter = destinationSlot;
+            pointerData.pointerCurrentRaycast = new RaycastResult { gameObject = destinationSlot };
+            destinationHandlers[0]!.OnDrop(pointerData);
+        }
+        finally
+        {
+            endDrag.OnEndDrag(pointerData);
+            pointerData.dragging = false;
+        }
+
+        result = $"dispatched transfer from '{source}' to '{destination}'; acceptance is controlled by the game";
         return true;
     }
 
