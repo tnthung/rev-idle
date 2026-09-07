@@ -6,22 +6,27 @@ export class Action {
   }
 
   click(x, y, delayMs=10) {
-    this.steps.push({ type: 'click', x, y, delayMs });
+    this.steps.push({ type: "click", x, y, delayMs });
     return this;
   }
 
-  scroll(x, y, length, axis='vertical', delayMs=100) {
-    this.steps.push({ type: 'scroll', x, y, length, axis, delayMs });
+  scroll(x, y, length, axis="vertical", delayMs=100) {
+    this.steps.push({ type: "scroll", x, y, length, axis, delayMs });
     return this;
   }
 
   drag(x1, y1, x2, y2, delayMs=10) {
-    this.steps.push({ type: 'drag', x1, y1, x2, y2, delayMs });
+    this.steps.push({ type: "drag", x1, y1, x2, y2, delayMs });
+    return this;
+  }
+
+  invoke(path) {
+    this.steps.push({ type: "invoke", path });
     return this;
   }
 
   wait(ms) {
-    this.steps.push({ type: 'wait', ms });
+    this.steps.push({ type: "wait", ms });
     return this;
   }
 
@@ -41,22 +46,25 @@ export class Action {
       const step = this.steps[i];
 
       switch (step.type) {
-        case 'click':
+        case "click":
           rev.click(step.x, step.y);
           break;
-        case 'scroll':
+        case "scroll":
           rev.scroll(step.x, step.y, step.length, step.axis);
           break;
-        case 'drag':
+        case "drag":
           rev.drag(step.x1, step.y1, step.x2, step.y2);
           break;
-        case 'wait':
+        case "invoke":
+          await rev.invoke(step.path);
+          break;
+        case "wait":
           await rev.sleep(step.ms);
           continue;
       }
 
       const nextStep = this.steps[i + 1];
-      if (nextStep && nextStep.type !== 'wait')
+      if (nextStep && nextStep.type !== "wait")
         await rev.sleep(nextStep.delayMs);
     }
   }
