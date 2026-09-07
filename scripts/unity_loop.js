@@ -380,6 +380,10 @@ export default (async () => {
       if (zodiac.rarity === "Mythic") continue;
       if (zodiac.rarity === "Godly") continue;
       if (zodiac.rarity === "Divine") continue;
+
+      let posNum = Number(pos);
+      if (posNum < 0 || posNum >= ZODIAC_POS.length) continue;
+
       const [x, y] = ZODIAC_POS[Number(pos)];
       await ClickSteps.ZodiacShop.execute();
       await rev.drag(x, y, 613, 525);
