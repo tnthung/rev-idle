@@ -504,6 +504,8 @@ export default (async () => {
         for (let i = 0; i < unspent; i++) {
           if (currentDT.t3 < 5) {
             await DT.IncT3.execute();
+          } else if (currentDT.m2 < 5) {
+            await DT.IncM2.execute();
           } else if (currentDT.b3 < 5) {
             await DT.IncB3.execute();
           } else if (currentDT.t2 < 5) {
