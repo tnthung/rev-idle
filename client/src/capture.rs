@@ -11,13 +11,14 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{
         CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW,
         SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, MSLLHOOKSTRUCT,
-        MSG, PM_NOREMOVE, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN, WM_QUIT,
+        MSG, PM_NOREMOVE, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_QUIT,
     },
 };
 
 use crate::window;
 
 static CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
+static CAPTURE_LEFT_BUTTON_DOWN: AtomicBool = AtomicBool::new(false);
 static CAPTURE_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 
 const CAPTURE_MESSAGE: u32 = WM_APP + 1;
@@ -49,8 +50,14 @@ unsafe extern "system" fn mouse_hook(
     data: LPARAM,
 ) -> LRESULT {
     if code >= 0 && data.0 != 0 {
+        if message.0 as u32 == WM_LBUTTONUP
+            && CAPTURE_LEFT_BUTTON_DOWN.swap(false, Ordering::AcqRel)
+        {
+            return LRESULT(1);
+        }
         let hook_data = unsafe { &*(data.0 as *const MSLLHOOKSTRUCT) };
         if let Some(point) = capture_event(CaptureState.is_enabled(), message, hook_data.pt) {
+            CAPTURE_LEFT_BUTTON_DOWN.store(true, Ordering::Release);
             let thread_id = CAPTURE_THREAD_ID.load(Ordering::Acquire);
             if thread_id != 0 {
                 let _ = unsafe {
@@ -62,6 +69,7 @@ unsafe extern "system" fn mouse_hook(
                     )
                 };
             }
+            return LRESULT(1);
         }
     }
 
@@ -225,6 +233,22 @@ impl Drop for CaptureWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn captured_click_is_consumed_including_release_after_capture_stops() {
+        let hook_data = MSLLHOOKSTRUCT::default();
+        CaptureState.set_enabled(true);
+        let press = unsafe {
+            mouse_hook(0, WPARAM(WM_LBUTTONDOWN as usize), LPARAM(&hook_data as *const _ as isize))
+        };
+        CaptureState.set_enabled(false);
+        let release = unsafe {
+            mouse_hook(0, WPARAM(WM_LBUTTONUP as usize),
+                LPARAM(&hook_data as *const _ as isize))
+        };
+        assert_eq!(press, LRESULT(1));
+        assert_eq!(release, LRESULT(1));
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn capture_description_includes_target_and_preserves_coordinates_on_failure() {
