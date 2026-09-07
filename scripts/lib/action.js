@@ -78,66 +78,108 @@ export class Action {
   }
 
 
-  static Dismiss = new Action().wait(100).click(987, 583);
+  // PascalCase for page navigation
+  // camelCase for actions
+  // UPPERCASE for constants or factory functions
 
 
-  static Revolution = new Action().click(1188, 87);
-  static ClaimIP    = this.Revolution.clone().click(550, 520);
-  static ClaimEP    = this.Revolution.clone().click(550, 500);
+  static dismiss = new Action().wait(100).invoke("scene:-12/VIEWMANAGER[0]/safe_area[0]/NOTIFY[3]/notify_default%28Clone%29[0]/btn_close[1]");
 
 
-  static Infinity = new Action().click(1188, 125);
+  static Revolution = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_main[1]");
+  static claimIP    = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_infinite_reset[4]");
+  static claimEP    = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_eternate_reset[3]");
 
 
-  static Eternity = new Action().click(1188, 164);
-
-  static EternityChallenge       = this.Eternity.clone().click(401, 83);
-  static EternityChallenge1      = this.EternityChallenge.clone().click(112, 254);
-  static EternityChallenge2      = this.EternityChallenge.clone().click(300, 268);
-  static EternityChallenge3      = this.EternityChallenge.clone().click(542, 265);
-  static EternityChallenge4      = this.EternityChallenge.clone().click(756, 268);
-  static EternityChallenge5      = this.EternityChallenge.clone().click(118, 362);
-  static EternityChallenge6      = this.EternityChallenge.clone().click(329, 388);
-  static EternityChallenge7      = this.EternityChallenge.clone().click(548, 392);
-  static EternityChallenge8      = this.EternityChallenge.clone().click(742, 384);
-  static EternityChallenge9      = this.EternityChallenge.clone().click(161, 496);
-  static EternityChallenge10     = this.EternityChallenge.clone().click(324, 502);
-  static toggleEternityChallenge = this.EternityChallenge.clone().click(995, 566);
-
-  static Dilation       = this.Eternity.clone().click(855, 85);
-  static toggleDilation = this.Dilation.clone().click(201, 148);
-
-  static DilationTree = this.Eternity.clone().click(1023, 79);
+  static Infinity = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_infinity[2]");
 
 
-  static Unity = new Action().click(1155, 201);
+  static Eternity = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_eternity[3]");
 
-  static Zodiac     = this.Unity.clone().click(63, 84);
-  static ZodiacShop = this.Zodiac.clone().click(550, 444);
+  static EternityChallenge       = this.Eternity.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/tab_menu[1]/tab_challenges[2]");
+  static EternityChallenge1      = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/content[1]/item_etr_cha_0[0]/btn_challenge[1]");
+  static EternityChallenge2      = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/content[1]/item_etr_cha_1[1]/btn_challenge[1]");
+  static EternityChallenge3      = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/content[1]/item_etr_cha_2[2]/btn_challenge[1]");
+  static EternityChallenge4      = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/content[1]/item_etr_cha_3[3]/btn_challenge[1]");
+  static EternityChallenge5      = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/content[1]/item_etr_cha_4[4]/btn_challenge[1]");
+  static EternityChallenge6      = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/content[1]/item_etr_cha_5[5]/btn_challenge[1]");
+  static EternityChallenge7      = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/content[1]/item_etr_cha_6[6]/btn_challenge[1]");
+  static EternityChallenge8      = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/content[1]/item_etr_cha_7[7]/btn_challenge[1]");
+  static EternityChallenge9      = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/content[1]/item_etr_cha_8[8]/btn_challenge[1]");
+  static EternityChallenge10     = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/content[1]/item_etr_cha_9[9]/btn_challenge[1]");
+  static toggleEternityChallenge = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/challenges[2]/content[0]/ctn_info[2]/ctn_challenge[0]/btn_enter_exit[3]");
 
-  static async SellZodiac(n) {
+  static Dilation       = this.Eternity.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/tab_menu[1]/tab_dilation[5]");
+  static toggleDilation = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/btn_dilation[1]");
+
+  static DilationTree    = this.Eternity.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/tab_menu[1]/tab_dilation_tree[6]");
+  static BuyDilationTree = new Action().wait(100).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_upgrade[4]/btn_buy[4]");
+  static DilationTreeC   = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/green_1[5]").chain(this.BuyDilationTree);
+  static DilationTreeT1  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_red[2]/red_1[2]").chain(this.BuyDilationTree);
+  static DilationTreeT2  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_red[2]/red_2[3]").chain(this.BuyDilationTree);
+  static DilationTreeT3  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_red[2]/red_3[4]").chain(this.BuyDilationTree);
+  static DilationTreeT4  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_red[2]/red_4[5]").chain(this.BuyDilationTree);
+  static DilationTreeM1  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_yellow[3]/yellow_1[1]").chain(this.BuyDilationTree);
+  static DilationTreeM2  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_yellow[3]/yellow_2[2]").chain(this.BuyDilationTree);
+  static DilationTreeM3  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_yellow[3]/yellow_3[3]").chain(this.BuyDilationTree);
+  static DilationTreeM4  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_yellow[3]/yellow_4[4]").chain(this.BuyDilationTree);
+  static DilationTreeB1  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_blue[4]/blue_1[1]").chain(this.BuyDilationTree);
+  static DilationTreeB2  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_blue[4]/blue_2[2]").chain(this.BuyDilationTree);
+  static DilationTreeB3  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_blue[4]/blue_3[3]").chain(this.BuyDilationTree);
+  static DilationTreeB4  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_blue[4]/blue_4[4]").chain(this.BuyDilationTree);
+
+  static LoadDilationLoadOut = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/loadout_dtu[15]/content[0]/width_fit[1]/panel[0]/scroll_view[4]/viewport[0]/content[0]/item_dtu_loadout%28Clone%29[0]/content[0]/ctn_actions[2]/btn_import[2]");
+
+  static ApplyDilationLoadOut = new Action()
+    .invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/loadout_dtu[15]/content[0]/width_fit[1]/panel[0]/scroll_view[4]/viewport[0]/content[0]/item_dtu_loadout%28Clone%29[0]/content[0]/ctn_actions[2]/btn_load[1]")
+    .invoke("scene:-12/VIEWMANAGER[0]/safe_area[0]/MESSAGES[1]/message%28Clone%29[0]/content[0]/panel[1]/width_limit[0]/height_fit[0]/panel[0]/ctn_buttons[3]/message_btn%28Clone%29[1]");
+
+
+  static Unity = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_unity[4]");
+
+  static Astrology     = this.Unity.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/tab_menu[1]/tab_astrology[0]");
+  static PlanetShop    = this.Astrology.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_content[1]/ctn_planet_shop[7]/btn_planet_shop[1]");
+  static ZodiacMerge   = this.PlanetShop.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_zodiac_actions[1]/btn_merging[0]");
+  static ZodiacEnhance = this.PlanetShop.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_zodiac_actions[1]/btn_enchancing[1]");
+  static ZodiacReforge = this.PlanetShop.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_zodiac_actions[1]/btn_redistribution[2]");
+
+  static ZODIAC_SELL_SLOT         = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_sell[0]/item_slot_zodiac_sell[0]";
+  static ZODIAC_CELL_BUTTON       = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_sell[0]/btn_sell[1]";
+  static ZODIAC_MERGE_BUTTON      = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_merging[1]/content[1]/btn_action[3]";
+  static ZODIAC_MERGE_RESULT_SLOT = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_merging[1]/content[1]/ctn_result[4]/item_slot_zodiac_result[2]";
+
+  static ZODIAC_INV_SLOT(n) {
     n = Number(n);
-    const row = n / 8;
-    const col = n % 8;
-
-    const x = 795 + col * 40;
-    const y = 345 + row * 40;
-
-    await ClickSteps.ZodiacShop.execute();
-    await rev.drag(x, y, 613, 525);
-    await rev.sleep(500);
-    rev.click(686, 525);
+    return `scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_inventory[2]/scrollview[1]/viewport[0]/content[0]/item_slot_zodiac_${n+1}[${n}]`;
   }
 
-  static UnityTrial = this.Unity.clone().click(214, 148);
-  static ResetUnity = this.Unity.clone().click(1087, 134);
+  static ZODIAC_MERGE_SLOT(n) {
+    n = Number(n)
+    if (n < 0 || n > 2) throw new Error("Invalid merge slot index");
+    return `scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_merging[1]/content[1]/ctn_slots[1]/item_slot_zodiac_merge_${n+1}[${n}]`;
+  }
+
+  static async sellZodiac(n) {
+    await this.PlanetShop.execute();
+    await rev.transfer(this.ZODIAC_INV_SLOT(n), this.ZODIAC_SELL_SLOT);
+    await rev.invoke(this.ZODIAC_CELL_BUTTON);
+  }
+
+  static async mergeZodiac(a, b, c) {
+    await this.ZodiacMerge.execute();
+    await rev.transfer(this.ZODIAC_INV_SLOT(a), this.ZODIAC_MERGE_SLOT(0));
+    await rev.transfer(this.ZODIAC_INV_SLOT(b), this.ZODIAC_MERGE_SLOT(1));
+    await rev.transfer(this.ZODIAC_INV_SLOT(c), this.ZODIAC_MERGE_SLOT(2));
+    await rev.invoke(this.ZODIAC_MERGE_BUTTON);
+    await rev.transfer(this.ZODIAC_MERGE_RESULT_SLOT, this.ZODIAC_INV_SLOT(a));
+  }
+
+  static UnityTrial = this.Unity.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/tab_menu[1]/tab_trials[1]");
+  static resetUnity = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/trials[1]/content[0]/ctn_right[1]/ctn_trial_topbar[1]/btn_clear[3]");
 
 
-  static Automation = new Action().click(1155, 239);
+  static Automation = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_automation[6]");
 
 
-  static TimeFlow = new Action().click(1155, 277);
-
-
-  static Settings = new Action().click(1155, 353);
+  static TimeFlow = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_time_flux[7]");
 }
