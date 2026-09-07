@@ -123,6 +123,21 @@ pub(super) fn run_console_input<P: ConsolePlatform>(
                     completion_index = Some((index + 1) % completions.len());
                 } else {
                     completions = super::completion::complete(&buffer);
+                    if completions.len() > 1 {
+                        let mut common_len = 0;
+                        for (index, ch) in completions[0].char_indices() {
+                            if !completions.iter().all(|completion| completion.starts_with(&completions[0][..index + ch.len_utf8()])) {
+                                break;
+                            }
+                            common_len = index + ch.len_utf8();
+                        }
+                        if common_len > 0 {
+                            buffer.push_str(&completions[0][..common_len]);
+                            print!("\r\x1B[K\x1B[97m{buffer}\x1B[39m");
+                            let _ = io::stdout().flush();
+                            continue;
+                        }
+                    }
                     if !completions.is_empty() {
                         completion_index = Some(0);
                     }
@@ -241,6 +256,29 @@ mod tests {
             true
         }, |_| {}).unwrap();
         assert_eq!(lines, vec![format!("load {}/scripts/farm script.js", dir.display())]);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn tab_expands_common_script_prefix_before_cycling() {
+        let dir = std::env::temp_dir().join(format!("rev-idle-common-prefix-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("unity_loop.js"), "").unwrap();
+        fs::write(dir.join("unity_loop2.js"), "").unwrap();
+        for (keys, expected) in [
+            (vec![ConsoleEvent::Tab, ConsoleEvent::Enter], "unity_loop"),
+            (vec![ConsoleEvent::Tab, ConsoleEvent::Char('2'), ConsoleEvent::Tab, ConsoleEvent::Enter], "unity_loop2.js"),
+            (vec![ConsoleEvent::Tab, ConsoleEvent::Tab, ConsoleEvent::Enter], "unity_loop.js"),
+            (vec![ConsoleEvent::Tab, ConsoleEvent::Tab, ConsoleEvent::Tab, ConsoleEvent::Enter], "unity_loop2.js"),
+        ] {
+            let prefix = format!("load {}/uni", dir.display());
+            let mut lines = Vec::new();
+            run_console_input(FakeConsolePlatform::events(chars(&prefix).chain(keys)), &AtomicBool::new(false), &AtomicBool::new(false), Vec::new(), |line| {
+                lines.push(line);
+                true
+            }, |_| {}).unwrap();
+            assert_eq!(lines, vec![format!("load {}/{expected}", dir.display())]);
+        }
         fs::remove_dir_all(dir).unwrap();
     }
 
