@@ -181,7 +181,7 @@ fn load_history(path: &Path) -> Vec<String> {
             contents
                 .lines()
                 .map(str::to_owned)
-                .filter(|line| !line.is_empty())
+                .filter(|line| !line.is_empty() && line.trim() != "exit")
                 .collect()
         })
         .unwrap_or_default()
@@ -195,7 +195,7 @@ fn save_history(path: &Path, history: &[String]) {
 }
 
 fn push_history(history: &mut Vec<String>, line: &str) -> bool {
-    if line.trim().is_empty() || history.last().is_some_and(|last| last == line) {
+    if line.trim().is_empty() || line.trim() == "exit" || history.last().is_some_and(|last| last == line) {
         return false;
     }
     history.push(line.to_owned());
