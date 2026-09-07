@@ -724,6 +724,7 @@ pub async fn run(
     actions_paused: ActionGate,
     shutdown: watch::Receiver<bool>,
     script_running: Arc<AtomicBool>,
+    console_locked: Arc<AtomicBool>,
     capture_state: CaptureState,
 ) -> Result<(), String> {
     let mouse: SharedMouse = Rc::new(RefCell::new(BridgeMouseInput));
@@ -737,6 +738,7 @@ pub async fn run(
         Duration::from_millis(50),
         shutdown,
         script_running,
+        console_locked,
         capture_state,
     )
     .await
@@ -753,6 +755,7 @@ async fn run_with_controls(
 ) -> Result<(), String> {
     let (_shutdown_tx, shutdown) = watch::channel(false);
     let script_running = Arc::new(AtomicBool::new(false));
+    let console_locked = Arc::new(AtomicBool::new(false));
     let capture_state = CaptureState::default();
     run_with_controls_and_lifecycle(
         commands,
@@ -763,6 +766,7 @@ async fn run_with_controls(
         loop_delay,
         shutdown,
         script_running,
+        console_locked,
         capture_state,
     )
     .await
@@ -778,6 +782,7 @@ async fn run_with_controls_and_lifecycle(
     loop_delay: Duration,
     mut shutdown: watch::Receiver<bool>,
     script_running: Arc<AtomicBool>,
+    console_locked: Arc<AtomicBool>,
     capture_state: CaptureState,
 ) -> Result<(), String> {
     let mut current_path = initial_path;
@@ -814,6 +819,11 @@ async fn run_with_controls_and_lifecycle(
             script_running.store(false, Ordering::Release);
             return Ok(());
         }
+
+        // Recomputed every iteration (rather than at each of the many places
+        // `session`/`paused` change) so the console's lock state can never
+        // drift out of sync with them.
+        console_locked.store(session.is_some() && !paused, Ordering::Release);
 
         if hotkey_channel_open {
             match hotkey_pauses.has_changed() {
