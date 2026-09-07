@@ -81,13 +81,17 @@ fn post_quit(thread_id: u32) -> Result<(), String> {
         .map_err(|error| format!("PostThreadMessageW failed: {error}"))
 }
 
-async fn describe_capture(client: &reqwest::Client, x: i32, y: i32) -> String {
+async fn describe_capture(client: &reqwest::Client, x: i32, y: i32, write_clipboard: impl FnOnce(&str) -> Result<(), String>) -> String {
     use crate::bridge::CaptureTarget;
 
     match crate::bridge::request_capture(client, x, y).await {
         Ok(CaptureTarget { target_type: Some(target_type), path: Some(path) })
-            if target_type == "button" || target_type == "slot" =>
-            format!("click: {x}, {y}; {target_type}: {path:?}"),
+            if target_type == "button" || target_type == "slot" => {
+            if let Err(error) = write_clipboard(&path) {
+                return format!("click: {x}, {y}; {target_type}: {path:?}; clipboard write failed: {error}");
+            }
+            format!("click: {x}, {y}; {target_type}: {path:?}")
+        }
         Ok(_) => format!("click: {x}, {y}"),
         Err(error) => format!("click: {x}, {y}; lookup failed: {error}"),
     }
@@ -118,7 +122,9 @@ fn run_capture_loop(hook: HHOOK, client: reqwest::Client, runtime: tokio::runtim
             {
                 let client = client.clone();
                 runtime.spawn(async move {
-                    println!("{}", describe_capture(&client, x, y).await);
+                    println!("{}", describe_capture(&client, x, y, |path| {
+                        window::WindowControl::write_clipboard(&window::Win32WindowControl, path)
+                    }).await);
                 });
             }
         }
@@ -254,11 +260,11 @@ mod tests {
     async fn capture_description_includes_target_and_preserves_coordinates_on_failure() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        for (status, body, expected) in [
-            ("200 OK", r#"{"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}"#, "click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\""),
-            ("200 OK", r#"{"type":"slot","path":"scene:1/Canvas[0]/Slot"}"#, "click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\""),
-            ("200 OK", r#"{"type":null,"path":null}"#, "click: 123, 456"),
-            ("503 Service Unavailable", r#"{"error":"no EventSystem"}"#, "click: 123, 456; lookup failed: 503 Service Unavailable: {\"error\":\"no EventSystem\"}"),
+        for (status, body, expected, copied_path) in [
+            ("200 OK", r#"{"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}"#, "click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"", Some("scene:1/Canvas[0]/Buy DTP")),
+            ("200 OK", r#"{"type":"slot","path":"scene:1/Canvas[0]/Slot"}"#, "click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\"", Some("scene:1/Canvas[0]/Slot")),
+            ("200 OK", r#"{"type":null,"path":null}"#, "click: 123, 456", None),
+            ("503 Service Unavailable", r#"{"error":"no EventSystem"}"#, "click: 123, 456; lookup failed: 503 Service Unavailable: {\"error\":\"no EventSystem\"}", None),
         ] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let client = reqwest::Client::builder()
@@ -276,8 +282,13 @@ mod tests {
                 ).as_bytes()).await.unwrap();
                 String::from_utf8(request[..length].to_vec()).unwrap()
             });
-            let description = describe_capture(&client, 123, 456).await;
+            let mut copied = None;
+            let description = describe_capture(&client, 123, 456, |path| {
+                copied = Some(path.to_owned());
+                Ok(())
+            }).await;
             assert_eq!(description, expected);
+            assert_eq!(copied.as_deref(), copied_path);
             assert_eq!(server.await.unwrap().lines().next().unwrap(),
                 "GET http://127.0.0.1:19841/capture?x=123&y=456 HTTP/1.1");
         }
