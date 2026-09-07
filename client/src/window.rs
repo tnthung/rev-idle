@@ -11,7 +11,8 @@ use windows::{
         System::{
             Console::GetConsoleWindow,
             DataExchange::{
-                CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
+                CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
+                OpenClipboard, SetClipboardData,
             },
             Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE},
             Ole::CF_UNICODETEXT,
@@ -140,6 +141,9 @@ fn read_unicode_clipboard() -> Result<String, String> {
     open_clipboard_with_retry(owner)?;
 
     let result = (|| {
+        if unsafe { IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32) }.is_err() {
+            return Ok(String::new());
+        }
         let handle = unsafe { GetClipboardData(CF_UNICODETEXT.0 as u32) }
             .map_err(|error| format!("GetClipboardData failed: {error}"))?;
         let memory = HGLOBAL(handle.0);
