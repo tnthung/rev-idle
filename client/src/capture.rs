@@ -74,27 +74,12 @@ fn post_quit(thread_id: u32) -> Result<(), String> {
 }
 
 async fn describe_capture(client: &reqwest::Client, x: i32, y: i32) -> String {
-    #[derive(serde::Deserialize)]
-    struct Target {
-        name: Option<String>,
-        path: Option<String>,
-    }
+    use crate::bridge::CaptureTarget;
 
-    let target = async {
-        let response = client.get("http://127.0.0.1:19841/capture")
-            .query(&[("x", x), ("y", y)])
-            .send().await.map_err(|error| error.to_string())?;
-        let status = response.status();
-        let body = response.text().await.map_err(|error| error.to_string())?;
-        if !status.is_success() {
-            return Err(format!("{status}: {body}"));
-        }
-        serde_json::from_str::<Target>(&body).map_err(|error| error.to_string())
-    }.await;
-    match target {
-        Ok(Target { name: Some(name), path: Some(path) }) =>
+    match crate::bridge::request_capture(client, x, y).await {
+        Ok(CaptureTarget { name: Some(name), path: Some(path) }) =>
             format!("click: {x}, {y}; button: {name:?}; path: {path:?}"),
-        Ok(Target { name: Some(name), .. }) => format!("click: {x}, {y}; button: {name:?}"),
+        Ok(CaptureTarget { name: Some(name), .. }) => format!("click: {x}, {y}; button: {name:?}"),
         Ok(_) => format!("click: {x}, {y}; button: <none>"),
         Err(error) => format!("click: {x}, {y}; button lookup failed: {error}"),
     }

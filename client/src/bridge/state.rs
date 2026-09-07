@@ -1,9 +1,9 @@
-pub const STATE_URL: &str = "http://127.0.0.1:19841/state";
+const STATE_URL: &str = "http://127.0.0.1:19841/state";
 
 #[cfg(test)]
 pub(crate) static TEST_SERVER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-pub async fn request_state(
+pub(crate) async fn request_state(
     client: &reqwest::Client,
     keys: &[String],
 ) -> Result<String, String> {
