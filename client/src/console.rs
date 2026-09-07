@@ -18,7 +18,7 @@ use windows::Win32::{
         },
         Threading::WaitForSingleObject,
     },
-    UI::Input::KeyboardAndMouse::{VK_BACK, VK_DOWN, VK_RETURN, VK_UP},
+    UI::Input::KeyboardAndMouse::{VK_BACK, VK_DOWN, VK_RETURN, VK_TAB, VK_UP},
 };
 
 const USAGE: &str = "commands: load <script-path> | reload | resume | capture | clear | exit";
@@ -79,6 +79,7 @@ enum ConsoleEvent {
     Enter,
     Up,
     Down,
+    Tab,
     Ignored,
 }
 
@@ -151,6 +152,9 @@ impl ConsolePlatform for Win32ConsolePlatform {
             }
             if key.wVirtualKeyCode == VK_DOWN.0 {
                 return Ok(ConsoleEvent::Down);
+            }
+            if key.wVirtualKeyCode == VK_TAB.0 {
+                return Ok(ConsoleEvent::Tab);
             }
 
             let unicode = unsafe { key.uChar.UnicodeChar };
@@ -233,6 +237,8 @@ fn run_console_input<P: ConsolePlatform>(
     // it after browsing back up through history.
     let mut history_index: Option<usize> = None;
     let mut draft = String::new();
+    let mut completions: Vec<String> = Vec::new();
+    let mut completion_index: Option<usize> = None;
 
     while !stop.load(Ordering::Acquire) {
         let event = platform.next_event()?;
@@ -242,20 +248,33 @@ fn run_console_input<P: ConsolePlatform>(
         }
 
         if locked.load(Ordering::Acquire) {
-            if !buffer.is_empty() {
+            if !buffer.is_empty() || completion_index.is_some() {
                 print!("\r\x1B[K");
                 let _ = io::stdout().flush();
                 buffer.clear();
             }
             history_index = None;
             draft.clear();
+            completions.clear();
+            completion_index = None;
             continue;
+        }
+
+        if !matches!(event, ConsoleEvent::Tab | ConsoleEvent::Ignored) {
+            if let Some(index) = completion_index.take() {
+                if matches!(event, ConsoleEvent::Char(' ' | '/' | '\\') | ConsoleEvent::Enter) {
+                    buffer.push_str(&completions[index]);
+                }
+                print!("\r\x1B[K\x1B[97m{buffer}\x1B[39m");
+                let _ = io::stdout().flush();
+            }
+            completions.clear();
         }
 
         match event {
             ConsoleEvent::Char(ch) => {
                 buffer.push(ch);
-                print!("{ch}");
+                print!("\x1B[97m{ch}\x1B[39m");
                 let _ = io::stdout().flush();
             }
             ConsoleEvent::Backspace => {
@@ -300,6 +319,46 @@ fn run_console_input<P: ConsolePlatform>(
                 }
                 if on_line(line) {
                     return Ok(());
+                }
+            }
+            ConsoleEvent::Tab => {
+                if let Some(index) = completion_index {
+                    completion_index = Some((index + 1) % completions.len());
+                } else {
+                    let input = buffer.trim_start();
+                    if let Some(command_end) = input.find(char::is_whitespace) {
+                        if &input[..command_end] == "load" {
+                            let argument = input[command_end..].trim_start();
+                            let path = argument.strip_prefix('"').unwrap_or(argument);
+                            let component_start = path.rfind(['/', '\\']).map_or(0, |index| index + 1);
+                            let (directory, prefix) = path.split_at(component_start);
+                            if let Ok(entries) = fs::read_dir(if directory.is_empty() { "." } else { directory }) {
+                                for entry in entries.flatten() {
+                                    let Ok(file_type) = entry.file_type() else { continue };
+                                    if !file_type.is_dir() && !entry.path().extension().is_some_and(|extension| extension.eq_ignore_ascii_case("js")) {
+                                        continue;
+                                    }
+                                    let name = entry.file_name();
+                                    let Some(name) = name.to_str() else { continue };
+                                    if name.get(..prefix.len()).is_some_and(|start| start.eq_ignore_ascii_case(prefix)) {
+                                        completions.push(format!("{}{}", &name[prefix.len()..], if argument.starts_with('"') && !file_type.is_dir() { "\"" } else { "" }));
+                                    }
+                                }
+                            }
+                            completions.sort();
+                        }
+                    } else {
+                        completions.extend(["load", "reload", "resume", "capture", "clear", "exit"]
+                            .into_iter()
+                            .filter_map(|command| command.strip_prefix(input).map(str::to_owned)));
+                    }
+                    if !completions.is_empty() {
+                        completion_index = Some(0);
+                    }
+                }
+                if let Some(index) = completion_index {
+                    print!("\r\x1B[K\x1B[97m{buffer}\x1B[90m{}\x1B[39m", completions[index]);
+                    let _ = io::stdout().flush();
                 }
             }
             ConsoleEvent::Ignored => {}
@@ -493,6 +552,42 @@ mod tests {
         .unwrap();
 
         assert_eq!(lines, vec!["hi".to_string()]);
+    }
+
+    #[test]
+    fn tab_cycles_commands_and_space_commits_the_preview() {
+        for (events, expected) in [
+            (chars("l").chain([ConsoleEvent::Tab, ConsoleEvent::Char(' '), ConsoleEvent::Enter]).collect::<Vec<_>>(), "load "),
+            (chars("re").chain([ConsoleEvent::Tab, ConsoleEvent::Ignored, ConsoleEvent::Tab, ConsoleEvent::Enter]).collect(), "resume"),
+            (chars("l").chain([ConsoleEvent::Tab, ConsoleEvent::Char('x'), ConsoleEvent::Enter]).collect(), "lx"),
+        ] {
+            let mut lines = Vec::new();
+            run_console_input(FakeConsolePlatform::events(events), &AtomicBool::new(false), &AtomicBool::new(false), Vec::new(), |line| {
+                lines.push(line);
+                true
+            }, |_| {}).unwrap();
+            assert_eq!(lines, vec![expected]);
+        }
+    }
+
+    #[test]
+    fn tab_completes_script_paths_and_slash_commits_directories() {
+        let dir = std::env::temp_dir().join(format!("rev-idle-completion-{}", std::process::id()));
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::write(dir.join("scripts/farm script.js"), "").unwrap();
+        fs::write(dir.join("scripts/farm.txt"), "").unwrap();
+        let prefix = format!("load {}/scr", dir.display());
+        let events = chars(&prefix)
+            .chain([ConsoleEvent::Tab, ConsoleEvent::Char('/')])
+            .chain(chars("fa"))
+            .chain([ConsoleEvent::Tab, ConsoleEvent::Enter]);
+        let mut lines = Vec::new();
+        run_console_input(FakeConsolePlatform::events(events), &AtomicBool::new(false), &AtomicBool::new(false), Vec::new(), |line| {
+            lines.push(line);
+            true
+        }, |_| {}).unwrap();
+        assert_eq!(lines, vec![format!("load {}/scripts/farm script.js", dir.display())]);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
