@@ -20,8 +20,13 @@ export class Action {
     return this;
   }
 
-  invoke(path) {
-    this.steps.push({ type: "invoke", path });
+  invoke(path, delayMs=10) {
+    this.steps.push({ type: "invoke", path, delayMs });
+    return this;
+  }
+
+  transfer(source, destination, delayMs=10) {
+    this.steps.push({ type: "transfer", source, destination, delayMs });
     return this;
   }
 
@@ -57,6 +62,9 @@ export class Action {
           break;
         case "invoke":
           await rev.invoke(step.path);
+          break;
+        case "transfer":
+          await rev.transfer(step.source, step.destination);
           break;
         case "wait":
           await rev.sleep(step.ms);
