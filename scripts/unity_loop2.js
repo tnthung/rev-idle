@@ -252,8 +252,9 @@ async function mergeAndSellHardTrialZodiac() {
    * Initial inventory classification / selling.
    */
   const inventory = await States.unityZodiacInventory();
-
   for (const [pos, zodiac] of Object.entries(inventory)) {
+    if (zodiac.locked) continue;
+
     const rarity = ZodiacRarity[zodiac.rarity];
 
     if (rarity === undefined)
