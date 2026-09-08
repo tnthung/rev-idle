@@ -1,6 +1,6 @@
 import { Action } from "./lib/action.js";
 import { exponent, wait_for, wait_for_exponent } from "./lib/utils.js";
-import { States, ZodiacRarity } from "./lib/states.js";
+import { States, ZodiacElement, ZodiacRarity } from "./lib/states.js";
 import { DilationTree, DT_STAGES, DT_EXTRAS } from "./lib/dilation_tree.js";
 
 
@@ -104,9 +104,10 @@ async function mergeAndSellZodiac(minPreserveZodiacRarity) {
   let sellCount = 0;
   let mergeCount = 0;
 
-  const rarityBuckets = {};
+  const mergeBuckets = {};
 
   for (const [pos, zodiac] of Object.entries((await States.unityZodiacInventory()))) {
+    const element = ZodiacElement[zodiac.Element];
     const rarity = ZodiacRarity[zodiac.rarity];
 
     if (rarity < minPreserveZodiacRarity) {
@@ -115,25 +116,30 @@ async function mergeAndSellZodiac(minPreserveZodiacRarity) {
       continue;
     }
 
-    if (!rarityBuckets[rarity])
-      rarityBuckets[rarity] = [];
-    rarityBuckets[rarity].push(pos);
+    const key = `${element};${rarity}`;
+
+    if (!mergeBuckets[key])
+      mergeBuckets[key] = [];
+    mergeBuckets[key].push(pos);
   }
 
-  for (let rarity=ZodiacRarity.Garbage; rarity<ZodiacRarity.Immortal; rarity++) {
-    if (!rarityBuckets[rarity] || rarityBuckets[rarity].length < 3) continue;
+  for (let element=ZodiacElement.Fire; element<=ZodiacElement.Wind; element++)
+    for (let rarity=ZodiacRarity.Garbage; rarity<ZodiacRarity.Immortal; rarity++) {
+      const bucket = mergeBuckets[`${element};${rarity}`];
+      if (!bucket || bucket.length < 3) continue;
 
-    while (rarityBuckets[rarity].length >= 3) {
-      const positions = rarityBuckets[rarity].splice(0, 3);
-      await Action.mergeZodiac(...positions);
-      mergeCount++;
+      while (bucket.length >= 3) {
+        const positions = bucket.splice(0, 3);
+        await Action.mergeZodiac(...positions);
+        mergeCount++;
 
-      const nextRarity = rarity + 1;
-      if (!rarityBuckets[nextRarity])
-        rarityBuckets[nextRarity] = [];
-      rarityBuckets[nextRarity].push(positions[0]);
+        const nextRarity = rarity + 1;
+        const nextKey = `${element};${nextRarity}`;
+        if (!mergeBuckets[nextKey])
+          mergeBuckets[nextKey] = [];
+        mergeBuckets[nextKey].push(positions[0]);
+      }
     }
-  }
 
   console.log("Total zodiacs sold:", sellCount, "Total zodiacs merged:", mergeCount);
 }
