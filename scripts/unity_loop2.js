@@ -265,7 +265,7 @@ async function mergeAndSellHardTrialZodiac() {
         ? targetMinRarity
         : genericMinRarity];
 
-    if (rarity < minRarity || zodiac.level < minZodiacLevel) {
+    if (rarity < minRarity || Number(zodiac.level) < minZodiacLevel) {
       await Action.sellZodiac(pos);
       sellCount++;
       continue;
