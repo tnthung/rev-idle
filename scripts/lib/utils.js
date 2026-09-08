@@ -4,7 +4,7 @@
  * Creates a bi-directional enum object.
  * @template const T
  * @param {...T} keys - The keys of the enum.
- * @returns {{ [K in T]: number } & { [key: number]: T }}
+ * @returns {{ [K in T]: number } & { [key: number]: T } & { [K in T as `_${K}`]: K }}
  */
 export function Enum(...keys) {
   const enumObject = {};
@@ -12,6 +12,7 @@ export function Enum(...keys) {
   keys.forEach((key, index) => {
     enumObject[key] = index;
     enumObject[index] = key;
+    enumObject[`_${key}`] = key;
   });
 
   return enumObject;
