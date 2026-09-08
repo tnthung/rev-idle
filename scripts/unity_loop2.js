@@ -28,7 +28,7 @@ let executionConfig = {};
 export default async function main() {
   // local initialization
   if (!initialized) {
-    rev.resize(1270, 600);
+    rev.resize(1270, 470);
     console.clear();
     Action.dismissLoop();
     initialized = true;
