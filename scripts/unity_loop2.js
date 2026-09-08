@@ -43,7 +43,7 @@ export default async function main() {
       Action.EternityChallenge,
       Action.Revolution,
     ]) {
-      await page.execute().catch(_ => {});
+      await page().catch(_ => {});
       await rev.sleep(200);
     }
 
@@ -69,7 +69,7 @@ export default async function main() {
   // check unity run duration
   if (unityElapsed > UNITY_RUN_THRESHOLD) {
     console.log("Current unity run exceeds threshold (" + (UNITY_RUN_THRESHOLD / 1000) + "s). Reset unity.");
-    await Action.resetUnity.execute();
+    await Action.resetUnity();
   }
 
   try {
@@ -158,12 +158,12 @@ async function bootstrapEternity() {
 
   for (let i=0; i<2; i++) {
     await wait_for_exponent("nextIP", 300n);
-    await Action.claimIP.execute();
+    await Action.claimIP();
   }
 
   for (let i=0; i<4; i++) {
     await rev.sleep(500);
-    await Action.claimEP.execute();
+    await Action.claimEP();
   }
 
   console.log("Finished bootstrapping eternity.");
@@ -180,14 +180,14 @@ async function completeFirst9EC() {
       if (ec.completeDiff >= 5) break;
 
       if (!ec.inChallenge) {
-        await Action[`EternityChallenge${c+1}`].execute();
-        await Action.toggleEternityChallenge.execute();
+        await Action[`EternityChallenge${c+1}`]();
+        await Action.toggleEternityChallenge();
       }
 
       await rev.sleep(100);
 
       if ((await States.eternalChallenge(c)).inChallenge) {
-        await Action.toggleEternityChallenge.execute();
+        await Action.toggleEternityChallenge();
         allCompleted = false;
         break;
       }
@@ -196,7 +196,7 @@ async function completeFirst9EC() {
 
   if (!allCompleted) {
     await rev.sleep(1000);
-    await Action.claimEP.execute();
+    await Action.claimEP();
     return;
   }
 
@@ -221,12 +221,12 @@ async function complete10thEC() {
   }
 
   if (ec10.inChallenge)
-    await Action.toggleEternityChallenge.execute();
+    await Action.toggleEternityChallenge();
 
   for (let i=0; i<3; i++) {
-    await Action.toggleDilation.execute();
+    await Action.toggleDilation();
     await rev.sleep(500);
-    await Action.toggleDilation.execute();
+    await Action.toggleDilation();
   }
 
   while (true) {
@@ -234,14 +234,14 @@ async function complete10thEC() {
     if (ec10.completeDiff >= 5) break;
 
     if (!ec10.inChallenge) {
-      await Action.EternityChallenge10.execute();
-      await Action.toggleEternityChallenge.execute();
+      await Action.EternityChallenge10();
+      await Action.toggleEternityChallenge();
     }
 
     await rev.sleep(100);
 
     if ((await States.eternalChallenge(9)).inChallenge) {
-      await Action.toggleEternityChallenge.execute();
+      await Action.toggleEternityChallenge();
       return;
     }
   }
@@ -255,7 +255,7 @@ async function bootstrapDilation() {
   if (totalDTP > 5) return true;
 
   for (let i=0; i<2; i++) {
-    await Action.toggleDilation.execute();
+    await Action.toggleDilation();
     await rev.sleep(500);
   }
 
@@ -286,9 +286,9 @@ async function finishDTP40() {
   }
 
   await DilationTree[`DTP${totalDTP}`].apply();
-  await Action.toggleDilation.execute();
+  await Action.toggleDilation();
   await rev.sleep(1000);
-  await Action.toggleDilation.execute();
+  await Action.toggleDilation();
   await rev.sleep(4000);
 }
 
@@ -303,19 +303,19 @@ async function waitForUnit() {
     for (let i=0; i<unusedDTP; i++)
       for (const extra of DT_EXTRAS)
         if (currentTree[extra.key] < extra.target) {
-          await extra.node.execute();
+          await extra.node();
           unusedDTP--;
           bought = true;
         }
 
     if (bought) {
       start = Date.now();
-      await Action.toggleDilation.execute();
+      await Action.toggleDilation();
       await rev.sleep(5000);
-      await Action.toggleDilation.execute();
+      await Action.toggleDilation();
     } else {
       await rev.sleep(10000);
-      await Action.claimEP.execute();
+      await Action.claimEP();
     }
 
     if (Number(await States.currentEP()) === 0)

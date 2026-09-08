@@ -119,8 +119,8 @@ export class DilationTree {
     const old = rev.read_clipboard();
     rev.write_clipboard(this.string);
     console.log(`Applied DT steps ${this.total} with string: ${this.string}`);
-    await Action.LoadDilationLoadOut.execute();
-    await Action.ApplyDilationLoadOut.execute();
+    await Action.loadDilationLoadOut();
+    await Action.applyDilationLoadOut();
     rev.write_clipboard(old);
   }
 

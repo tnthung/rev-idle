@@ -1,8 +1,14 @@
 
 
-export class Action {
+export class Action extends Function {
   constructor() {
+    super();
     this.steps = [];
+
+    return new Proxy(this, {
+      apply: (target, thisArg, argumentsList) =>
+        target.execute(...argumentsList)
+    });
   }
 
   click(x, y, delayMs=10) {
@@ -128,9 +134,9 @@ export class Action {
   static DilationTreeB3  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_blue[4]/blue_3[3]").chain(this.BuyDilationTree);
   static DilationTreeB4  = new Action().chain(this.DilationTree).invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_tree[1]/ctn_blue[4]/blue_4[4]").chain(this.BuyDilationTree);
 
-  static LoadDilationLoadOut = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/loadout_dtu[15]/content[0]/width_fit[1]/panel[0]/scroll_view[4]/viewport[0]/content[0]/item_dtu_loadout%28Clone%29[0]/content[0]/ctn_actions[2]/btn_import[2]");
+  static loadDilationLoadOut = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/loadout_dtu[15]/content[0]/width_fit[1]/panel[0]/scroll_view[4]/viewport[0]/content[0]/item_dtu_loadout%28Clone%29[0]/content[0]/ctn_actions[2]/btn_import[2]");
 
-  static ApplyDilationLoadOut = new Action()
+  static applyDilationLoadOut = new Action()
     .invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/loadout_dtu[15]/content[0]/width_fit[1]/panel[0]/scroll_view[4]/viewport[0]/content[0]/item_dtu_loadout%28Clone%29[0]/content[0]/ctn_actions[2]/btn_load[1]")
     .invoke("scene:-12/VIEWMANAGER[0]/safe_area[0]/MESSAGES[1]/message%28Clone%29[0]/content[0]/panel[1]/width_limit[0]/height_fit[0]/panel[0]/ctn_buttons[3]/message_btn%28Clone%29[1]");
 
@@ -160,13 +166,13 @@ export class Action {
   }
 
   static async sellZodiac(n) {
-    await this.PlanetShop.execute();
+    await this.PlanetShop();
     await rev.transfer(this.ZODIAC_INV_SLOT(n), this.ZODIAC_SELL_SLOT);
     await rev.invoke(this.ZODIAC_CELL_BUTTON);
   }
 
   static async mergeZodiac(a, b, c) {
-    await this.ZodiacMerge.execute();
+    await this.ZodiacMerge();
     await rev.transfer(this.ZODIAC_INV_SLOT(a), this.ZODIAC_MERGE_SLOT(0));
     await rev.transfer(this.ZODIAC_INV_SLOT(b), this.ZODIAC_MERGE_SLOT(1));
     await rev.transfer(this.ZODIAC_INV_SLOT(c), this.ZODIAC_MERGE_SLOT(2));
