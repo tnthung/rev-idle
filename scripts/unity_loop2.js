@@ -609,11 +609,8 @@ async function waitForUnit() {
     if (bought) {
       start = Date.now();
       await Action.toggleDilation();
-      await rev.sleep(5000);
+      await rev.sleep(1000);
       await Action.toggleDilation();
-    } else {
-      await rev.sleep(10000);
-      await Action.claimEP();
     }
 
     if (Number(await States.currentEP()) === 0)
