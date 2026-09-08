@@ -205,27 +205,19 @@ async function mergeAndSellHardTrialZodiac() {
    */
   const addToBucket = (pos, zodiac) => {
     const rarity = ZodiacRarity[zodiac.rarity];
-
     if (rarity === undefined)
       throw new Error(`Unknown Zodiac rarity: ${zodiac.rarity}`);
 
     if (targetSignSet.has(zodiac.sign)) {
-      getBucket(targetKey(zodiac.sign, rarity)).push({
-        pos,
-        zodiac,
-      });
+      getBucket(targetKey(zodiac.sign, rarity)).push({ pos, zodiac });
       return;
     }
 
     const element = ZodiacElement[zodiac.Element];
-
     if (element === undefined)
       throw new Error(`Unknown Zodiac element: ${zodiac.Element}`);
 
-    getBucket(genericKey(element, rarity)).push({
-      pos,
-      zodiac,
-    });
+    getBucket(genericKey(element, rarity)).push({ pos, zodiac });
   };
 
   /*
@@ -249,9 +241,7 @@ async function mergeAndSellHardTrialZodiac() {
     const result = inventory[resultPos];
 
     if (!result) {
-      console.warn(
-        `Could not find merged zodiac at position ${resultPos}`
-      );
+      console.warn(`Could not find merged zodiac at position ${resultPos}`);
       return;
     }
 
@@ -287,17 +277,13 @@ async function mergeAndSellHardTrialZodiac() {
    * Don't assume the numeric enums are contiguous.
    */
   const elements = [
-    ...new Set(
-      Object.values(ZodiacElement)
-        .filter(value => typeof value === "number")
-    ),
+    ...new Set(Object.values(ZodiacElement)
+      .filter(value => typeof value === "number")),
   ].sort((a, b) => a - b);
 
   const rarities = [
-    ...new Set(
-      Object.values(ZodiacRarity)
-        .filter(value => typeof value === "number")
-    ),
+    ...new Set(Object.values(ZodiacRarity)
+      .filter(value => typeof value === "number")),
   ].sort((a, b) => a - b);
 
   /*
@@ -318,15 +304,10 @@ async function mergeAndSellHardTrialZodiac() {
     if (
       rarity < genericMinRarity ||
       rarity >= ZodiacRarity.Immortal
-    ) {
-      continue;
-    }
+    ) continue;
 
     for (const element of elements) {
-      const bucket = getBucket(
-        genericKey(element, rarity)
-      );
-
+      const bucket = getBucket(genericKey(element, rarity));
       while (bucket.length >= 3) {
         const entries = bucket.splice(0, 3);
         await mergeEntries(entries);
@@ -352,20 +333,15 @@ async function mergeAndSellHardTrialZodiac() {
       if (
         rarity < targetMinRarity ||
         rarity >= ZodiacRarity.Divine
-      ) {
-        continue;
-      }
+      ) continue;
 
-      const bucket = getBucket(
-        targetKey(sign, rarity)
-      );
+      const bucket = getBucket(targetKey(sign, rarity));
 
       /*
        * Merge weaker copies first so that if 1-2 are left over,
        * the stronger current copies survive.
        */
-      bucket.sort((a, b) =>
-        scoreOf(a) - scoreOf(b)
+      bucket.sort((a, b) => scoreOf(a) - scoreOf(b)
       );
 
       while (bucket.length >= 3) {
@@ -388,31 +364,19 @@ async function mergeAndSellHardTrialZodiac() {
      * so the total number of Divine+ copies decreases by 2.
      * -----------------------------------------------------------
      */
-    const divineBucket = getBucket(
-      targetKey(sign, ZodiacRarity.Divine)
-    );
-
-    const immortalBucket = getBucket(
-      targetKey(sign, ZodiacRarity.Immortal)
-    );
+    const divineBucket = getBucket(targetKey(sign, ZodiacRarity.Divine));
+    const immortalBucket = getBucket(targetKey(sign, ZodiacRarity.Immortal));
 
     /*
      * Keep the strongest Divine copies when possible.
      */
-    divineBucket.sort((a, b) =>
-      scoreOf(a) - scoreOf(b)
-    );
+    divineBucket.sort((a, b) => scoreOf(a) - scoreOf(b));
 
     while (
       divineBucket.length >= 3 &&
-      divineBucket.length +
-        immortalBucket.length -
-        2 >=
-        preserveDivinePlusPerTarget
+      divineBucket.length + immortalBucket.length - 2 >= preserveDivinePlusPerTarget
     ) {
-      const entries = divineBucket.splice(0, 3);
-
-      await mergeEntries(entries);
+      await mergeEntries(divineBucket.splice(0, 3));
 
       /*
        * mergeEntries() will normally add the resulting Immortal
