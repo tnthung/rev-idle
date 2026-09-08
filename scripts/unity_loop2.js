@@ -23,6 +23,7 @@ let eternityBootstrapped = false;
 let first9ECCompleted = false;
 let allECCompleted = false;
 let finish40DTP = false;
+let executionConfig = {};
 
 export default async function main() {
   // local initialization
@@ -62,6 +63,7 @@ export default async function main() {
     rev.global.pauseDuration = 0;
     rev.global.pauseStart = null;
     rev.global.unityStart = null;
+    executionConfig = (await import("./unity_loop2_config.js")).default;
     eternityBootstrapped = false;
     first9ECCompleted = false;
     allECCompleted = false;
@@ -147,13 +149,14 @@ async function mergeAndSellZodiac(minPreserveZodiacRarity) {
 }
 
 
-async function mergeAndSellHardTrialZodiac(args = {}) {
+async function mergeAndSellHardTrialZodiac() {
   const {
-    targetSigns = ["Aquarius", "Libra"],
-    targetMinRarity = ZodiacRarity.Epic,
-    genericMinRarity = ZodiacRarity.Legendary,
-    preserveDivinePlusPerTarget = 4,
-  } = args;
+    targetSigns,
+    targetMinRarity,
+    genericMinRarity,
+    preserveDivinePlusPerTarget,
+    minZodiacLevel,
+  } = executionConfig;
 
   console.log("Starting HT zodiac merge/sell...");
 
@@ -271,7 +274,7 @@ async function mergeAndSellHardTrialZodiac(args = {}) {
       ? targetMinRarity
       : genericMinRarity;
 
-    if (rarity < minRarity) {
+    if (rarity < minRarity || zodiac.level < minZodiacLevel) {
       await Action.sellZodiac(pos);
       sellCount++;
       continue;
