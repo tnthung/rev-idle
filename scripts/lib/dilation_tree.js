@@ -189,13 +189,13 @@ export const DT_STAGES = [
 
 
 export const DT_EXTRAS = [
-  { key: "t3", target: 5, node: Action.DilationTreeT3 },
-  { key: "m2", target: 5, node: Action.DilationTreeM2 },
-  { key: "b3", target: 5, node: Action.DilationTreeB3 },
-  { key: "t2", target: 5, node: Action.DilationTreeT2 },
-  { key: "b1", target: 5, node: Action.DilationTreeB1 },
-  { key: "b2", target: 5, node: Action.DilationTreeB2 },
-  { key: "t1", target: 5, node: Action.DilationTreeT1 },
-  { key: "c",  target: 5, node: Action.DilationTreeC  },
-  { key: "m1", target: 5, node: Action.DilationTreeM1 },
+  { key: "t3", target: 5, node: Action.selectDilationTreeT3 },
+  { key: "m2", target: 5, node: Action.selectDilationTreeM2 },
+  { key: "b3", target: 5, node: Action.selectDilationTreeB3 },
+  { key: "t2", target: 5, node: Action.selectDilationTreeT2 },
+  { key: "b1", target: 5, node: Action.selectDilationTreeB1 },
+  { key: "b2", target: 5, node: Action.selectDilationTreeB2 },
+  { key: "t1", target: 5, node: Action.selectDilationTreeT1 },
+  { key: "c",  target: 5, node: Action.selectDilationTreeC  },
+  { key: "m1", target: 5, node: Action.selectDilationTreeM1 },
 ];

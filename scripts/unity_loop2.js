@@ -37,14 +37,14 @@ export default async function main() {
   // global initialization
   if (!rev.global.initialized) {
     for (const page of [
-      Action.UnityTrial,
-      Action.ZodiacMerge,
-      Action.ZodiacEnhance,
-      Action.ZodiacReforge,
-      Action.DilationTree,
-      Action.Dilation,
-      Action.EternityChallenge,
-      Action.Revolution,
+      Action.gotoUnityTrial,
+      Action.gotoZodiacMerge,
+      Action.gotoZodiacEnhance,
+      Action.gotoZodiacReforge,
+      Action.gotoDilationTree,
+      Action.gotoDilation,
+      Action.gotoEternityChallenge,
+      Action.gotoRevolution,
     ]) {
       await page().catch(_ => {});
       await rev.sleep(200);
@@ -442,7 +442,7 @@ async function completeFirst9EC() {
       if (ec.completeDiff >= 5) break;
 
       if (!ec.inChallenge) {
-        await Action[`EternityChallenge${c+1}`]();
+        await Action[`selectEternityChallenge${c+1}`]();
         await Action.toggleEternityChallenge();
       }
 
@@ -496,7 +496,7 @@ async function complete10thEC() {
     if (ec10.completeDiff >= 5) break;
 
     if (!ec10.inChallenge) {
-      await Action.EternityChallenge10();
+      await Action.selectEternityChallenge10();
       await Action.toggleEternityChallenge();
     }
 
