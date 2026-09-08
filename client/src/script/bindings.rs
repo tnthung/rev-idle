@@ -13,7 +13,7 @@ use rquickjs::{
 };
 use std::{
     cell::{Cell, RefCell},
-    io::{self, Write},
+    io,
     rc::Rc,
     time::Duration,
 };
@@ -181,13 +181,6 @@ pub(super) fn create_rev<'js>(
     stop_request: Rc<Cell<bool>>,
 ) -> rquickjs::Result<Object<'js>> {
     let rev = Object::new(ctx.clone())?;
-    rev.set(
-        "clear",
-        Function::new(ctx.clone(), || {
-            print!("\x1B[2J\x1B[H");
-            io::stdout().flush().map_err(|error| host_error(error.to_string()))
-        })?,
-    )?;
     rev.set(
         "read_file",
         Function::new(ctx.clone(), |ctx: Ctx<'js>, path: String| {

@@ -19,6 +19,7 @@ use rquickjs::{
 };
 use std::{
     cell::Cell,
+    io::{self, Write},
     rc::Rc,
 };
 #[cfg(test)]
@@ -131,6 +132,15 @@ impl ScriptSession {
                         Function::new(ctx.clone(), move |args: Rest<Value>| {
                             eprintln!("{}", format_console_message(args)?);
                             Ok::<(), rquickjs::Error>(())
+                        })?,
+                    )?;
+                    console.set(
+                        "clear",
+                        Function::new(ctx.clone(), || {
+                            print!("\x1B[2J\x1B[H");
+                            io::stdout().flush().map_err(|error| {
+                                Error::new_from_js_message("console", "JavaScript", error.to_string())
+                            })
                         })?,
                     )?;
                     ctx.globals().set("console", console)?;
