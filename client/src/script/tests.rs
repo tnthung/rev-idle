@@ -122,6 +122,33 @@ fn recording_controls() -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rev_file_io_reads_missing_files_and_overwrites_text() {
+    let path = std::env::temp_dir().join(format!("rev_file_io_{}.txt", std::process::id()));
+    let session = ScriptSession::new(&format!(r#"export default (() => {{
+        const path = {};
+        if (rev.read_file(path) !== null) throw new Error("missing file must be null");
+        rev.write_file(path, "hello 世界\n");
+        if (rev.read_file(path) !== "hello 世界\n") throw new Error("text did not round trip");
+        rev.write_file(path, "");
+        if (rev.read_file(path) !== "") throw new Error("file was not truncated");
+        let errors = 0;
+        try {{ rev.read_file({}); }} catch (_) {{ errors++; }}
+        try {{ rev.write_file({}, "text"); }} catch (_) {{ errors++; }}
+        if (errors !== 2) throw new Error("file errors must throw");
+    }})"#,
+        serde_json::to_string(&path).unwrap(),
+        serde_json::to_string(&std::env::current_dir().unwrap()).unwrap(),
+        serde_json::to_string(&std::env::current_dir().unwrap()).unwrap(),
+    )).await.unwrap();
+    let (controls, _) = recording_controls();
+    let result = session.invoke(State::default(), controls).await;
+    if path.exists() {
+        std::fs::remove_file(&path).unwrap();
+    }
+    result.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn resize_and_click_sends_one_event_without_window_work() {
     let session = ScriptSession::new(r#"export default (() => { rev.resize(1280, 720); rev.click(10, 20, "right"); })"#).await.unwrap();
     let (controls, events) = recording_controls();

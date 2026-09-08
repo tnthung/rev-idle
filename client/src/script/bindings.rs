@@ -13,6 +13,7 @@ use rquickjs::{
 };
 use std::{
     cell::{Cell, RefCell},
+    io::{self, Write},
     rc::Rc,
     time::Duration,
 };
@@ -180,6 +181,29 @@ pub(super) fn create_rev<'js>(
     stop_request: Rc<Cell<bool>>,
 ) -> rquickjs::Result<Object<'js>> {
     let rev = Object::new(ctx.clone())?;
+    rev.set(
+        "clear",
+        Function::new(ctx.clone(), || {
+            print!("\x1B[2J\x1B[H");
+            io::stdout().flush().map_err(|error| host_error(error.to_string()))
+        })?,
+    )?;
+    rev.set(
+        "read_file",
+        Function::new(ctx.clone(), |ctx: Ctx<'js>, path: String| {
+            match std::fs::read_to_string(&path) {
+                Ok(content) => rquickjs::String::from_str(ctx, &content).map(|value| value.into_value()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Value::new_null(ctx)),
+                Err(error) => Err(host_error(error.to_string())),
+            }
+        })?,
+    )?;
+    rev.set(
+        "write_file",
+        Function::new(ctx.clone(), |path: String, content: String| {
+            std::fs::write(path, content).map_err(|error| host_error(error.to_string()))
+        })?,
+    )?;
     let state_client = client.clone();
     let state_raw = Function::new(
         ctx.clone(),

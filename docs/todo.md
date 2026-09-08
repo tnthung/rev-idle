@@ -4,5 +4,8 @@
       coordinates and the UI element raycast-ed onto.
 - [x] Slot transferring without dragging.
 - [x] In capture mode, when click on an element having path, write to clipboard.
+- [x] `rev.clear()` for clearing the console.
+- [x] `rev.read_file(path)` for reading the contents of a file, `null` if not exists.
+- [x] `rev.write_file(path, content)` for writing contents to a file.
 - [ ] In-game UI injection.
 - [ ] Port changing and Auto-port detection.
