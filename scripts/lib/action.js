@@ -90,6 +90,9 @@ export class Action extends Function {
 
 
   static dismiss = new Action().wait(100).invoke("scene:-12/VIEWMANAGER[0]/safe_area[0]/NOTIFY[3]/notify_default%28Clone%29[0]/btn_close[1]");
+  static async dismissLoop() {
+    while (true) await Action.dismiss().catch(_ => {});
+  }
 
 
   static Revolution = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_main[1]");

@@ -28,6 +28,7 @@ export default async function main() {
   // local initialization
   if (!initialized) {
     rev.resize(1270, 600);
+    Action.dismissLoop();
     initialized = true;
   }
 
