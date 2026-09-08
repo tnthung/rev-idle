@@ -452,7 +452,7 @@ async function completeFirst9EC() {
         await Action.toggleEternityChallenge();
       }
 
-      await wait_for(async () => !(await States.eternalChallenge(c)).inChallenge, 50, 750);
+      await wait_for(async () => !(await States.eternalChallenge(c)).inChallenge, 50, 1000);
 
       if ((await States.eternalChallenge(c)).inChallenge) {
         await Action.toggleEternityChallenge();
