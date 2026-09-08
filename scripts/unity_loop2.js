@@ -591,20 +591,19 @@ async function finishDTP40() {
 async function waitForUnit() {
   let start = Date.now();
   while ((Date.now() - start) < 6000) {
-    const currentTree = await DilationTree.current();
-
     let bought = false;
     while (true) {
       let unusedDTP = await States.unusedDTP();
       if (!unusedDTP) break;
 
-      for (const extra of DT_EXTRAS) {
-        if (currentTree[extra.key] < extra.target) {
-          await extra.node();
-          bought = true;
-          if (!--unusedDTP) break;
-        }
-      }
+      const currentTree = await DilationTree.current();
+      for (let i=0; i<unusedDTP; i++)
+        for (const extra of DT_EXTRAS)
+          if (currentTree[extra.key]++ < extra.target) {
+            await extra.node();
+            bought = true;
+            break;
+          }
     }
 
     if (bought) {

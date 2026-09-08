@@ -194,4 +194,8 @@ export const DT_EXTRAS = [
   { key: "b3", target: 5, node: Action.DilationTreeB3 },
   { key: "t2", target: 5, node: Action.DilationTreeT2 },
   { key: "b1", target: 5, node: Action.DilationTreeB1 },
+  { key: "b2", target: 5, node: Action.DilationTreeB2 },
+  { key: "t1", target: 5, node: Action.DilationTreeT1 },
+  { key: "c",  target: 5, node: Action.DilationTreeC  },
+  { key: "m1", target: 5, node: Action.DilationTreeM1 },
 ];
