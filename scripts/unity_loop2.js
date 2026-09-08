@@ -297,16 +297,18 @@ async function waitForUnit() {
   let start = Date.now();
   while ((Date.now() - start) < 6000) {
     const currentTree = await DilationTree.current();
-    const unusedDTP   = await States.unusedDTP();
 
+    let unusedDTP = await States.unusedDTP();
+    let bought = false;
     for (let i=0; i<unusedDTP; i++)
       for (const extra of DT_EXTRAS)
         if (currentTree[extra.key] < extra.target) {
           await extra.node.execute();
-          // break;
+          unusedDTP--;
+          bought = true;
         }
 
-    if (unusedDTP !== 0) {
+    if (bought) {
       start = Date.now();
       await Action.toggleDilation.execute();
       await rev.sleep(5000);
