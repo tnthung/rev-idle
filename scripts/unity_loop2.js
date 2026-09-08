@@ -269,10 +269,10 @@ async function mergeAndSellHardTrialZodiac() {
     if (rarity === undefined)
       throw new Error(`Unknown Zodiac rarity: ${zodiac.rarity}`);
 
-    const isTarget = targetSignSet.has(zodiac.sign);
-    const minRarity = isTarget
-      ? targetMinRarity
-      : genericMinRarity;
+    const minRarity = ZodiacRarity[
+      targetSignSet.has(zodiac.sign)
+        ? targetMinRarity
+        : genericMinRarity];
 
     if (rarity < minRarity || zodiac.level < minZodiacLevel) {
       await Action.sellZodiac(pos);
