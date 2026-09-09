@@ -214,6 +214,7 @@ internal sealed class WsConnection : IDisposable
             }
             Task task = RunHandler(work);
             TrackTask(task);
+            return;
         }
     }
 

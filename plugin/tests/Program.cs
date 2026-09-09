@@ -52,6 +52,7 @@ await WsDisconnectedCallsFailImmediately();
 await WsRequestCorrelatesResponseByUuidAndType();
 await WsConcurrentSendsShareOneWriter();
 await WsHandlersStartWithoutWaitingForEarlierHandlers();
+await WsPumpStartsAtMostOneQueuedHandlerPerCall();
 await WsResponseTypeMismatchFailsRequest();
 await WsRemoteErrorFailsRequest();
 await WsTimeoutSendsCancelAndDropsLateResponse();
@@ -77,7 +78,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("80 tests passed.");
+System.Console.WriteLine("81 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -469,6 +470,38 @@ static async Task WsHandlersStartWithoutWaitingForEarlierHandlers()
         using JsonDocument responseDocument = JsonDocument.Parse(await ReceiveText(peer));
         Equal(secondUuid, responseDocument.RootElement.GetProperty("uuid").GetGuid(), nameof(WsHandlersStartWithoutWaitingForEarlierHandlers));
         releaseFirst.TrySetResult(true);
+    }
+}
+
+static async Task WsPumpStartsAtMostOneQueuedHandlerPerCall()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int registered = 0;
+    int handled = 0;
+    TaskCompletionSource<bool> bothRegistered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.LifecycleSynchronizationForTest = stage =>
+    {
+        if (stage == "inbound-registered" && Interlocked.Increment(ref registered) == 2)
+            bothRegistered.TrySetResult(true);
+    };
+    server.Handler<TestReq>((context, packet) =>
+    {
+        Interlocked.Increment(ref handled);
+        return Task.CompletedTask;
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        await SendText(peer, WsConnection.SerializeForTest(Guid.NewGuid(), new TestReq("first")));
+        await SendText(peer, WsConnection.SerializeForTest(Guid.NewGuid(), new TestReq("second")));
+        await bothRegistered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        server.Pump();
+        Equal(1, Volatile.Read(ref handled), nameof(WsPumpStartsAtMostOneQueuedHandlerPerCall));
+
+        server.Pump();
+        Equal(2, Volatile.Read(ref handled), nameof(WsPumpStartsAtMostOneQueuedHandlerPerCall));
     }
 }
 
