@@ -23,7 +23,7 @@ let eternityBootstrapped = false;
 let first9ECCompleted = false;
 let allECCompleted = false;
 let finish40DTP = false;
-let executionConfig = {};
+let executionConfig = await import("./unity_loop2_config.js").then(m => m.default);
 
 export default async function main() {
   // local initialization
@@ -396,7 +396,9 @@ async function completeFirst9EC() {
         await Action.toggleEternityChallenge();
       }
 
-      await wait_for(async () => !(await States.eternalChallenge(c)).inChallenge, 50, 1000);
+      await wait_for(
+        async () => !(await States.eternalChallenge(c)).inChallenge,
+        50, executionConfig.ECWaitTime);
 
       if ((await States.eternalChallenge(c)).inChallenge) {
         await Action.toggleEternityChallenge();
@@ -508,6 +510,11 @@ async function finishDTP40() {
 async function waitForUnit() {
   let start = Date.now();
   while ((Date.now() - start) < 6000) {
+    if (executionConfig.stopAfterSpentAllDTP && Number(await States.spentDTP()) === 65) {
+      rev.stop();
+      return;
+    }
+
     let bought = false;
     while (true) {
       let unusedDTP = await States.unusedDTP();

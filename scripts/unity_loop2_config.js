@@ -1,9 +1,17 @@
+import { ZodiacRarity, ZodiacSign } from "./lib/states";
 
 
 export default {
-  targetSigns: ["Aries", "Leo", "Sagittarius"],
-  targetMinRarity: "Legendary",
-  genericMinRarity: "Mythic",
-  preserveDivinePlusPerTarget: 5,
-  minZodiacLevel: 50,
+  // targetSigns: [ZodiacSign._Leo, ZodiacSign._Sagittarius, ZodiacSign._Aries],
+  // targetSigns: [ZodiacSign._Libra, ZodiacSign._Aquarius],
+  targetSigns: [ZodiacSign._Pisces, ZodiacSign._Scorpio, ZodiacSign._Cancer],
+  targetMinRarity: ZodiacRarity._Mythic,
+  genericMinRarity: ZodiacRarity._Mythic,
+  preserveDivinePlusPerTarget: 2,
+  minZodiacLevel: 60,
+
+  ECWaitTime: 3000,
+
+  // Stop after spent all 65 DTP.
+  stopAfterSpentAllDTP: true,
 };
