@@ -6,6 +6,7 @@ pub(crate) use pause::{ActionGate, PauseUpdate};
 
 use std::{
     io,
+    net::SocketAddr,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -122,9 +123,13 @@ pub(crate) async fn run() -> io::Result<()> {
     let hotkey = crate::hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx)
         .map_err(io::Error::other)?;
     let capture = crate::capture::CaptureWorker::start(client.clone()).map_err(io::Error::other)?;
+    let connection = crate::bridge::WsConnection::connect(SocketAddr::from((
+        [127, 0, 0, 1],
+        19841,
+    )));
     let local = LocalSet::new();
 
-    local
+    let result = local
         .run_until(async move {
             let mut tasks = JoinSet::new();
             let console_shutdown = shutdown_rx.clone();
@@ -186,5 +191,7 @@ pub(crate) async fn run() -> io::Result<()> {
                 )),
             }
         })
-        .await
+        .await;
+    connection.shutdown().await;
+    result
 }
