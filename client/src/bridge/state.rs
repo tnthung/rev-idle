@@ -61,8 +61,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            request.await.unwrap().unwrap(),
-            r#"{"score":"1e3","enabled":true,"nested":{"value":null},"items":[1,"two",false]}"#,
+            serde_json::from_str::<Value>(&request.await.unwrap().unwrap()).unwrap(),
+            json!({
+                "score": "1e3",
+                "enabled": true,
+                "nested": { "value": null },
+                "items": [1, "two", false],
+            }),
         );
         connection.shutdown().await;
     }

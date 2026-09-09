@@ -6,6 +6,7 @@ use super::{
 use super::State;
 use crate::{
     app::{ActionGate, PauseUpdate, ScriptCommand},
+    bridge::WsConnection,
     capture::CaptureState,
     window::Win32WindowControl,
 };
@@ -21,12 +22,12 @@ use std::{
 };
 use tokio::sync::{mpsc, watch};
 
-async fn load_path(path: &Path, client: reqwest::Client) -> Result<ScriptSession, String> {
+async fn load_path(path: &Path, connection: WsConnection) -> Result<ScriptSession, String> {
     let source = tokio::fs::read_to_string(path)
         .await
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
 
-    ScriptSession::new_with_client(&source, &path.to_string_lossy(), client)
+    ScriptSession::new_with_connection(&source, &path.to_string_lossy(), connection)
         .await
         .map_err(|error| format!("failed to load {}: {error}", path.display()))
 }
@@ -34,7 +35,7 @@ async fn load_path(path: &Path, client: reqwest::Client) -> Result<ScriptSession
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run(
     commands: mpsc::Receiver<ScriptCommand>,
-    client: reqwest::Client,
+    connection: WsConnection,
     hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
     actions_paused: ActionGate,
@@ -47,7 +48,7 @@ pub(crate) async fn run(
 
     run_with_controls_and_lifecycle(
         commands,
-        client,
+        connection,
         hotkey_pauses,
         initial_path,
         HostControls { mouse, window: Rc::new(Win32WindowControl), actions_paused },
@@ -75,7 +76,7 @@ pub(super) async fn run_with_controls(
     let capture_state = CaptureState::default();
     run_with_controls_and_lifecycle(
         commands,
-        reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(2)).build().map_err(|error| error.to_string())?,
+        WsConnection::disconnected_for_test(),
         hotkey_pauses,
         initial_path,
         controls,
@@ -91,7 +92,7 @@ pub(super) async fn run_with_controls(
 #[allow(clippy::too_many_arguments)]
 async fn run_with_controls_and_lifecycle(
     mut commands: mpsc::Receiver<ScriptCommand>,
-    client: reqwest::Client,
+    connection: WsConnection,
     mut hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
     controls: HostControls,
@@ -103,7 +104,7 @@ async fn run_with_controls_and_lifecycle(
 ) -> Result<(), String> {
     let mut current_path = initial_path;
     let mut session = match current_path.as_deref() {
-        Some(path) => match load_path(path, client.clone()).await {
+        Some(path) => match load_path(path, connection.clone()).await {
             Ok(session) => {
                 println!("running {}", path.display());
                 Some(session)
@@ -218,7 +219,7 @@ async fn run_with_controls_and_lifecycle(
                     paused = false;
                     current_path = Some(path);
                     if let Some(path) = current_path.as_deref() {
-                        match load_path(path, client.clone()).await {
+                        match load_path(path, connection.clone()).await {
                             Ok(loaded) => {
                                 session = Some(loaded);
                                 script_running.store(true, Ordering::Release);
@@ -235,7 +236,7 @@ async fn run_with_controls_and_lifecycle(
                     script_running.store(false, Ordering::Release);
                     paused = false;
                     if let Some(path) = current_path.as_deref() {
-                        match load_path(path, client.clone()).await {
+                        match load_path(path, connection.clone()).await {
                             Ok(loaded) => {
                                 session = Some(loaded);
                                 script_running.store(true, Ordering::Release);

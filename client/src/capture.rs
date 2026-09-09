@@ -15,7 +15,7 @@ use windows::Win32::{
     },
 };
 
-use crate::window;
+use crate::{bridge::WsConnection, window};
 
 static CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
 static CAPTURE_LEFT_BUTTON_DOWN: AtomicBool = AtomicBool::new(false);
@@ -81,10 +81,10 @@ fn post_quit(thread_id: u32) -> Result<(), String> {
         .map_err(|error| format!("PostThreadMessageW failed: {error}"))
 }
 
-async fn describe_capture(client: &reqwest::Client, x: i32, y: i32, write_clipboard: impl FnOnce(&str) -> Result<(), String>) -> String {
+async fn describe_capture(connection: &WsConnection, x: i32, y: i32, write_clipboard: impl FnOnce(&str) -> Result<(), String>) -> String {
     use crate::bridge::CaptureTarget;
 
-    match crate::bridge::request_capture(client, x, y).await {
+    match crate::bridge::request_capture(connection, x, y).await {
         Ok(CaptureTarget { target_type: Some(target_type), path: Some(path) })
             if target_type == "button" || target_type == "slot" => {
             if let Err(error) = write_clipboard(&path) {
@@ -97,7 +97,7 @@ async fn describe_capture(client: &reqwest::Client, x: i32, y: i32, write_clipbo
     }
 }
 
-fn run_capture_loop(hook: HHOOK, client: reqwest::Client, runtime: tokio::runtime::Handle) -> Result<(), String> {
+fn run_capture_loop(hook: HHOOK, connection: WsConnection, runtime: tokio::runtime::Handle) -> Result<(), String> {
     let mut result = Ok(());
     loop {
         let mut message = MSG::default();
@@ -120,9 +120,9 @@ fn run_capture_loop(hook: HHOOK, client: reqwest::Client, runtime: tokio::runtim
                 .ok()
                 .flatten()
             {
-                let client = client.clone();
+                let connection = connection.clone();
                 runtime.spawn(async move {
-                    println!("{}", describe_capture(&client, x, y, |path| {
+                    println!("{}", describe_capture(&connection, x, y, |path| {
                         window::WindowControl::write_clipboard(&window::Win32WindowControl, path)
                     }).await);
                 });
@@ -155,7 +155,7 @@ pub(crate) struct CaptureWorker {
 }
 
 impl CaptureWorker {
-    pub(crate) fn start(client: reqwest::Client) -> Result<Self, String> {
+    pub(crate) fn start(connection: WsConnection) -> Result<Self, String> {
         let (startup_tx, startup_rx) = std_mpsc::channel();
         let runtime = tokio::runtime::Handle::current();
         let handle = thread::spawn(move || {
@@ -181,7 +181,7 @@ impl CaptureWorker {
                     return Err(error);
                 }
             };
-            let result = run_capture_loop(hook, client, runtime);
+            let result = run_capture_loop(hook, connection, runtime);
             CAPTURE_THREAD_ID.store(0, Ordering::Release);
             result
         });
@@ -257,40 +257,65 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn capture_description_includes_target_and_preserves_coordinates_on_failure() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn describe_capture() {
+        use crate::bridge::{test_support::raw_server, WsConnection};
+        use futures_util::{SinkExt, StreamExt};
+        use serde_json::{json, Value};
+        use std::{cell::RefCell, rc::Rc};
+        use tokio_tungstenite::tungstenite::Message;
 
-        for (status, body, expected, copied_path) in [
-            ("200 OK", r#"{"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}"#, "click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"", Some("scene:1/Canvas[0]/Buy DTP")),
-            ("200 OK", r#"{"type":"slot","path":"scene:1/Canvas[0]/Slot"}"#, "click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\"", Some("scene:1/Canvas[0]/Slot")),
-            ("200 OK", r#"{"type":null,"path":null}"#, "click: 123, 456", None),
-            ("503 Service Unavailable", r#"{"error":"no EventSystem"}"#, "click: 123, 456; lookup failed: 503 Service Unavailable: {\"error\":\"no EventSystem\"}", None),
+        for (response_type, payload, expected, copied_path) in [
+            ("CaptureRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}), "click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"", Some("scene:1/Canvas[0]/Buy DTP")),
+            ("CaptureRes", json!({"type":"slot","path":"scene:1/Canvas[0]/Slot"}), "click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\"", Some("scene:1/Canvas[0]/Slot")),
+            ("CaptureRes", json!({"type":null,"path":null}), "click: 123, 456", None),
+            ("RemoteError", json!({"message":"no EventSystem"}), "click: 123, 456; lookup failed: Remote(\"no EventSystem\")", None),
         ] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let client = reqwest::Client::builder()
-                .proxy(reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap())
-                .timeout(Duration::from_secs(2))
-                .build()
+            let (address, peer_rx) = raw_server().await;
+            let connection = WsConnection::connect_for_test(
+                address,
+                Duration::from_millis(20),
+                Duration::from_secs(1),
+            );
+            let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+                .await
+                .unwrap()
                 .unwrap();
-            let server = tokio::spawn(async move {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let mut request = vec![0; 4096];
-                let length = stream.read(&mut request).await.unwrap();
-                stream.write_all(format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len(),
-                ).as_bytes()).await.unwrap();
-                String::from_utf8(request[..length].to_vec()).unwrap()
-            });
-            let mut copied = None;
-            let description = describe_capture(&client, 123, 456, |path| {
-                copied = Some(path.to_owned());
+            let copied = Rc::new(RefCell::new(None));
+            let copied_for_callback = copied.clone();
+            let description = super::describe_capture(&connection, 123, 456, |path| {
+                *copied_for_callback.borrow_mut() = Some(path.to_owned());
                 Ok(())
-            }).await;
-            assert_eq!(description, expected);
-            assert_eq!(copied.as_deref(), copied_path);
-            assert_eq!(server.await.unwrap().lines().next().unwrap(),
-                "GET http://127.0.0.1:19841/capture?x=123&y=456 HTTP/1.1");
+            });
+            tokio::pin!(description);
+            let message = tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    tokio::select! {
+                        result = &mut description => panic!("capture completed before bridge response: {result}"),
+                        message = peer.next() => break message.unwrap().unwrap(),
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+            assert_eq!(request.get("type"), Some(&json!("CaptureReq")));
+            assert_eq!(request.get("payload"), Some(&json!({ "x": 123, "y": 456 })));
+            peer.send(Message::Text(
+                json!({
+                    "uuid": request["uuid"],
+                    "type": response_type,
+                    "payload": payload,
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+            let description_result = description.as_mut().await;
+            drop(description);
+            assert_eq!(description_result, expected);
+            assert_eq!(copied.borrow().as_deref(), copied_path);
+            connection.shutdown().await;
         }
     }
 

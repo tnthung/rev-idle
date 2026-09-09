@@ -158,26 +158,22 @@ async fn resize_and_click_sends_one_event_without_window_work() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn rev_state_parses_mixed_json_and_freezes_only_top_level() {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
+    use crate::bridge::{test_support::raw_server, WsConnection};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
 
-    let _guard = crate::bridge::TEST_SERVER_LOCK.lock().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:19841").unwrap();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0; 4096];
-        let length = stream.read(&mut request).unwrap();
-        let request = String::from_utf8_lossy(&request[..length]);
-        assert_eq!(request.lines().next().unwrap(), "GET /state?key=score&key=items HTTP/1.1");
-        let body = r#"{"score":42,"items":[1,{"ok":true},null]}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(response.as_bytes()).unwrap();
-    });
-    let session = ScriptSession::new(
+    let (address, peer_rx) = raw_server().await;
+    let connection = WsConnection::connect_for_test(
+        address,
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+    );
+    let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let session = ScriptSession::new_with_connection(
         r#"export default (async () => {
             const state = await rev.state("score", "items");
             if (!Object.isFrozen(state)) throw new Error("state is not frozen");
@@ -187,50 +183,104 @@ async fn rev_state_parses_mixed_json_and_freezes_only_top_level() {
             if (Object.keys(state).length !== 2) throw new Error("selected keys were lost");
             if (Object.isFrozen(state.items) || Object.isFrozen(state.items[1])) throw new Error("nested state was frozen");
         })"#,
+        "state-test.js",
+        connection.clone(),
     )
     .await
     .unwrap();
     let (controls, _) = recording_controls();
-
-    session.invoke(State::default(), controls).await.unwrap();
-    server.join().unwrap();
+    let invocation = session.invoke(State::default(), controls);
+    tokio::pin!(invocation);
+    let message = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            tokio::select! {
+                result = &mut invocation => panic!("state invocation completed before bridge response: {result:?}"),
+                message = peer.next() => break message.unwrap().unwrap(),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+    assert_eq!(request.get("type"), Some(&json!("StateReq")));
+    assert_eq!(
+        request.get("payload"),
+        Some(&json!({ "keys": ["score", "items"] })),
+    );
+    peer.send(Message::Text(
+        json!({
+            "uuid": request["uuid"],
+            "type": "StateRes",
+            "payload": { "value": { "score": 42, "items": [1, { "ok": true }, null] } },
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    invocation.await.unwrap();
+    connection.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn rev_invoke_sends_button_path_and_reports_plugin_errors() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use crate::bridge::{test_support::raw_server, WsConnection};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
 
-    for (status, body) in [("200 OK", "{}"), ("409 Conflict", r#"{"error":"path lookup failed"}"#)] {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let client = reqwest::Client::builder()
-            .proxy(reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap())
-            .timeout(Duration::from_secs(2))
-            .build()
+    for (response_type, payload, expect_error) in [
+        ("InvokeRes", json!({}), false),
+        ("RemoteError", json!({ "message": "path lookup failed" }), true),
+    ] {
+        let (address, peer_rx) = raw_server().await;
+        let connection = WsConnection::connect_for_test(
+            address,
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+        );
+        let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+            .await
+            .unwrap()
             .unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = vec![0; 4096];
-            let length = stream.read(&mut request).await.unwrap();
-            stream.write_all(format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len(),
-            ).as_bytes()).await.unwrap();
-            String::from_utf8(request[..length].to_vec()).unwrap()
-        });
-        let session = ScriptSession::new_with_client(
+        let session = ScriptSession::new_with_connection(
             r#"export default (async () => await rev.invoke("Canvas/Buy DTP & More"))"#,
             "invoke-test.js",
-            client,
+            connection.clone(),
         ).await.unwrap();
         let (controls, _) = recording_controls();
-        let result = session.invoke(State::default(), controls).await;
-        if status == "200 OK" {
-            result.unwrap();
-        } else {
+        let invocation = session.invoke(State::default(), controls);
+        tokio::pin!(invocation);
+        let message = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                tokio::select! {
+                    result = &mut invocation => panic!("invoke completed before bridge response: {result:?}"),
+                    message = peer.next() => break message.unwrap().unwrap(),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+        assert_eq!(request.get("type"), Some(&json!("InvokeReq")));
+        assert_eq!(
+            request.get("payload"),
+            Some(&json!({ "path": "Canvas/Buy DTP & More" })),
+        );
+        peer.send(Message::Text(
+            json!({ "uuid": request["uuid"], "type": response_type, "payload": payload })
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let result = invocation.await;
+        if expect_error {
             assert!(result.unwrap_err().contains("path lookup failed"));
+        } else {
+            result.unwrap();
         }
-        assert_eq!(server.await.unwrap().lines().next().unwrap(),
-            "POST http://127.0.0.1:19841/invoke?path=Canvas%2FBuy+DTP+%26+More HTTP/1.1");
+        connection.shutdown().await;
     }
 }
 
@@ -248,72 +298,122 @@ async fn rev_invoke_skips_paused_actions_and_rejects_empty_paths() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn rev_transfer_sends_source_and_destination_paths() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use crate::bridge::{test_support::raw_server, WsConnection};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let client = reqwest::Client::builder()
-        .proxy(reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap())
-        .timeout(Duration::from_secs(2))
-        .build()
+    let (address, peer_rx) = raw_server().await;
+    let connection = WsConnection::connect_for_test(
+        address,
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+    );
+    let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+        .await
+        .unwrap()
         .unwrap();
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut request = vec![0; 4096];
-        let length = stream.read(&mut request).await.unwrap();
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await.unwrap();
-        String::from_utf8(request[..length].to_vec()).unwrap()
-    });
-    let session = ScriptSession::new_with_client(
+    let session = ScriptSession::new_with_connection(
         r#"export default (async () => await rev.transfer("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0"))"#,
         "transfer-test.js",
-        client,
+        connection.clone(),
     ).await.unwrap();
     let (controls, _) = recording_controls();
-    session.invoke(State::default(), controls).await.unwrap();
-    assert_eq!(server.await.unwrap().lines().next().unwrap(),
-        "POST http://127.0.0.1:19841/transfer?source=scene%3A1%2FCanvas%5B0%5D%2FInventory%2F3&destination=scene%3A1%2FCanvas%5B0%5D%2FCombine%2F0 HTTP/1.1");
+    let invocation = session.invoke(State::default(), controls);
+    tokio::pin!(invocation);
+    let message = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            tokio::select! {
+                result = &mut invocation => panic!("transfer completed before bridge response: {result:?}"),
+                message = peer.next() => break message.unwrap().unwrap(),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+    assert_eq!(request.get("type"), Some(&json!("TransferReq")));
+    assert_eq!(
+        request.get("payload"),
+        Some(&json!({
+            "source": "scene:1/Canvas[0]/Inventory/3",
+            "destination": "scene:1/Canvas[0]/Combine/0",
+        })),
+    );
+    peer.send(Message::Text(
+        json!({ "uuid": request["uuid"], "type": "TransferRes", "payload": {} })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    invocation.await.unwrap();
+    connection.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn rev_transfer_reports_errors_and_skips_when_paused_or_given_blank_paths() {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use crate::bridge::{test_support::raw_server, WsConnection};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let client = reqwest::Client::builder()
-        .proxy(reqwest::Proxy::all(format!("http://{}", listener.local_addr().unwrap())).unwrap())
-        .timeout(Duration::from_secs(2))
-        .build()
+    let (address, peer_rx) = raw_server().await;
+    let connection = WsConnection::connect_for_test(
+        address,
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+    );
+    let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+        .await
+        .unwrap()
         .unwrap();
-    let server = tokio::spawn(async move {
-        let (mut stream, _) = listener.accept().await.unwrap();
-        let mut request = vec![0; 4096];
-        let length = stream.read(&mut request).await.unwrap();
-        stream.write_all(b"HTTP/1.1 409 Conflict\r\nContent-Length: 18\r\nConnection: close\r\n\r\npath lookup failed").await.unwrap();
-        String::from_utf8(request[..length].to_vec()).unwrap()
-    });
-    let session = ScriptSession::new_with_client(
+    let session = ScriptSession::new_with_connection(
         r#"export default (async () => await rev.transfer("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0"))"#,
         "transfer-error-test.js",
-        client.clone(),
+        connection.clone(),
     ).await.unwrap();
     let (controls, _) = recording_controls();
-    let error = session.invoke(State::default(), controls).await.unwrap_err();
+    let invocation = session.invoke(State::default(), controls);
+    tokio::pin!(invocation);
+    let message = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            tokio::select! {
+                result = &mut invocation => panic!("transfer completed before bridge response: {result:?}"),
+                message = peer.next() => break message.unwrap().unwrap(),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+    assert_eq!(request.get("type"), Some(&json!("TransferReq")));
+    peer.send(Message::Text(
+        json!({
+            "uuid": request["uuid"],
+            "type": "RemoteError",
+            "payload": { "message": "path lookup failed" },
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let error = invocation.await.unwrap_err();
     assert!(error.contains("path lookup failed"));
-    assert!(server.await.unwrap().starts_with("POST "));
+    connection.shutdown().await;
 
     for script in [
         r#"export default (async () => await rev.transfer(" ", "scene:1/Canvas[0]/Combine/0"))"#,
         r#"export default (async () => await rev.transfer("scene:1/Canvas[0]/Inventory/3", " "))"#,
     ] {
-        let session = ScriptSession::new_with_client(script, "transfer-invalid-test.js", client.clone()).await.unwrap();
+        let session = ScriptSession::new(script).await.unwrap();
         let (controls, _) = recording_controls();
         assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("slot paths"));
     }
 
-    let session = ScriptSession::new_with_client(
+    let session = ScriptSession::new(
         r#"export default (async () => await rev.transfer("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0"))"#,
-        "transfer-paused-test.js",
-        client,
     ).await.unwrap();
     let (controls, _) = recording_controls();
     controls.actions_paused.set_paused(true);
@@ -322,132 +422,228 @@ async fn rev_transfer_reports_errors_and_skips_when_paused_or_given_blank_paths(
 
 #[tokio::test(flavor = "current_thread")]
 async fn rev_state_unwraps_single_key_request() {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
+    use crate::bridge::{test_support::raw_server, WsConnection};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
 
-    let _guard = crate::bridge::TEST_SERVER_LOCK.lock().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:19841").unwrap();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0; 4096];
-        let length = stream.read(&mut request).unwrap();
-        let request = String::from_utf8_lossy(&request[..length]);
-        assert_eq!(request.lines().next().unwrap(), "GET /state?key=EP HTTP/1.1");
-        let body = r#"{"EP":"0e0"}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(response.as_bytes()).unwrap();
-    });
-    let session = ScriptSession::new(
+    let (address, peer_rx) = raw_server().await;
+    let connection = WsConnection::connect_for_test(
+        address,
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+    );
+    let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let session = ScriptSession::new_with_connection(
         r#"export default (async () => {
             const state = await rev.state("EP");
             if (state !== "0e0") throw new Error("single-key state was not unwrapped: " + JSON.stringify(state));
         })"#,
+        "state-single-key-test.js",
+        connection.clone(),
     )
     .await
     .unwrap();
     let (controls, _) = recording_controls();
-
-    session.invoke(State::default(), controls).await.unwrap();
-    server.join().unwrap();
+    let invocation = session.invoke(State::default(), controls);
+    tokio::pin!(invocation);
+    let message = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            tokio::select! {
+                result = &mut invocation => panic!("single-key invocation completed before bridge response: {result:?}"),
+                message = peer.next() => break message.unwrap().unwrap(),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+    assert_eq!(request.get("type"), Some(&json!("StateReq")));
+    assert_eq!(request.get("payload"), Some(&json!({ "keys": ["EP"] })));
+    peer.send(Message::Text(
+        json!({
+            "uuid": request["uuid"],
+            "type": "StateRes",
+            "payload": { "value": { "EP": "0e0" } },
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    invocation.await.unwrap();
+    connection.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn rev_state_uses_native_freeze_after_global_freeze_is_replaced() {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
+    use crate::bridge::{test_support::raw_server, WsConnection};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
 
-    let _guard = crate::bridge::TEST_SERVER_LOCK.lock().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:19841").unwrap();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0; 4096];
-        let _ = stream.read(&mut request).unwrap();
-        let body = r#"{"score":42}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(response.as_bytes()).unwrap();
-    });
-    let session = ScriptSession::new(
+    let (address, peer_rx) = raw_server().await;
+    let connection = WsConnection::connect_for_test(
+        address,
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+    );
+    let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let session = ScriptSession::new_with_connection(
         r#"export default (async () => {
             Object.freeze = (value) => value;
             const state = await rev.state();
             if (!Object.isFrozen(state)) throw new Error("state is not natively frozen");
         })"#,
+        "state-native-freeze-test.js",
+        connection.clone(),
     )
     .await
     .unwrap();
     let (controls, _) = recording_controls();
-
-    session.invoke(State::default(), controls).await.unwrap();
-    server.join().unwrap();
+    let invocation = session.invoke(State::default(), controls);
+    tokio::pin!(invocation);
+    let message = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            tokio::select! {
+                result = &mut invocation => panic!("native-freeze invocation completed before bridge response: {result:?}"),
+                message = peer.next() => break message.unwrap().unwrap(),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+    peer.send(Message::Text(
+        json!({
+            "uuid": request["uuid"],
+            "type": "StateRes",
+            "payload": { "value": { "score": 42 } },
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    invocation.await.unwrap();
+    connection.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn rev_state_uses_native_parse_after_global_parse_is_replaced() {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
+    use crate::bridge::{test_support::raw_server, WsConnection};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
 
-    let _guard = crate::bridge::TEST_SERVER_LOCK.lock().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:19841").unwrap();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0; 4096];
-        let _ = stream.read(&mut request).unwrap();
-        let body = r#"{"score":42}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(response.as_bytes()).unwrap();
-    });
-    let session = ScriptSession::new(
+    let (address, peer_rx) = raw_server().await;
+    let connection = WsConnection::connect_for_test(
+        address,
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+    );
+    let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let session = ScriptSession::new_with_connection(
         r#"export default (async () => {
             JSON.parse = () => ({ score: -1 });
             const state = await rev.state();
             if (state.score !== 42) throw new Error("state did not use native parse");
         })"#,
+        "state-native-parse-test.js",
+        connection.clone(),
     )
     .await
     .unwrap();
     let (controls, _) = recording_controls();
-
-    session.invoke(State::default(), controls).await.unwrap();
-    server.join().unwrap();
+    let invocation = session.invoke(State::default(), controls);
+    tokio::pin!(invocation);
+    let message = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            tokio::select! {
+                result = &mut invocation => panic!("native-parse invocation completed before bridge response: {result:?}"),
+                message = peer.next() => break message.unwrap().unwrap(),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+    peer.send(Message::Text(
+        json!({
+            "uuid": request["uuid"],
+            "type": "StateRes",
+            "payload": { "value": { "score": 42 } },
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    invocation.await.unwrap();
+    connection.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn rev_state_rejects_malformed_json_as_promise_error() {
-    use std::io::Write;
-    use std::net::TcpListener;
-    use std::thread;
+    use crate::bridge::{test_support::raw_server, WsConnection};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
 
-    let _guard = crate::bridge::TEST_SERVER_LOCK.lock().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:19841").unwrap();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let body = "not json";
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(response.as_bytes()).unwrap();
-    });
-    let session = ScriptSession::new(r#"export default (async () => await rev.state())"#)
+    let (address, peer_rx) = raw_server().await;
+    let connection = WsConnection::connect_for_test(
+        address,
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+    );
+    let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let session = ScriptSession::new_with_connection(
+        r#"export default (async () => await rev.state())"#,
+        "state-invalid-test.js",
+        connection.clone(),
+    )
         .await
         .unwrap();
     let (controls, _) = recording_controls();
-
-    let error = session.invoke(State::default(), controls).await.unwrap_err();
+    let invocation = session.invoke(State::default(), controls);
+    tokio::pin!(invocation);
+    let message = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            tokio::select! {
+                result = &mut invocation => panic!("invalid-state invocation completed before bridge response: {result:?}"),
+                message = peer.next() => break message.unwrap().unwrap(),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+    peer.send(Message::Text(
+        json!({
+            "uuid": request["uuid"],
+            "type": "StateRes",
+            "payload": { "value": "not an object" },
+        })
+        .to_string()
+        .into(),
+    ))
+    .await
+    .unwrap();
+    let error = invocation.await.unwrap_err();
     assert!(error.contains("state"), "missing state rejection: {error}");
-    server.join().unwrap();
+    connection.shutdown().await;
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -756,10 +952,10 @@ async fn dynamic_import_observes_updated_module_source() {
         });
     "#;
 
-    let session = ScriptSession::new_with_client(
+    let session = ScriptSession::new_with_connection(
         source,
         &entry_path.to_string_lossy(),
-        reqwest::Client::builder().no_proxy().build().unwrap(),
+        crate::bridge::WsConnection::disconnected_for_test(),
     )
     .await
     .unwrap();

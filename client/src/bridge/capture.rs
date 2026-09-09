@@ -1,4 +1,4 @@
-use super::{connection::WsConnection, CaptureReq};
+use super::{connection::WsConnection, CaptureReq, CaptureRes};
 
 #[derive(serde::Deserialize)]
 pub(crate) struct CaptureTarget {
@@ -73,12 +73,12 @@ pub(crate) async fn request_capture(
     x: i32,
     y: i32,
 ) -> Result<CaptureTarget, String> {
-    let response = connection
+    let CaptureRes { target_type, path } = connection
         .request(CaptureReq { x, y })
         .await
         .map_err(|error| error.to_string())?;
     Ok(CaptureTarget {
-        target_type: response.target_type,
-        path: response.path,
+        target_type,
+        path,
     })
 }

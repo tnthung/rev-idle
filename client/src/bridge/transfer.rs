@@ -1,4 +1,4 @@
-use super::{connection::WsConnection, TransferReq};
+use super::{connection::WsConnection, TransferReq, TransferRes};
 
 #[cfg(test)]
 mod tests {
@@ -71,7 +71,7 @@ pub(crate) async fn transfer(
     source: String,
     destination: String,
 ) -> Result<(), String> {
-    connection
+    let _: TransferRes = connection
         .request(TransferReq { source, destination })
         .await
         .map_err(|error| error.to_string())?;

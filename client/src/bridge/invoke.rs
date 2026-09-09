@@ -1,4 +1,4 @@
-use super::{connection::WsConnection, InvokeReq};
+use super::{connection::WsConnection, InvokeReq, InvokeRes};
 
 #[cfg(test)]
 mod tests {
@@ -104,7 +104,7 @@ pub(crate) async fn invoke(
     connection: &WsConnection,
     path: String,
 ) -> Result<(), String> {
-    connection
+    let _: InvokeRes = connection
         .request(InvokeReq { path })
         .await
         .map_err(|error| error.to_string())?;
