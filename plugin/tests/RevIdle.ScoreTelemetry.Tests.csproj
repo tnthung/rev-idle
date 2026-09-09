@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <Compile Include="Program.cs" />
+    <Compile Include="..\src\WsConnection.cs" Link="WsConnection.cs" />
     <Compile Include="..\src\HttpScoreServer.cs" Link="HttpScoreServer.cs" />
     <Compile Include="..\src\StatePayload.cs" Link="StatePayload.cs" />
     <Compile Include="..\src\ExtraRoots.cs" Link="ExtraRoots.cs" />
@@ -18,6 +19,12 @@
     <Compile Include="..\src\ClickCommandQueue.cs" Link="ClickCommandQueue.cs" />
     <Compile Include="..\src\Win32InputBridge.cs" Link="Win32InputBridge.cs" />
     <Compile Include="..\src\UnityUiClickDispatcher.cs" Link="UnityUiClickDispatcher.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\protocol\fixtures\test-request.json"
+          Link="protocol\test-request.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

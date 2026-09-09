@@ -1,9 +1,12 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using System.Net.WebSockets;
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
+using System.Text.Json;
 using RevIdle.ScoreTelemetry;
 
 InvalidPortsDisableServer();
@@ -50,7 +53,920 @@ DragQueueIgnoresEndWithoutMatchingStart();
 await ServerQueuesUiRequests();
 await ServerRejectsInvalidUiRequests();
 await ServerDropsTimedOutInvocations();
-System.Console.WriteLine("44 tests passed.");
+WsEnvelopeMatchesSharedFixture();
+await WsDisconnectedCallsFailImmediately();
+await WsRequestCorrelatesResponseByUuidAndType();
+await WsConcurrentSendsShareOneWriter();
+await WsHandlersStartWithoutWaitingForEarlierHandlers();
+await WsResponseTypeMismatchFailsRequest();
+await WsRemoteErrorFailsRequest();
+await WsTimeoutSendsCancelAndDropsLateResponse();
+await WsDisconnectFailsPendingAndAllowsNewClient();
+await WsRejectsSecondActiveClient();
+await WsMalformedPacketsDoNotStopReader();
+await WsCancelPreventsQueuedHandlerStart();
+await WsCancelBlocksRunningHandlerResponse();
+await WsDuplicateActiveUuidKeepsOriginalOwner();
+await WsHandlerFailureSendsRemoteErrorWhenQueueBusy();
+await WsDisconnectPressureFailsQueuedSend();
+await WsDisposeDoesNotWaitForArbitraryHandler();
+await WsLifecycleFaultsAreObserved();
+await WsResponseSerializationFailureDoesNotConsumeResponse();
+await WsHandlerErrorsAreObservedAndTasksCleaned();
+await WsUnknownPacketGetsRemoteError();
+await WsPumpRunsSynchronousHandlerPrefixOnCallerThread();
+await WsOldGenerationBufferedFrameIsIgnoredAfterReconnect();
+await WsCloseVsPumpRegistrationInterleaving();
+await WsBlockingSynchronousPrefixDoesNotBlockStop();
+await WsHandlerCanInitiateNestedRequestWithoutAwait();
+await WsMalformedCorrelatedRemoteErrorFailsPromptly();
+await WsTimeoutRemovalRaceAwaitsWinningCompletion();
+await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
+System.Console.WriteLine("73 tests passed.");
+
+static void WsEnvelopeMatchesSharedFixture()
+{
+    Guid uuid = Guid.Parse("7747b71a-66bc-4fc6-bf85-e9828277addf");
+    string actual = WsConnection.SerializeForTest(uuid, new TestReq("hello"));
+    string expected = File.ReadAllText(Path.Combine(
+        AppContext.BaseDirectory,
+        "protocol",
+        "test-request.json")).TrimEnd();
+    Equal(expected, actual, nameof(WsEnvelopeMatchesSharedFixture));
+}
+
+static async Task WsDisconnectedCallsFailImmediately()
+{
+    using WsConnection connection = WsConnection.DisconnectedForTest();
+    await ThrowsAsync<WsNotConnectedException>(() => connection.Request(new TestReq("request")), nameof(WsDisconnectedCallsFailImmediately));
+    await ThrowsAsync<WsNotConnectedException>(() => connection.Send(new TestReq("send")), nameof(WsDisconnectedCallsFailImmediately));
+}
+
+static async Task WsRequestCorrelatesResponseByUuidAndType()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Task<TestRes> request = server.Request(new TestReq("request"));
+        using JsonDocument requestDocument = JsonDocument.Parse(await ReceiveText(peer));
+        JsonElement requestEnvelope = requestDocument.RootElement;
+        Equal("TestReq", requestEnvelope.GetProperty("type").GetString(), nameof(WsRequestCorrelatesResponseByUuidAndType));
+        Guid uuid = requestEnvelope.GetProperty("uuid").GetGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestRes("response")));
+        TestRes response = await request.WaitAsync(TimeSpan.FromSeconds(2));
+        Equal("response", response.Value, nameof(WsRequestCorrelatesResponseByUuidAndType));
+    }
+}
+
+static async Task WsConcurrentSendsShareOneWriter()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Task[] sends = Enumerable.Range(0, 32)
+            .Select(value => server.Send(new TestReq(value.ToString(CultureInfo.InvariantCulture))))
+            .ToArray();
+        HashSet<string> values = new();
+        for (int index = 0; index < sends.Length; index++)
+        {
+            using JsonDocument document = JsonDocument.Parse(await ReceiveText(peer));
+            values.Add(document.RootElement.GetProperty("payload").GetProperty("value").GetString()!);
+        }
+        await Task.WhenAll(sends);
+        Equal(32, values.Count, nameof(WsConcurrentSendsShareOneWriter));
+    }
+}
+
+static async Task WsHandlersStartWithoutWaitingForEarlierHandlers()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    TaskCompletionSource<bool> firstStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> releaseFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.Handler<TestReq>(async (context, packet) =>
+    {
+        if (packet.Value == "first")
+        {
+            firstStarted.TrySetResult(true);
+            await releaseFirst.Task;
+        }
+        await context.Send(new TestRes(packet.Value));
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid firstUuid = Guid.NewGuid();
+        Guid secondUuid = Guid.NewGuid();
+        await SendText(peer, WsConnection.SerializeForTest(firstUuid, new TestReq("first")));
+        await SendText(peer, WsConnection.SerializeForTest(secondUuid, new TestReq("second")));
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        while (!firstStarted.Task.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            server.Pump();
+            await Task.Delay(5);
+        }
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        server.Pump();
+        using JsonDocument responseDocument = JsonDocument.Parse(await ReceiveText(peer));
+        Equal(secondUuid, responseDocument.RootElement.GetProperty("uuid").GetGuid(), nameof(WsHandlersStartWithoutWaitingForEarlierHandlers));
+        releaseFirst.TrySetResult(true);
+    }
+}
+
+static async Task WsResponseTypeMismatchFailsRequest()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Task<TestRes> request = server.Request(new TestReq("request"));
+        using JsonDocument requestDocument = JsonDocument.Parse(await ReceiveText(peer));
+        Guid uuid = requestDocument.RootElement.GetProperty("uuid").GetGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new OtherRes("wrong")));
+        await ThrowsAsync<InvalidOperationException>(() => request, nameof(WsResponseTypeMismatchFailsRequest));
+    }
+}
+
+static async Task WsRemoteErrorFailsRequest()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Task<TestRes> request = server.Request(new TestReq("request"));
+        using JsonDocument requestDocument = JsonDocument.Parse(await ReceiveText(peer));
+        Guid uuid = requestDocument.RootElement.GetProperty("uuid").GetGuid();
+        await SendText(peer, JsonSerializer.Serialize(new
+        {
+            uuid,
+            type = "RemoteError",
+            payload = new { message = "remote failed" }
+        }));
+        try
+        {
+            await request;
+            throw new InvalidOperationException($"{nameof(WsRemoteErrorFailsRequest)}: request unexpectedly succeeded.");
+        }
+        catch (InvalidOperationException exception)
+        {
+            Equal("remote failed", exception.Message, nameof(WsRemoteErrorFailsRequest));
+        }
+    }
+}
+
+static async Task WsTimeoutSendsCancelAndDropsLateResponse()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromMilliseconds(20));
+    TaskCompletionSource<bool> lateReceived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.Handler<TestRes>((context, packet) =>
+    {
+        lateReceived.TrySetResult(true);
+        return Task.CompletedTask;
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Task<TestRes> request = server.Request(new TestReq("request"));
+        using JsonDocument requestDocument = JsonDocument.Parse(await ReceiveText(peer));
+        Guid uuid = requestDocument.RootElement.GetProperty("uuid").GetGuid();
+        await ThrowsAsync<TimeoutException>(() => request, nameof(WsTimeoutSendsCancelAndDropsLateResponse));
+        using JsonDocument cancelDocument = JsonDocument.Parse(await ReceiveText(peer));
+        Equal(uuid, cancelDocument.RootElement.GetProperty("uuid").GetGuid(), nameof(WsTimeoutSendsCancelAndDropsLateResponse));
+        Equal("Cancel", cancelDocument.RootElement.GetProperty("type").GetString(), nameof(WsTimeoutSendsCancelAndDropsLateResponse));
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestRes("late")));
+        for (int attempt = 0; attempt < 10; attempt++)
+        {
+            server.Pump();
+            await Task.Delay(5);
+        }
+        Equal(false, lateReceived.Task.IsCompleted, nameof(WsTimeoutSendsCancelAndDropsLateResponse));
+    }
+}
+
+static async Task WsDisconnectFailsPendingAndAllowsNewClient()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    (TcpClient firstClient, WebSocket firstPeer) = await ConnectRawClient(server);
+    Task<TestRes> request = server.Request(new TestReq("old"));
+    await ReceiveText(firstPeer);
+    firstPeer.Dispose();
+    firstClient.Dispose();
+    await ThrowsAsync<WsNotConnectedException>(() => request, nameof(WsDisconnectFailsPendingAndAllowsNewClient));
+
+    (TcpClient secondClient, WebSocket secondPeer) = await ConnectRawClient(server);
+    using (firstClient)
+    using (firstPeer)
+    using (secondClient)
+    using (secondPeer)
+    {
+        Task send = server.Send(new TestReq("new"));
+        using JsonDocument document = JsonDocument.Parse(await ReceiveText(secondPeer));
+        Equal("new", document.RootElement.GetProperty("payload").GetProperty("value").GetString(), nameof(WsDisconnectFailsPendingAndAllowsNewClient));
+        await send;
+    }
+}
+
+static async Task WsRejectsSecondActiveClient()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    (TcpClient firstClient, WebSocket firstPeer) = await ConnectRawClient(server);
+    using (firstClient)
+    using (firstPeer)
+    using (TcpClient secondClient = new())
+    {
+        await secondClient.ConnectAsync(IPAddress.Loopback, server.Port);
+        using WebSocket secondPeer = WebSocket.CreateFromStream(
+            secondClient.GetStream(),
+            isServer: false,
+            subProtocol: null,
+            keepAliveInterval: Timeout.InfiniteTimeSpan);
+        bool secondClosed = false;
+        try
+        {
+            await ReceiveTextWithTimeout(secondPeer, TimeSpan.FromMilliseconds(250));
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception)
+        {
+            secondClosed = true;
+        }
+        Equal(true, secondClosed || secondPeer.State != WebSocketState.Open, nameof(WsRejectsSecondActiveClient));
+        Task send = server.Send(new TestReq("first remains active"));
+        using JsonDocument document = JsonDocument.Parse(await ReceiveText(firstPeer));
+        Equal("first remains active", document.RootElement.GetProperty("payload").GetProperty("value").GetString(), nameof(WsRejectsSecondActiveClient));
+        await send;
+    }
+}
+
+static async Task WsMalformedPacketsDoNotStopReader()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    server.Handler<TestReq>((context, packet) => context.Send(new TestRes(packet.Value)));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        await SendText(peer, "{not valid json");
+        Guid uuid = Guid.NewGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestReq("valid")));
+        using CancellationTokenSource pumping = new();
+        Task pump = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    server.Pump();
+                    await Task.Delay(5, pumping.Token);
+                }
+            }
+            catch (OperationCanceledException) when (pumping.IsCancellationRequested)
+            {
+            }
+        });
+        using JsonDocument document = JsonDocument.Parse(await ReceiveText(peer));
+        pumping.Cancel();
+        await pump;
+        Equal(uuid, document.RootElement.GetProperty("uuid").GetGuid(), nameof(WsMalformedPacketsDoNotStopReader));
+    }
+}
+
+static async Task WsCancelPreventsQueuedHandlerStart()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    TaskCompletionSource<bool> started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.Handler<TestReq>((context, packet) =>
+    {
+        started.TrySetResult(true);
+        return context.Send(new TestRes(packet.Value));
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestReq("cancelled")));
+        await SendText(peer, JsonSerializer.Serialize(new
+        {
+            uuid,
+            type = "Cancel",
+            payload = new { }
+        }));
+        await Task.Delay(25);
+        server.Pump();
+        await Task.Delay(25);
+        Equal(false, started.Task.IsCompleted, nameof(WsCancelPreventsQueuedHandlerStart));
+    }
+}
+
+static async Task WsCancelBlocksRunningHandlerResponse()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    TaskCompletionSource<bool> started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> responseBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.Handler<TestReq>(async (context, packet) =>
+    {
+        started.TrySetResult(true);
+        while (!context.CancellationToken.IsCancellationRequested)
+            await Task.Delay(5);
+        try
+        {
+            await context.Send(new TestRes(packet.Value));
+        }
+        catch (Exception)
+        {
+            responseBlocked.TrySetResult(true);
+        }
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestReq("running")));
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        while (!started.Task.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            server.Pump();
+            await Task.Delay(5);
+        }
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await SendText(peer, JsonSerializer.Serialize(new { uuid, type = "Cancel", payload = new { } }));
+        await responseBlocked.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Equal(true, responseBlocked.Task.IsCompletedSuccessfully, nameof(WsCancelBlocksRunningHandlerResponse));
+    }
+}
+
+static async Task WsDuplicateActiveUuidKeepsOriginalOwner()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    TaskCompletionSource<bool> firstStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> releaseFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    int handlerCount = 0;
+    server.Handler<TestReq>(async (context, packet) =>
+    {
+        Interlocked.Increment(ref handlerCount);
+        if (packet.Value == "first")
+        {
+            firstStarted.TrySetResult(true);
+            await releaseFirst.Task;
+        }
+        await context.Send(new TestRes(packet.Value));
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestReq("first")));
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        while (!firstStarted.Task.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            server.Pump();
+            await Task.Delay(5);
+        }
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestReq("duplicate")));
+        for (int attempt = 0; attempt < 10; attempt++)
+        {
+            server.Pump();
+            await Task.Delay(5);
+        }
+        releaseFirst.TrySetResult(true);
+        using JsonDocument response = JsonDocument.Parse(await ReceiveText(peer));
+        Equal("first", response.RootElement.GetProperty("payload").GetProperty("value").GetString(), nameof(WsDuplicateActiveUuidKeepsOriginalOwner));
+        Equal(1, Volatile.Read(ref handlerCount), nameof(WsDuplicateActiveUuidKeepsOriginalOwner));
+    }
+}
+
+static async Task WsHandlerFailureSendsRemoteErrorWhenQueueBusy()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    server.Handler<TestReq>((context, packet) => throw new InvalidOperationException("handler failed"));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Task[] sends = Enumerable.Range(0, 512)
+            .Select(value => server.Send(new TestReq($"out-{value}")))
+            .ToArray();
+        Guid uuid = Guid.NewGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestReq("fail")));
+        using CancellationTokenSource pumping = new();
+        Task pump = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    server.Pump();
+                    await Task.Delay(5, pumping.Token);
+                }
+            }
+            catch (OperationCanceledException) when (pumping.IsCancellationRequested)
+            {
+            }
+        });
+        bool foundRemoteError = false;
+        for (int index = 0; index < sends.Length + 1; index++)
+        {
+            using JsonDocument document = JsonDocument.Parse(await ReceiveText(peer));
+            if (document.RootElement.GetProperty("uuid").GetGuid() == uuid)
+            {
+                Equal("RemoteError", document.RootElement.GetProperty("type").GetString(), nameof(WsHandlerFailureSendsRemoteErrorWhenQueueBusy));
+                foundRemoteError = true;
+                break;
+            }
+        }
+        pumping.Cancel();
+        await pump;
+        await Task.WhenAll(sends).WaitAsync(TimeSpan.FromSeconds(2));
+        Equal(true, foundRemoteError, nameof(WsHandlerFailureSendsRemoteErrorWhenQueueBusy));
+    }
+}
+
+static async Task WsDisconnectPressureFailsQueuedSend()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        string value = new('x', 512);
+        Task[] sends = Enumerable.Range(0, 512)
+            .Select(index => server.Send(new TestReq($"{index}:{value}")))
+            .ToArray();
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        while (server.QueuedOutboundForTest == 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(1);
+        Equal(true, server.QueuedOutboundForTest > 0, nameof(WsDisconnectPressureFailsQueuedSend));
+        peer.Dispose();
+        client.Dispose();
+        int failures = 0;
+        foreach (Task send in sends)
+        {
+            try
+            {
+                await send.WaitAsync(TimeSpan.FromSeconds(2));
+            }
+            catch (WsNotConnectedException)
+            {
+                failures++;
+            }
+        }
+        Equal(true, failures > 0, nameof(WsDisconnectPressureFailsQueuedSend));
+    }
+}
+
+static async Task WsDisposeDoesNotWaitForArbitraryHandler()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    TaskCompletionSource<bool> started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.Handler<TestReq>(async (context, packet) =>
+    {
+        started.TrySetResult(true);
+        await release.Task;
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        await SendText(peer, WsConnection.SerializeForTest(Guid.NewGuid(), new TestReq("non-cooperative")));
+        DateTime startDeadline = DateTime.UtcNow.AddSeconds(2);
+        while (!started.Task.IsCompleted && DateTime.UtcNow < startDeadline)
+        {
+            server.Pump();
+            await Task.Delay(5);
+        }
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        DateTime disposedAt = DateTime.UtcNow;
+        server.Dispose();
+        Equal(true, DateTime.UtcNow - disposedAt < TimeSpan.FromMilliseconds(500), nameof(WsDisposeDoesNotWaitForArbitraryHandler));
+        release.TrySetResult(true);
+        DateTime cleanupDeadline = DateTime.UtcNow.AddSeconds(2);
+        while (server.HandlerTaskCountForTest != 0 && DateTime.UtcNow < cleanupDeadline)
+            await Task.Delay(5);
+        Equal(0, server.HandlerTaskCountForTest, nameof(WsDisposeDoesNotWaitForArbitraryHandler));
+    }
+}
+
+static async Task WsLifecycleFaultsAreObserved()
+{
+    ConcurrentQueue<string> reports = new();
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2), reports.Enqueue);
+    server.ObserveLifecycleForTest(Task.FromException(new InvalidOperationException("lifecycle failed")));
+    DateTime deadline = DateTime.UtcNow.AddSeconds(1);
+    while (!reports.Any(report => report.Contains("lifecycle failed", StringComparison.Ordinal)) && DateTime.UtcNow < deadline)
+        await Task.Delay(5);
+    Equal(true, reports.Any(report => report.Contains("lifecycle failed", StringComparison.Ordinal)), nameof(WsLifecycleFaultsAreObserved));
+}
+
+static async Task WsResponseSerializationFailureDoesNotConsumeResponse()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    server.Handler<TestReq>(async (context, packet) =>
+    {
+        try
+        {
+            await context.Send(new ThrowingResponse());
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        await context.Send(new TestRes("valid after serialization failure"));
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestReq("request")));
+        using CancellationTokenSource pumping = new();
+        Task pump = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    server.Pump();
+                    await Task.Delay(5, pumping.Token);
+                }
+            }
+            catch (OperationCanceledException) when (pumping.IsCancellationRequested)
+            {
+            }
+        });
+        using JsonDocument response = JsonDocument.Parse(await ReceiveText(peer));
+        pumping.Cancel();
+        await pump;
+        Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), nameof(WsResponseSerializationFailureDoesNotConsumeResponse));
+        Equal("valid after serialization failure", response.RootElement.GetProperty("payload").GetProperty("value").GetString(), nameof(WsResponseSerializationFailureDoesNotConsumeResponse));
+    }
+}
+
+static async Task WsHandlerErrorsAreObservedAndTasksCleaned()
+{
+    ConcurrentQueue<string> reports = new();
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2), reports.Enqueue);
+    server.Handler<TestReq>(async (context, packet) =>
+    {
+        await context.Send(new TestRes(packet.Value));
+        throw new InvalidOperationException("after response");
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestReq("observed")));
+        using CancellationTokenSource pumping = new();
+        Task pump = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    server.Pump();
+                    await Task.Delay(5, pumping.Token);
+                }
+            }
+            catch (OperationCanceledException) when (pumping.IsCancellationRequested)
+            {
+            }
+        });
+        using JsonDocument response = JsonDocument.Parse(await ReceiveText(peer));
+        pumping.Cancel();
+        await pump;
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        while (reports.IsEmpty && DateTime.UtcNow < deadline)
+            await Task.Delay(5);
+        Equal(true, reports.Any(report => report.Contains("after response", StringComparison.Ordinal)), nameof(WsHandlerErrorsAreObservedAndTasksCleaned));
+        Equal(0, server.HandlerTaskCountForTest, nameof(WsHandlerErrorsAreObservedAndTasksCleaned));
+        Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), nameof(WsHandlerErrorsAreObservedAndTasksCleaned));
+    }
+}
+
+static async Task WsUnknownPacketGetsRemoteError()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new UnknownReq("unknown")));
+        using JsonDocument response = JsonDocument.Parse(await ReceiveText(peer));
+        Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), nameof(WsUnknownPacketGetsRemoteError));
+        Equal("RemoteError", response.RootElement.GetProperty("type").GetString(), nameof(WsUnknownPacketGetsRemoteError));
+        Equal(true, response.RootElement.GetProperty("payload").GetProperty("message").GetString()!.Contains("UnknownReq", StringComparison.Ordinal), nameof(WsUnknownPacketGetsRemoteError));
+    }
+}
+
+static async Task WsPumpRunsSynchronousHandlerPrefixOnCallerThread()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    int observedThread = 0;
+    server.Handler<TestReq>(async (context, packet) =>
+    {
+        Volatile.Write(ref observedThread, Environment.CurrentManagedThreadId);
+        await release.Task;
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        await SendText(peer, WsConnection.SerializeForTest(Guid.NewGuid(), new TestReq("thread")));
+        TaskCompletionSource<int> pumpThread = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task pump = Task.Run(() =>
+        {
+            DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+            while (Volatile.Read(ref observedThread) == 0 && DateTime.UtcNow < deadline)
+            {
+                int callerThread = Environment.CurrentManagedThreadId;
+                server.Pump();
+                if (Volatile.Read(ref observedThread) != 0)
+                {
+                    pumpThread.TrySetResult(callerThread);
+                    return;
+                }
+                Thread.Yield();
+            }
+            pumpThread.TrySetException(new TimeoutException("Pump did not start the handler."));
+        });
+        int callerThread = await pumpThread.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await pump;
+        Equal(callerThread, Volatile.Read(ref observedThread), nameof(WsPumpRunsSynchronousHandlerPrefixOnCallerThread));
+        release.TrySetResult(true);
+    }
+}
+
+static async Task WsOldGenerationBufferedFrameIsIgnoredAfterReconnect()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    ConcurrentQueue<string> handled = new();
+    server.Handler<TestReq>(async (context, packet) =>
+    {
+        handled.Enqueue(packet.Value);
+        await context.Send(new TestRes(packet.Value));
+    });
+    (TcpClient firstClient, WebSocket firstPeer) = await ConnectRawClient(server);
+    await SendText(firstPeer, WsConnection.SerializeForTest(Guid.NewGuid(), new TestReq("old-generation")));
+    await Task.Delay(25);
+    firstPeer.Dispose();
+    firstClient.Dispose();
+    DateTime disconnectDeadline = DateTime.UtcNow.AddSeconds(2);
+    while (server.ConnectedForTest && DateTime.UtcNow < disconnectDeadline)
+        await Task.Delay(5);
+
+    (TcpClient secondClient, WebSocket secondPeer) = await ConnectRawClient(server);
+    using (firstClient)
+    using (firstPeer)
+    using (secondClient)
+    using (secondPeer)
+    {
+        await SendText(secondPeer, WsConnection.SerializeForTest(Guid.NewGuid(), new TestReq("new-generation")));
+        using CancellationTokenSource pumping = new();
+        Task pump = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    server.Pump();
+                    await Task.Delay(5, pumping.Token);
+                }
+            }
+            catch (OperationCanceledException) when (pumping.IsCancellationRequested)
+            {
+            }
+        });
+        using JsonDocument response = JsonDocument.Parse(await ReceiveText(secondPeer));
+        pumping.Cancel();
+        await pump;
+        Equal("new-generation", response.RootElement.GetProperty("payload").GetProperty("value").GetString(), nameof(WsOldGenerationBufferedFrameIsIgnoredAfterReconnect));
+        Equal(1, handled.Count, nameof(WsOldGenerationBufferedFrameIsIgnoredAfterReconnect));
+        Equal("new-generation", handled.Single(), nameof(WsOldGenerationBufferedFrameIsIgnoredAfterReconnect));
+    }
+}
+
+static async Task WsCloseVsPumpRegistrationInterleaving()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    TaskCompletionSource<bool> registered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> stopPaused = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> releaseStop = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> releaseHandler = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.LifecycleSynchronizationForTest = stage =>
+    {
+        if (stage == "inbound-registered")
+            registered.TrySetResult(true);
+        if (stage == "stop-before-cancel")
+        {
+            stopPaused.TrySetResult(true);
+            releaseStop.Task.GetAwaiter().GetResult();
+        }
+    };
+    server.Handler<TestReq>(async (context, packet) =>
+    {
+        started.TrySetResult(true);
+        await releaseHandler.Task;
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        try
+        {
+            await SendText(peer, WsConnection.SerializeForTest(Guid.NewGuid(), new TestReq("close-race")));
+            await registered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            peer.Dispose();
+            client.Dispose();
+            await stopPaused.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            server.Pump();
+            Equal(false, started.Task.IsCompleted, nameof(WsCloseVsPumpRegistrationInterleaving));
+        }
+        finally
+        {
+            releaseStop.TrySetResult(true);
+            releaseHandler.TrySetResult(true);
+        }
+    }
+}
+
+static async Task WsBlockingSynchronousPrefixDoesNotBlockStop()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    TaskCompletionSource<bool> registered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> prefixStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> releasePrefix = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> stopReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.LifecycleSynchronizationForTest = stage =>
+    {
+        if (stage == "inbound-registered")
+            registered.TrySetResult(true);
+        if (stage == "stop-before-cancel")
+            stopReached.TrySetResult(true);
+    };
+    server.Handler<TestReq>((context, packet) =>
+    {
+        prefixStarted.TrySetResult(true);
+        releasePrefix.Task.GetAwaiter().GetResult();
+        return Task.CompletedTask;
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Task pump = Task.CompletedTask;
+        try
+        {
+            await SendText(peer, WsConnection.SerializeForTest(Guid.NewGuid(), new TestReq("blocking-prefix")));
+            await registered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            pump = Task.Run(server.Pump);
+            await prefixStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            peer.Dispose();
+            client.Dispose();
+            await stopReached.Task.WaitAsync(TimeSpan.FromMilliseconds(500));
+        }
+        finally
+        {
+            releasePrefix.TrySetResult(true);
+            await pump.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+    }
+}
+
+static async Task WsHandlerCanInitiateNestedRequestWithoutAwait()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    TaskCompletionSource<Task<TestRes>> nestedStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.Handler<TestReq>((context, packet) =>
+    {
+        if (packet.Value == "outer")
+            nestedStarted.TrySetResult(server.Request(new TestReq("nested")));
+        return context.Send(new TestRes(packet.Value));
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    using (CancellationTokenSource pumping = new())
+    {
+        Task pump = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    server.Pump();
+                    await Task.Delay(5, pumping.Token);
+                }
+            }
+            catch (OperationCanceledException) when (pumping.IsCancellationRequested)
+            {
+            }
+        });
+        try
+        {
+            Guid outerUuid = Guid.NewGuid();
+            await SendText(peer, WsConnection.SerializeForTest(outerUuid, new TestReq("outer")));
+            using JsonDocument nested = JsonDocument.Parse(await ReceiveText(peer));
+            Equal("TestReq", nested.RootElement.GetProperty("type").GetString(), nameof(WsHandlerCanInitiateNestedRequestWithoutAwait));
+            Equal("nested", nested.RootElement.GetProperty("payload").GetProperty("value").GetString(), nameof(WsHandlerCanInitiateNestedRequestWithoutAwait));
+            Guid nestedUuid = nested.RootElement.GetProperty("uuid").GetGuid();
+            await SendText(peer, WsConnection.SerializeForTest(nestedUuid, new TestRes("nested-response")));
+            using JsonDocument outer = JsonDocument.Parse(await ReceiveText(peer));
+            Equal(outerUuid, outer.RootElement.GetProperty("uuid").GetGuid(), nameof(WsHandlerCanInitiateNestedRequestWithoutAwait));
+            Equal("TestRes", outer.RootElement.GetProperty("type").GetString(), nameof(WsHandlerCanInitiateNestedRequestWithoutAwait));
+            Equal("outer", outer.RootElement.GetProperty("payload").GetProperty("value").GetString(), nameof(WsHandlerCanInitiateNestedRequestWithoutAwait));
+            Task<TestRes> nestedRequest = await nestedStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            TestRes nestedResponse = await nestedRequest.WaitAsync(TimeSpan.FromSeconds(2));
+            Equal("nested-response", nestedResponse.Value, nameof(WsHandlerCanInitiateNestedRequestWithoutAwait));
+        }
+        finally
+        {
+            pumping.Cancel();
+            await pump.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+    }
+}
+
+static async Task WsMalformedCorrelatedRemoteErrorFailsPromptly()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Task<TestRes> request = server.Request(new TestReq("malformed-error"));
+        using JsonDocument outbound = JsonDocument.Parse(await ReceiveText(peer));
+        Guid uuid = outbound.RootElement.GetProperty("uuid").GetGuid();
+        await SendText(peer, $"{{\"uuid\":\"{uuid}\",\"type\":\"RemoteError\",\"payload\":{{\"message\":7}}}}");
+        DateTime deadline = DateTime.UtcNow.AddSeconds(1);
+        while (!request.IsCompleted && DateTime.UtcNow < deadline)
+            await Task.Delay(5);
+        Equal(true, request.IsCompleted, nameof(WsMalformedCorrelatedRemoteErrorFailsPromptly));
+        await ThrowsAsync<InvalidOperationException>(() => request, nameof(WsMalformedCorrelatedRemoteErrorFailsPromptly));
+    }
+}
+
+static async Task WsTimeoutRemovalRaceAwaitsWinningCompletion()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromMilliseconds(20));
+    TaskCompletionSource<bool> removed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.PendingRemovedForTest = () =>
+    {
+        removed.TrySetResult(true);
+        release.Task.GetAwaiter().GetResult();
+    };
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Task<TestRes> request = server.Request(new TestReq("timeout-race"));
+        using JsonDocument outbound = JsonDocument.Parse(await ReceiveText(peer));
+        Guid uuid = outbound.RootElement.GetProperty("uuid").GetGuid();
+        await SendText(peer, WsConnection.SerializeForTest(uuid, new TestRes("winner")));
+        await removed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.Delay(50);
+        Equal(false, request.IsCompleted, nameof(WsTimeoutRemovalRaceAwaitsWinningCompletion));
+        release.TrySetResult(true);
+        TestRes response = await request.WaitAsync(TimeSpan.FromSeconds(2));
+        Equal("winner", response.Value, nameof(WsTimeoutRemovalRaceAwaitsWinningCompletion));
+    }
+}
+
+static async Task WsLateRemoteErrorIsReportedBeforeTombstoneDiscard()
+{
+    ConcurrentQueue<string> reports = new();
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromMilliseconds(20), reports.Enqueue);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Task<TestRes> request = server.Request(new TestReq("late-error"));
+        using JsonDocument outbound = JsonDocument.Parse(await ReceiveText(peer));
+        Guid uuid = outbound.RootElement.GetProperty("uuid").GetGuid();
+        await ThrowsAsync<TimeoutException>(() => request, nameof(WsLateRemoteErrorIsReportedBeforeTombstoneDiscard));
+        await SendText(peer, $"{{\"uuid\":\"{uuid}\",\"type\":\"RemoteError\",\"payload\":{{\"message\":\"late remote error\"}}}}");
+        DateTime deadline = DateTime.UtcNow.AddSeconds(1);
+        while (!reports.Any(report => report.Contains("late remote error", StringComparison.Ordinal)) && DateTime.UtcNow < deadline)
+            await Task.Delay(5);
+        Equal(true, reports.Any(report => report.Contains("late remote error", StringComparison.Ordinal)), nameof(WsLateRemoteErrorIsReportedBeforeTombstoneDiscard));
+    }
+}
 
 static async Task ServerQueuesUiRequests()
 {
@@ -579,6 +1495,47 @@ static HttpScoreServer CreateServer()
     return HttpScoreServer.Create(port.ToString(CultureInfo.InvariantCulture)) ?? throw new InvalidOperationException("server failed to bind");
 }
 
+static async Task<(TcpClient Client, WebSocket Socket)> ConnectRawClient(WsConnection server)
+{
+    TcpClient client = new();
+    await client.ConnectAsync(IPAddress.Loopback, server.Port);
+    WebSocket socket = WebSocket.CreateFromStream(
+        client.GetStream(),
+        isServer: false,
+        subProtocol: null,
+        keepAliveInterval: Timeout.InfiniteTimeSpan);
+    DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+    while (!server.ConnectedForTest && DateTime.UtcNow < deadline)
+        await Task.Delay(1);
+    if (!server.ConnectedForTest)
+        throw new InvalidOperationException("server did not accept the raw client");
+    return (client, socket);
+}
+
+static Task<string> ReceiveText(WebSocket socket)
+    => ReceiveTextWithTimeout(socket, TimeSpan.FromSeconds(2));
+
+static async Task<string> ReceiveTextWithTimeout(WebSocket socket, TimeSpan timeout)
+{
+    using CancellationTokenSource cancellation = new(timeout);
+    using MemoryStream message = new();
+    byte[] buffer = new byte[4096];
+    while (true)
+    {
+        WebSocketReceiveResult result = await socket.ReceiveAsync(buffer, cancellation.Token);
+        if (result.MessageType == WebSocketMessageType.Close)
+            throw new InvalidOperationException("WebSocket closed before a text message.");
+        if (result.MessageType != WebSocketMessageType.Text)
+            continue;
+        message.Write(buffer, 0, result.Count);
+        if (result.EndOfMessage)
+            return Encoding.UTF8.GetString(message.ToArray());
+    }
+}
+
+static Task SendText(WebSocket socket, string text)
+    => socket.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, CancellationToken.None);
+
 static async Task<HttpResponse> RequestWithServer(HttpScoreServer server, string request)
 {
     using TcpClient client = new();
@@ -787,6 +1744,34 @@ static void Equal<T>(T expected, T actual, string testName)
 {
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
         throw new InvalidOperationException($"{testName}: expected '{expected}', got '{actual}'.");
+}
+
+static async Task ThrowsAsync<TException>(Func<Task> action, string testName)
+    where TException : Exception
+{
+    try
+    {
+        await action();
+    }
+    catch (TException)
+    {
+        return;
+    }
+    catch (Exception exception)
+    {
+        throw new InvalidOperationException($"{testName}: expected {typeof(TException).Name}, got {exception.GetType().Name}.", exception);
+    }
+    throw new InvalidOperationException($"{testName}: expected {typeof(TException).Name}, but the action succeeded.");
+}
+
+sealed record TestReq(string Value) : IRequest<TestRes>;
+sealed record TestRes(string Value);
+sealed record OtherRes(string Value);
+sealed record UnknownReq(string Value);
+
+sealed class ThrowingResponse
+{
+    public int Value => throw new InvalidOperationException("serialization failed");
 }
 
 sealed record HttpResponse(int StatusCode, string ContentType, int ContentLength, string Connection, byte[] Body);

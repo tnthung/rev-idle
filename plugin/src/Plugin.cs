@@ -13,7 +13,7 @@ public sealed class Plugin : BasePlugin
     public const string PluginName = "Revolution Idle Score Telemetry";
     public const string PluginVersion = "0.1.0";
 
-    private static HttpScoreServer? _server;
+    private static WsConnection? _connection;
     private static ManualLogSource? _logger;
 
     public override void Load()
@@ -24,9 +24,9 @@ public sealed class Plugin : BasePlugin
             "Network",
             "Port",
             "19841",
-            "HTTP server port on 127.0.0.1. Set to 0 to disable.").Value;
+            "Raw packet server port on 127.0.0.1. Set to 0 to disable.").Value;
 
-        _server = HttpScoreServer.Create(configuredPort);
+        _connection = WsConnection.Create(configuredPort, message => _logger?.LogError($"[WebSocket] {message}"));
         AddComponent<ScoreTicker>();
     }
 
@@ -34,17 +34,15 @@ public sealed class Plugin : BasePlugin
 
     internal static void LogBridgeError(string message) => _logger?.LogError($"[InputBridge] {message}");
 
-    internal static void CompletePending(nint window)
+    internal static void PumpPackets()
     {
         try
         {
-            if (_server is null)
-                return;
-            CompletePending(_server, static () => GameController.data, window);
+            _connection?.Pump();
         }
         catch (Exception exception)
         {
-            _logger?.LogError($"Request completion failed: {exception}");
+            _logger?.LogError($"Packet dispatch failed: {exception}");
         }
     }
 
@@ -91,7 +89,7 @@ public sealed class Plugin : BasePlugin
         return (200, JsonSerializer.SerializeToUtf8Bytes(new { type, path }));
     });
 
-    internal static void StopServer() => _server?.Dispose();
+    internal static void StopServer() => _connection?.Dispose();
 }
 
 public sealed class ScoreTicker : MonoBehaviour
@@ -119,7 +117,7 @@ public sealed class ScoreTicker : MonoBehaviour
         DispatchQueuedScrolls();
         DispatchQueuedDrags();
 
-        Plugin.CompletePending(_bridge?.Window ?? 0);
+        Plugin.PumpPackets();
     }
 
     public void OnDestroy()
