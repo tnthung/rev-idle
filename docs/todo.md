@@ -8,4 +8,7 @@
 - [x] `rev.read_file(path)` for reading the contents of a file, `null` if not exists.
 - [x] `rev.write_file(path, content)` for writing contents to a file.
 - [ ] In-game UI injection.
+- [ ] Make capture button background Red when in capture mode.
+- [ ] Change resume icon to point to the right.
+- [ ] Add a script list UI for quick access.
 - [ ] Port changing and Auto-port detection.
