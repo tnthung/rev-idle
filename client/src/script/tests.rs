@@ -738,6 +738,62 @@ async fn import_from_a_subdirectory_resolves_without_an_explicit_js_extension() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn dynamic_import_observes_updated_module_source() {
+    use std::fs;
+
+    let root = std::env::temp_dir().join(format!(
+        "rev-idle-dynamic-import-refresh-test-{}",
+        std::process::id(),
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let config_path = root.join("config.js");
+    let entry_path = root.join("entry.js");
+    fs::write(&config_path, "export default { x: 1 };").unwrap();
+    let source = r#"
+        export default (async () => {
+            const config = (await import("./config.js")).default;
+            rev.click(config.x, 0);
+        });
+    "#;
+
+    let session = ScriptSession::new_with_client(
+        source,
+        &entry_path.to_string_lossy(),
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    )
+    .await
+    .unwrap();
+    let clicks = Rc::new(RefCell::new(Vec::new()));
+    let mouse: SharedMouse = Rc::new(RefCell::new(FakeMouse {
+        clicks: clicks.clone(),
+    }));
+
+    session
+        .invoke(State::default(), mouse.clone())
+        .await
+        .unwrap();
+    fs::write(&config_path, "export default { x: 2 };").unwrap();
+    session.invoke(State::default(), mouse).await.unwrap();
+
+    assert_eq!(
+        clicks.borrow().as_slice(),
+        &[
+            Click {
+                x: 1,
+                y: 0,
+                button: Button::Left,
+            },
+            Click {
+                x: 2,
+                y: 0,
+                button: Button::Left,
+            },
+        ]
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn passes_fresh_state_and_preserves_globals() {
     let source = r#"
         export default (async () => {
