@@ -455,7 +455,7 @@ pub(crate) struct WsConnection {
 
 impl WsConnection {
     #[cfg(test)]
-    fn disconnected_for_test() -> Self {
+    pub(crate) fn disconnected_for_test() -> Self {
         let (shutdown, _) = watch::channel(false);
         Self {
             inner: Arc::new(Inner::new()),
@@ -470,7 +470,7 @@ impl WsConnection {
     }
 
     #[cfg(test)]
-    fn connect_for_test(
+    pub(crate) fn connect_for_test(
         address: SocketAddr,
         reconnect_delay: Duration,
         response_timeout: Duration,
