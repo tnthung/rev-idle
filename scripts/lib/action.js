@@ -11,7 +11,7 @@ export class Action extends Function {
     });
   }
 
-  click(x, y, delayMs=10) {
+  click(x, y, delayMs=100) {
     this.steps.push({ type: "click", x, y, delayMs });
     return this;
   }
@@ -21,17 +21,17 @@ export class Action extends Function {
     return this;
   }
 
-  drag(x1, y1, x2, y2, delayMs=10) {
+  drag(x1, y1, x2, y2, delayMs=100) {
     this.steps.push({ type: "drag", x1, y1, x2, y2, delayMs });
     return this;
   }
 
-  invoke(path, delayMs=10) {
+  invoke(path, delayMs=100) {
     this.steps.push({ type: "invoke", path, delayMs });
     return this;
   }
 
-  transfer(source, destination, delayMs=10) {
+  transfer(source, destination, delayMs=100) {
     this.steps.push({ type: "transfer", source, destination, delayMs });
     return this;
   }
@@ -186,6 +186,7 @@ export class Action extends Function {
   static async sellZodiac(n) {
     await this.gotoPlanetShop();
     await rev.transfer(this.ZODIAC_INV_SLOT(n), this.ZODIAC_SELL_SLOT);
+    await rev.sleep(100);
     await rev.invoke(this.ZODIAC_CELL_BUTTON);
   }
 
@@ -194,7 +195,9 @@ export class Action extends Function {
     await rev.transfer(this.ZODIAC_INV_SLOT(a), this.ZODIAC_MERGE_SLOT(0));
     await rev.transfer(this.ZODIAC_INV_SLOT(b), this.ZODIAC_MERGE_SLOT(1));
     await rev.transfer(this.ZODIAC_INV_SLOT(c), this.ZODIAC_MERGE_SLOT(2));
+    await rev.sleep(100);
     await rev.invoke(this.ZODIAC_MERGE_BUTTON);
+    await rev.sleep(100);
     await rev.transfer(this.ZODIAC_MERGE_RESULT_SLOT, this.ZODIAC_INV_SLOT(a));
   }
 

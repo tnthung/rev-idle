@@ -18,6 +18,7 @@ export class States {
   static unityZodiacInventory  = () => rev.state("gameData.unity.inventory");
   static planetZodiacInventory = () => rev.state("gameData.unity.planetsInventory");
   static attackLevel           = () => rev.state("gameData.attacks.level.level");
+  static maxAttackLevelReached = () => rev.state("gameData.attacks.maxLevelReached");
   static gold                  = () => rev.state("gameData.attacks.gold");
   static nextGold              = () => rev.state("gameData.attacks.goldOnUnity");
 }

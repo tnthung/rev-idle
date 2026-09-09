@@ -26,6 +26,8 @@ let finish40DTP = false;
 let executionConfig = await import("./unity_loop2_config.js").then(m => m.default);
 
 export default async function main() {
+  executionConfig = (await import("./unity_loop2_config.js")).default;
+
   // local initialization
   if (!initialized) {
     rev.resize(1270, 600);
@@ -64,7 +66,6 @@ export default async function main() {
     rev.global.pauseDuration = 0;
     rev.global.pauseStart = null;
     rev.global.unityStart = null;
-    executionConfig = (await import("./unity_loop2_config.js")).default;
     eternityBootstrapped = false;
     first9ECCompleted = false;
     allECCompleted = false;
@@ -73,7 +74,7 @@ export default async function main() {
 
   // check attack level
   if (executionConfig.attackMode) {
-    if (await States.attackLevel() > executionConfig.attackTargetLevel)
+    if (Number(await States.attackLevel()) >= Number(await States.maxAttackLevelReached()))
       await Action.unitWith();
   }
 
