@@ -277,7 +277,6 @@ internal static class UnityUiClickDispatcher
         int sceneHandle,
         (string Name, int SiblingIndex) segment)
         => !candidateHasParent &&
-            candidateSceneHandle == sceneHandle &&
             Uri.EscapeDataString(candidateName) == segment.Name &&
             candidateSiblingIndex == segment.SiblingIndex;
 

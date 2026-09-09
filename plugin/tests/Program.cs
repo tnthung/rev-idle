@@ -1806,6 +1806,8 @@ static void DispatcherMatchesPersistentSceneRoot()
 
     Equal(true, UnityUiClickDispatcher.IsRootMatch(
         -12, "VIEWMANAGER", 0, false, -12, ("VIEWMANAGER", 0)), testName);
+    Equal(true, UnityUiClickDispatcher.IsRootMatch(
+        42, "VIEWMANAGER", 0, false, -12, ("VIEWMANAGER", 0)), testName);
     Equal(false, UnityUiClickDispatcher.IsRootMatch(
         -12, "VIEWMANAGER", 0, true, -12, ("VIEWMANAGER", 0)), testName);
     Equal(false, UnityUiClickDispatcher.IsRootMatch(
