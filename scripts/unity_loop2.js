@@ -71,8 +71,14 @@ export default async function main() {
     finish40DTP = false;
   }
 
+  // check attack level
+  if (executionConfig.attackMode) {
+    if (await States.attackLevel() > executionConfig.attackTargetLevel)
+      await Action.unitWith();
+  }
+
   // check unity run duration
-  if (unityElapsed > UNITY_RUN_THRESHOLD) {
+  else if (unityElapsed > UNITY_RUN_THRESHOLD) {
     console.log("Current unity run exceeds threshold (" + (UNITY_RUN_THRESHOLD / 1000) + "s). Reset unity.");
     await Action.resetUnity();
   }
@@ -571,36 +577,22 @@ async function finishDTP40() {
 
 
 async function waitForUnit() {
-  let start = Date.now();
-  while ((Date.now() - start) < 6000) {
-    if (executionConfig.stopAfterSpentAllDTP && Number(await States.spentDTP()) === 65) {
-      rev.stop();
-      return;
-    }
+  if (await States.spentDTP() >= 65)
+    return;
 
-    let bought = false;
-    while (true) {
-      let unusedDTP = await States.unusedDTP();
-      if (!unusedDTP) break;
-
-      const currentTree = await DilationTree.current();
-      for (let i=0; i<unusedDTP; i++)
-        for (const extra of DT_EXTRAS)
-          if (currentTree[extra.key]++ < extra.target) {
-            await extra.node();
-            bought = true;
-            break;
-          }
-    }
-
-    if (bought) {
-      start = Date.now();
-      await Action.toggleDilation();
-      await rev.sleep(1000);
-      await Action.toggleDilation();
-    }
-
-    if (Number(await States.currentEP()) === 0)
-      return;
+  const unusedDTP = await States.unusedDTP();
+  if (!unusedDTP) {
+    await Action.toggleDilation();
+    await rev.sleep(3000);
+    await Action.toggleDilation();
+    return;
   }
+
+  const currentTree = await DilationTree.current();
+  for (let i=0; i<unusedDTP; i++)
+    for (const extra of DT_EXTRAS)
+      if (currentTree[extra.key]++ < extra.target) {
+        await extra.node();
+        break;
+      }
 }

@@ -95,9 +95,23 @@ export class Action extends Function {
   }
 
 
-  static gotoRevolution = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_main[1]");
-  static claimIP        = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_infinite_reset[4]");
-  static claimEP        = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_eternate_reset[3]");
+  static gotoRevolution     = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_main[1]");
+  static claimIP            = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_infinite_reset[4]");
+  static claimEP            = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_eternate_reset[3]");
+  static openUnitOption     = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_unite_reset[2]");
+  static selectLeftZodiac   = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/zodiac_choice[11]/content[0]/ctn_zodiac[5]/ctn_root[0]/item_zodiac_choice_item_left[3]/btn_astro[0]");
+  static selectTopZodiac    = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/zodiac_choice[11]/content[0]/ctn_zodiac[5]/ctn_root[0]/item_zodiac_choice_item_top[2]/btn_astro[0]");
+  static selectRightZodiac  = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/zodiac_choice[11]/content[0]/ctn_zodiac[5]/ctn_root[0]/item_zodiac_choice_item_bottom[1]/btn_astro[0]");
+  static selectBottomZodiac = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/zodiac_choice[11]/content[0]/ctn_zodiac[5]/ctn_root[0]/item_zodiac_choice_item_right[0]/btn_astro[0]");
+  static unit               = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/zodiac_choice[11]/content[0]/btn_unite[7]");
+
+  static async unitWith(position = "Left") {
+    await this.openUnitOption();
+    await rev.sleep(1000);
+    await this[`select${position}Zodiac`]();
+    await rev.sleep(500);
+    await this.unit();
+  }
 
 
   static gotoInfinity = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_infinity[2]");

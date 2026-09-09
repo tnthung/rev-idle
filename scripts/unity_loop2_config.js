@@ -12,6 +12,6 @@ export default {
 
   ECWaitTime: 3000,
 
-  // Stop after spent all 65 DTP.
-  stopAfterSpentAllDTP: true,
+  attackMode: true,
+  attackTargetLevel: 105,
 };
