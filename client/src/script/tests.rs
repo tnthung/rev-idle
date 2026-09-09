@@ -229,9 +229,10 @@ async fn rev_invoke_sends_button_path_and_reports_plugin_errors() {
     use serde_json::{json, Value};
     use tokio_tungstenite::tungstenite::Message;
 
+    let remote_error = "invoke target is not interactable: 'scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_content[0]/scroll_view[0]/viewport[0]/content[0]/zodiac_upgrade_row[12]/buy_button[0]' -- complete remote error";
     for (response_type, payload, expect_error) in [
         ("InvokeRes", json!({}), false),
-        ("RemoteError", json!({ "message": "path lookup failed" }), true),
+        ("RemoteError", json!({ "message": remote_error }), true),
     ] {
         let (address, peer_rx) = raw_server().await;
         let connection = WsConnection::connect_for_test(
@@ -276,7 +277,7 @@ async fn rev_invoke_sends_button_path_and_reports_plugin_errors() {
         .unwrap();
         let result = invocation.await;
         if expect_error {
-            assert!(result.unwrap_err().contains("path lookup failed"));
+            assert!(result.unwrap_err().contains(remote_error));
         } else {
             result.unwrap();
         }

@@ -8,6 +8,7 @@ use rquickjs::{
     function::{Async, Opt, Rest},
     Ctx,
     Error,
+    Exception,
     Function,
     Object,
     Value,
@@ -71,6 +72,10 @@ pub(super) struct HostControls {
 
 fn host_error(message: String) -> Error {
     Error::new_from_js_message("host control", "JavaScript", message)
+}
+
+fn bridge_error(ctx: &Ctx<'_>, message: String) -> Error {
+    Exception::throw_message(ctx, &message)
 }
 
 fn validate_coordinate(value: f64) -> Result<i32, Error> {
@@ -201,12 +206,12 @@ pub(super) fn create_rev<'js>(
     let state_connection = connection.clone();
     let state_raw = Function::new(
         ctx.clone(),
-        Async(move |keys: Rest<String>| {
+        Async(move |ctx: Ctx<'js>, keys: Rest<String>| {
             let connection = state_connection.clone();
             async move {
                 crate::bridge::request_state(&connection, &keys.0)
                     .await
-                    .map_err(|error| Error::new_from_js_message("state", "bridge response", error))
+                    .map_err(|error| bridge_error(&ctx, error))
             }
         }),
     )?;
@@ -222,7 +227,7 @@ pub(super) fn create_rev<'js>(
     let invoke_controls = controls.clone();
     rev.set(
         "invoke",
-        Function::new(ctx.clone(), Async(move |path: String| {
+        Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, path: String| {
             let connection = invoke_connection.clone();
             let controls = invoke_controls.clone();
             async move {
@@ -232,7 +237,9 @@ pub(super) fn create_rev<'js>(
                 if controls.actions_paused.is_paused() {
                     return Ok(());
                 }
-                crate::bridge::invoke(&connection, path).await.map_err(host_error)
+                crate::bridge::invoke(&connection, path)
+                    .await
+                    .map_err(|error| bridge_error(&ctx, error))
             }
         }))?,
     )?;
@@ -240,7 +247,7 @@ pub(super) fn create_rev<'js>(
     let transfer_controls = controls.clone();
     rev.set(
         "transfer",
-        Function::new(ctx.clone(), Async(move |source: String, destination: String| {
+        Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, source: String, destination: String| {
             let connection = transfer_connection.clone();
             let controls = transfer_controls.clone();
             async move {
@@ -252,7 +259,7 @@ pub(super) fn create_rev<'js>(
                 }
                 crate::bridge::transfer(&connection, source, destination)
                     .await
-                    .map_err(host_error)
+                    .map_err(|error| bridge_error(&ctx, error))
             }
         }))?,
     )?;
