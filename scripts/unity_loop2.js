@@ -79,8 +79,9 @@ export default async function main() {
 
   try {
     if (!await bootstrapEternity().catch(e => console.error("Error happened while bootstrapping eternity:\n", e))) return;
-    if (!await completeFirst9EC().catch(e => console.error("Error happened while completing first 9 eternal challenges:\n", e))) return;
-    if (!await complete10thEC().catch(e => console.error("Error happened while completing the 10th eternal challenge:\n", e))) return;
+    // if (!await completeFirst9EC().catch(e => console.error("Error happened while completing first 9 eternal challenges:\n", e))) return;
+    // if (!await complete10thEC().catch(e => console.error("Error happened while completing the 10th eternal challenge:\n", e))) return;
+    if (!await completeEC().catch(e => console.error("Error happened while completing the eternal challenges:\n", e))) return;
     if (!await bootstrapDilation().catch(e => console.error("Error happened while bootstrapping dilation:\n", e))) return;
     if (!await finishDTP40().catch(e => console.error("Error happened while finishing DTP 40:\n", e))) return;
 
@@ -383,6 +384,66 @@ async function bootstrapEternity() {
 }
 
 
+async function completeEC() {
+  let allCompleted = true;
+
+  EC: for (let c=0; c<10; c++) while (true) {
+    const ec = await States.eternalChallenge(c);
+    if (ec.completeDiff >= 5) continue EC;
+
+    // make sure the challenge is exited
+    await Action[`selectEternityChallenge${c+1}`]();
+    if (ec.inChallenge)
+      await Action.toggleEternityChallenge();
+
+    // for first EC10, need to bootstrap dilation first
+    if (c === 9 && ec.completeDiff === 0)
+      try {
+        for (let i=0; i<3; i++) {
+          await Action.toggleDilation();
+          await rev.sleep(500);
+          await Action.toggleDilation();
+        }
+      } catch {}
+
+    // enter the challenge
+    await Action.toggleEternityChallenge();
+
+    // wait until either the challenge is finished or timed out
+    await wait_for(
+      async () => !(await States.eternalChallenge(c)).inChallenge,
+      50, executionConfig.ECWaitTime);
+
+    // if timeout, start the next EC
+    if ((await States.eternalChallenge(c)).inChallenge) {
+      await Action.toggleEternityChallenge();
+      allCompleted = false;
+      continue EC;
+    }
+  }
+
+  if (!allCompleted) {
+    await rev.sleep(1000);
+    await Action.claimEP();
+
+    try {
+      await Action.toggleDilation();
+      await rev.sleep(500);
+      await Action.toggleDilation();
+    } catch {}
+
+    return;
+  }
+
+  if (!allECCompleted) {
+    console.log("All eternal challenges completed.");
+    allECCompleted = true;
+  }
+
+  return true;
+}
+
+
 async function completeFirst9EC() {
   let allCompleted = true;
 
@@ -490,7 +551,9 @@ async function finishDTP40() {
     return;
   }
 
-  if (await States.spentDTP() >= 40) {
+  if (await States.spentDTP() > 40
+  || (await States.spentDTP() === 40 && await DilationTree.DTP40.match()))
+  {
     if (!finish40DTP) {
       console.log("Finished DTP 40.");
       finish40DTP = true;
