@@ -91,66 +91,9 @@ export default async function main() {
 }
 
 
-async function mergeAndSellZodiac(minPreserveZodiacRarity) {
-  console.log("Starting merge and sell for Legendary zodiac...");
-
-  if (!minPreserveZodiacRarity) {
-    minPreserveZodiacRarity = ZodiacRarity.Garbage;
-  } else if (typeof minPreserveZodiacRarity === "string") {
-    minPreserveZodiacRarity = ZodiacRarity[minPreserveZodiacRarity];
-    if (minPreserveZodiacRarity === undefined)
-      throw new Error("Invalid ZodiacRarity: " + minPreserveZodiacRarity);
-  } else if (typeof minPreserveZodiacRarity !== "number") {
-    throw new Error("Invalid ZodiacRarity: " + minPreserveZodiacRarity);
-  } else if (minPreserveZodiacRarity < ZodiacRarity.Garbage || minPreserveZodiacRarity > ZodiacRarity.Immortal) {
-    throw new Error("Invalid ZodiacRarity: " + minPreserveZodiacRarity);
-  }
-
-  let sellCount = 0;
-  let mergeCount = 0;
-
-  const mergeBuckets = {};
-
-  for (const [pos, zodiac] of Object.entries((await States.unityZodiacInventory()))) {
-    const element = ZodiacElement[zodiac.Element];
-    const rarity = ZodiacRarity[zodiac.rarity];
-
-    if (rarity < minPreserveZodiacRarity) {
-      await Action.sellZodiac(pos);
-      sellCount++;
-      continue;
-    }
-
-    const key = `${element};${rarity}`;
-
-    if (!mergeBuckets[key])
-      mergeBuckets[key] = [];
-    mergeBuckets[key].push(pos);
-  }
-
-  for (let element=ZodiacElement.Fire; element<=ZodiacElement.Wind; element++)
-    for (let rarity=ZodiacRarity.Garbage; rarity<ZodiacRarity.Immortal; rarity++) {
-      const bucket = mergeBuckets[`${element};${rarity}`];
-      if (!bucket || bucket.length < 3) continue;
-
-      while (bucket.length >= 3) {
-        const positions = bucket.splice(0, 3);
-        await Action.mergeZodiac(...positions);
-        mergeCount++;
-
-        const nextRarity = rarity + 1;
-        const nextKey = `${element};${nextRarity}`;
-        if (!mergeBuckets[nextKey])
-          mergeBuckets[nextKey] = [];
-        mergeBuckets[nextKey].push(positions[0]);
-      }
-    }
-
-  console.log("Total zodiacs sold:", sellCount, "Total zodiacs merged:", mergeCount);
-}
-
-
 async function mergeAndSellHardTrialZodiac() {
+  await Action.gotoZodiacMerge();
+
   const {
     targetSigns,
     targetMinRarity,
