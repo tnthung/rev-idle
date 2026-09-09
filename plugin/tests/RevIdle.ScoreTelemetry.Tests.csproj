@@ -11,6 +11,7 @@
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="..\src\WsConnection.cs" Link="WsConnection.cs" />
+    <Compile Include="..\src\BridgePackets.cs" Link="BridgePackets.cs" />
     <Compile Include="..\src\HttpScoreServer.cs" Link="HttpScoreServer.cs" />
     <Compile Include="..\src\StatePayload.cs" Link="StatePayload.cs" />
     <Compile Include="..\src\ExtraRoots.cs" Link="ExtraRoots.cs" />
@@ -22,6 +23,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="..\..\protocol\fixtures\bridge-packets.json"
+          Link="protocol\bridge-packets.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\protocol\fixtures\test-request.json"
           Link="protocol\test-request.json"
           CopyToOutputDirectory="PreserveNewest" />

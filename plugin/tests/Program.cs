@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using RevIdle.ScoreTelemetry;
 
 InvalidPortsDisableServer();
@@ -35,6 +36,12 @@ StatePayloadRejectsRunawayValueTraversal();
 StatePayloadRejectsImplementationPropertyPaths();
 StatePayloadExcludesIl2CppDelegatesAndUnityEvents();
 StatePayloadExcludesRuntimeTypesAtEveryBoundary();
+BridgePacketPayloadsMatchSharedFixture();
+await BridgeStateHandlerPreservesMixedJsonAndSelectedKeys();
+await BridgeStateHandlerReportsMissingData();
+await BridgeStateHandlerReportsInvalidPath();
+await BridgeUiHandlersReportCorrelatedErrorsOnPumpThread();
+await BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending();
 BridgeDecodesFullWidthCoordinates();
 BridgeRejectsZeroRequestId();
 BridgeMapsTopLeftClientCoordinatesToUnityCoordinates();
@@ -83,7 +90,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("74 tests passed.");
+System.Console.WriteLine("80 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -94,6 +101,220 @@ static void WsEnvelopeMatchesSharedFixture()
         "protocol",
         "test-request.json")).TrimEnd();
     Equal(expected, actual, nameof(WsEnvelopeMatchesSharedFixture));
+}
+
+static void BridgePacketPayloadsMatchSharedFixture()
+{
+    using JsonDocument fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+        AppContext.BaseDirectory,
+        "protocol",
+        "bridge-packets.json")));
+    (string Name, object Packet)[] packets = new[]
+    {
+        ("StateReq", (object)new StateReq(new[] { "score", "eternity.dtpSpent" })),
+        ("StateRes", new StateRes(JsonSerializer.Deserialize<JsonElement>("{\"score\":\"1e3\",\"enabled\":true,\"nested\":{\"value\":null},\"items\":[1,\"two\",false]}"))),
+        ("CaptureReq", new CaptureReq(123, -45)),
+        ("CaptureRes", new CaptureRes("slot", "scene:1/Canvas[0]/Inventory/3")),
+        ("InvokeReq", new InvokeReq("scene:1/Canvas[0]/Buy DTP & More[0]")),
+        ("InvokeRes", new InvokeRes()),
+        ("TransferReq", new TransferReq("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0")),
+        ("TransferRes", new TransferRes())
+    };
+
+    foreach ((string name, object packet) in packets)
+    {
+        using JsonDocument envelope = JsonDocument.Parse(WsConnection.SerializeForTest(Guid.Empty, packet));
+        Equal(name, envelope.RootElement.GetProperty("type").GetString(), nameof(BridgePacketPayloadsMatchSharedFixture));
+        Equal(
+            JsonNode.Parse(fixture.RootElement.GetProperty(name).GetRawText())!.ToJsonString(),
+            JsonNode.Parse(envelope.RootElement.GetProperty("payload").GetRawText())!.ToJsonString(),
+            nameof(BridgePacketPayloadsMatchSharedFixture));
+    }
+
+    Equal(
+        "{\"type\":null,\"path\":null}",
+        JsonSerializer.Serialize(new CaptureRes(null, null), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
+        nameof(BridgePacketPayloadsMatchSharedFixture));
+}
+
+static async Task BridgeStateHandlerPreservesMixedJsonAndSelectedKeys()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int dataThread = 0;
+    int pumpThread = 0;
+    Plugin.RegisterHandlers(server, () =>
+    {
+        Volatile.Write(ref dataThread, Environment.CurrentManagedThreadId);
+        return new BridgeStateFixture();
+    }, () => 0);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        string envelope = $"{{\"uuid\":\"{uuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Score\",\"gameData.Enabled\",\"gameData.Nested\",\"gameData.Items\"]}}}}";
+        using JsonDocument response = await SendLiteralBridgeRequestAndPump(server, peer, 0, envelope, thread =>
+        {
+            if (Volatile.Read(ref dataThread) == 0)
+                Volatile.Write(ref pumpThread, thread);
+        });
+        Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), nameof(BridgeStateHandlerPreservesMixedJsonAndSelectedKeys));
+        Equal("StateRes", response.RootElement.GetProperty("type").GetString(), nameof(BridgeStateHandlerPreservesMixedJsonAndSelectedKeys));
+        Equal(pumpThread, dataThread, nameof(BridgeStateHandlerPreservesMixedJsonAndSelectedKeys));
+        Equal(
+            "{\"gameData.Score\":\"1e3\",\"gameData.Enabled\":true,\"gameData.Nested\":{\"Value\":null},\"gameData.Items\":[1,\"two\",false]}",
+            JsonNode.Parse(response.RootElement.GetProperty("payload").GetProperty("value").GetRawText())!.ToJsonString(),
+            nameof(BridgeStateHandlerPreservesMixedJsonAndSelectedKeys));
+    }
+}
+
+static async Task BridgeStateHandlerReportsMissingData()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    Plugin.RegisterHandlers(server, () => null, () => 0);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        using JsonDocument response = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            0,
+            $"{{\"uuid\":\"{uuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Score\"]}}}}",
+            null);
+        AssertRemoteError(response, uuid, nameof(BridgeStateHandlerReportsMissingData));
+    }
+}
+
+static async Task BridgeStateHandlerReportsInvalidPath()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () => 0);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        using JsonDocument response = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            0,
+            $"{{\"uuid\":\"{uuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Missing\"]}}}}",
+            null);
+        AssertRemoteError(response, uuid, nameof(BridgeStateHandlerReportsInvalidPath));
+    }
+}
+
+static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int windowThread = 0;
+    int pumpThread = 0;
+    Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () =>
+    {
+        Volatile.Write(ref windowThread, Environment.CurrentManagedThreadId);
+        return 0;
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid captureUuid = Guid.NewGuid();
+        using (JsonDocument capture = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            0,
+            $"{{\"uuid\":\"{captureUuid}\",\"type\":\"CaptureReq\",\"payload\":{{\"x\":123,\"y\":-45}}}}",
+            thread =>
+            {
+                if (Volatile.Read(ref windowThread) == 0)
+                    Volatile.Write(ref pumpThread, thread);
+            }))
+            AssertRemoteError(capture, captureUuid, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal(pumpThread, windowThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+
+        Guid invokeUuid = Guid.NewGuid();
+        using (JsonDocument invoke = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            0,
+            $"{{\"uuid\":\"{invokeUuid}\",\"type\":\"InvokeReq\",\"payload\":[]}}",
+            thread => Volatile.Write(ref pumpThread, thread)))
+            AssertRemoteError(invoke, invokeUuid, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+
+        Guid transferUuid = Guid.NewGuid();
+        using (JsonDocument transfer = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            0,
+            $"{{\"uuid\":\"{transferUuid}\",\"type\":\"TransferReq\",\"payload\":{{\"source\":\"same\",\"destination\":\"same\"}}}}",
+            thread => Volatile.Write(ref pumpThread, thread)))
+            AssertRemoteError(transfer, transferUuid, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+    }
+}
+
+static async Task BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int dataCalls = 0;
+    BridgeStateFixture largeData = new() { Text = new string('x', 64 * 1024) };
+    Plugin.RegisterHandlers(server, () => Interlocked.Increment(ref dataCalls) == 1 ? largeData : new BridgeStateFixture(), () => 0);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid firstUuid = Guid.NewGuid();
+        Guid secondUuid = Guid.NewGuid();
+        await SendText(peer, $"{{\"uuid\":\"{firstUuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Text\"]}}}}");
+        DateTime firstDeadline = DateTime.UtcNow.AddSeconds(2);
+        while (Volatile.Read(ref dataCalls) == 0 && DateTime.UtcNow < firstDeadline)
+        {
+            Plugin.PumpPackets(0);
+            await Task.Delay(1);
+        }
+        Equal(1, Volatile.Read(ref dataCalls), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+
+        await SendText(peer, $"{{\"uuid\":\"{secondUuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Score\"]}}}}");
+        DateTime secondDeadline = DateTime.UtcNow.AddSeconds(2);
+        while (Volatile.Read(ref dataCalls) < 2 && DateTime.UtcNow < secondDeadline)
+        {
+            Plugin.PumpPackets(0);
+            await Task.Delay(1);
+        }
+        Equal(2, Volatile.Read(ref dataCalls), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+
+        using JsonDocument firstResponse = JsonDocument.Parse(await ReceiveText(peer));
+        using JsonDocument secondResponse = JsonDocument.Parse(await ReceiveText(peer));
+        Equal(true, new[] { firstResponse.RootElement.GetProperty("uuid").GetGuid(), secondResponse.RootElement.GetProperty("uuid").GetGuid() }.Contains(firstUuid), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+        Equal(true, new[] { firstResponse.RootElement.GetProperty("uuid").GetGuid(), secondResponse.RootElement.GetProperty("uuid").GetGuid() }.Contains(secondUuid), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+    }
+}
+
+static async Task<JsonDocument> SendLiteralBridgeRequestAndPump(
+    WsConnection server,
+    WebSocket peer,
+    nint window,
+    string envelope,
+    Action<int>? beforePump)
+{
+    await SendText(peer, envelope);
+    Task<string> response = ReceiveText(peer);
+    DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+    while (!response.IsCompleted && DateTime.UtcNow < deadline)
+    {
+        beforePump?.Invoke(Environment.CurrentManagedThreadId);
+        Plugin.PumpPackets(window);
+        await Task.Delay(1);
+    }
+    return JsonDocument.Parse(await response.WaitAsync(TimeSpan.FromSeconds(2)));
+}
+
+static void AssertRemoteError(JsonDocument response, Guid uuid, string testName)
+{
+    Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), testName);
+    Equal("RemoteError", response.RootElement.GetProperty("type").GetString(), testName);
+    Equal(true, response.RootElement.GetProperty("payload").GetProperty("message").GetString() is not null, testName);
 }
 
 static async Task WsDisconnectedCallsFailImmediately()
@@ -1555,7 +1776,7 @@ static async Task<(TcpClient Client, WebSocket Socket)> ConnectRawClient(WsConne
         client.GetStream(),
         isServer: false,
         subProtocol: null,
-        keepAliveInterval: Timeout.InfiniteTimeSpan);
+        keepAliveInterval: TimeSpan.FromSeconds(5));
     DateTime deadline = DateTime.UtcNow.AddSeconds(2);
     while (!server.ConnectedForTest && DateTime.UtcNow < deadline)
         await Task.Delay(1);
@@ -1820,6 +2041,20 @@ sealed record TestReq(string Value) : IRequest<TestRes>;
 sealed record TestRes(string Value);
 sealed record OtherRes(string Value);
 sealed record UnknownReq(string Value);
+
+sealed class BridgeStateFixture
+{
+    public string Score { get; init; } = "1e3";
+    public bool Enabled { get; init; } = true;
+    public BridgeNestedStateFixture Nested { get; init; } = new();
+    public object[] Items { get; init; } = new object[] { 1, "two", false };
+    public string Text { get; init; } = "small";
+}
+
+sealed class BridgeNestedStateFixture
+{
+    public object? Value { get; init; }
+}
 
 sealed class ThrowingResponse
 {

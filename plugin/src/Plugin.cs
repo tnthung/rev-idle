@@ -15,6 +15,7 @@ public sealed class Plugin : BasePlugin
 
     private static WsConnection? _connection;
     private static ManualLogSource? _logger;
+    private static nint _window;
 
     public override void Load()
     {
@@ -27,6 +28,8 @@ public sealed class Plugin : BasePlugin
             "Raw packet server port on 127.0.0.1. Set to 0 to disable.").Value;
 
         _connection = WsConnection.Create(configuredPort, message => _logger?.LogError($"[WebSocket] {message}"));
+        if (_connection is not null)
+            RegisterHandlers(_connection, () => GameController.data, () => _window);
         AddComponent<ScoreTicker>();
     }
 
@@ -34,8 +37,52 @@ public sealed class Plugin : BasePlugin
 
     internal static void LogBridgeError(string message) => _logger?.LogError($"[InputBridge] {message}");
 
-    internal static void PumpPackets()
+    internal static void RegisterHandlers(
+        WsConnection connection,
+        Func<object?> getData,
+        Func<nint> getWindow)
     {
+        _connection = connection;
+        connection.Handler<StateReq>(async (context, packet) =>
+        {
+            object? data = getData();
+            if (data is null)
+                throw new InvalidOperationException("State data is unavailable.");
+
+            StatePayloadStatus status = StatePayload.Encode(data, packet.Keys, out byte[] payload);
+            if (status == StatePayloadStatus.InvalidPath)
+                throw new InvalidOperationException("State path is invalid.");
+            if (status == StatePayloadStatus.SerializationFailure)
+                throw new InvalidOperationException("State serialization failed.");
+
+            using JsonDocument document = JsonDocument.Parse(payload);
+            JsonElement value = document.RootElement.Clone();
+            await context.Send(new StateRes(value));
+        });
+        connection.Handler<CaptureReq>(async (context, packet) =>
+        {
+            nint window = getWindow();
+            if (!UnityUiClickDispatcher.TryCapture(window, packet.X, packet.Y, out string? type, out string? path, out string error))
+                throw new InvalidOperationException(error);
+            await context.Send(new CaptureRes(type, path));
+        });
+        connection.Handler<InvokeReq>(async (context, packet) =>
+        {
+            if (!UnityUiClickDispatcher.TryInvoke(packet.Path, out string error))
+                throw new InvalidOperationException(error);
+            await context.Send(new InvokeRes());
+        });
+        connection.Handler<TransferReq>(async (context, packet) =>
+        {
+            if (!UnityUiClickDispatcher.TryTransfer(packet.Source, packet.Destination, out string error))
+                throw new InvalidOperationException(error);
+            await context.Send(new TransferRes());
+        });
+    }
+
+    internal static void PumpPackets(nint window)
+    {
+        _window = window;
         try
         {
             _connection?.Pump();
@@ -117,7 +164,7 @@ public sealed class ScoreTicker : MonoBehaviour
         DispatchQueuedScrolls();
         DispatchQueuedDrags();
 
-        Plugin.PumpPackets();
+        Plugin.PumpPackets(_bridge?.Window ?? 0);
     }
 
     public void OnDestroy()
