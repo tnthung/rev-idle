@@ -183,7 +183,7 @@ static async Task BridgeStateHandlerReportsMissingData()
             0,
             $"{{\"uuid\":\"{uuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Score\"]}}}}",
             null);
-        AssertRemoteError(response, uuid, nameof(BridgeStateHandlerReportsMissingData));
+        AssertRemoteError(response, uuid, nameof(BridgeStateHandlerReportsMissingData), "State data is unavailable.");
     }
 }
 
@@ -202,7 +202,7 @@ static async Task BridgeStateHandlerReportsInvalidPath()
             0,
             $"{{\"uuid\":\"{uuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Missing\"]}}}}",
             null);
-        AssertRemoteError(response, uuid, nameof(BridgeStateHandlerReportsInvalidPath));
+        AssertRemoteError(response, uuid, nameof(BridgeStateHandlerReportsInvalidPath), "State path is invalid.");
     }
 }
 
@@ -210,11 +210,43 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
 {
     using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
     int windowThread = 0;
-    int pumpThread = 0;
+    int captureThread = 0;
+    int capturePumpThread = 0;
+    int captureX = 0;
+    int captureY = 0;
+    nint captureWindow = 0;
+    int invokeThread = 0;
+    int invokePumpThread = 0;
+    string? invokedPath = null;
+    int transferThread = 0;
+    int transferPumpThread = 0;
+    string? transferredSource = null;
+    string? transferredDestination = null;
     Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () =>
     {
         Volatile.Write(ref windowThread, Environment.CurrentManagedThreadId);
-        return 0;
+        return (nint)0x1234;
+    },
+    (window, x, y) =>
+    {
+        Volatile.Write(ref captureThread, Environment.CurrentManagedThreadId);
+        captureWindow = window;
+        captureX = x;
+        captureY = y;
+        return (true, "slot", "captured", "");
+    },
+    path =>
+    {
+        Volatile.Write(ref invokeThread, Environment.CurrentManagedThreadId);
+        invokedPath = path;
+        return (false, "invoke failed");
+    },
+    (source, destination) =>
+    {
+        Volatile.Write(ref transferThread, Environment.CurrentManagedThreadId);
+        transferredSource = source;
+        transferredDestination = destination;
+        return (true, "");
     });
     (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
     using (client)
@@ -224,33 +256,58 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
         using (JsonDocument capture = await SendLiteralBridgeRequestAndPump(
             server,
             peer,
-            0,
+            (nint)0x5678,
             $"{{\"uuid\":\"{captureUuid}\",\"type\":\"CaptureReq\",\"payload\":{{\"x\":123,\"y\":-45}}}}",
             thread =>
             {
-                if (Volatile.Read(ref windowThread) == 0)
-                    Volatile.Write(ref pumpThread, thread);
+                if (Volatile.Read(ref captureThread) == 0)
+                    Volatile.Write(ref capturePumpThread, thread);
             }))
-            AssertRemoteError(capture, captureUuid, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
-        Equal(pumpThread, windowThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        {
+            Equal(captureUuid, capture.RootElement.GetProperty("uuid").GetGuid(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("CaptureRes", capture.RootElement.GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("slot", capture.RootElement.GetProperty("payload").GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("captured", capture.RootElement.GetProperty("payload").GetProperty("path").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        }
+        Equal(capturePumpThread, windowThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal(capturePumpThread, captureThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal((nint)0x1234, captureWindow, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal(123, captureX, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal(-45, captureY, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
 
         Guid invokeUuid = Guid.NewGuid();
         using (JsonDocument invoke = await SendLiteralBridgeRequestAndPump(
             server,
             peer,
             0,
-            $"{{\"uuid\":\"{invokeUuid}\",\"type\":\"InvokeReq\",\"payload\":[]}}",
-            thread => Volatile.Write(ref pumpThread, thread)))
-            AssertRemoteError(invoke, invokeUuid, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            $"{{\"uuid\":\"{invokeUuid}\",\"type\":\"InvokeReq\",\"payload\":{{\"path\":\"scene:1/Buy[0]\"}}}}",
+            thread =>
+            {
+                if (Volatile.Read(ref invokeThread) == 0)
+                    Volatile.Write(ref invokePumpThread, thread);
+            }))
+            AssertRemoteError(invoke, invokeUuid, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread), "invoke failed");
+        Equal(invokePumpThread, invokeThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal("scene:1/Buy[0]", invokedPath, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
 
         Guid transferUuid = Guid.NewGuid();
         using (JsonDocument transfer = await SendLiteralBridgeRequestAndPump(
             server,
             peer,
             0,
-            $"{{\"uuid\":\"{transferUuid}\",\"type\":\"TransferReq\",\"payload\":{{\"source\":\"same\",\"destination\":\"same\"}}}}",
-            thread => Volatile.Write(ref pumpThread, thread)))
-            AssertRemoteError(transfer, transferUuid, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            $"{{\"uuid\":\"{transferUuid}\",\"type\":\"TransferReq\",\"payload\":{{\"source\":\"source\",\"destination\":\"destination\"}}}}",
+            thread =>
+            {
+                if (Volatile.Read(ref transferThread) == 0)
+                    Volatile.Write(ref transferPumpThread, thread);
+            }))
+        {
+            Equal(transferUuid, transfer.RootElement.GetProperty("uuid").GetGuid(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("TransferRes", transfer.RootElement.GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        }
+        Equal(transferPumpThread, transferThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal("source", transferredSource, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal("destination", transferredDestination, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
     }
 }
 
@@ -258,36 +315,62 @@ static async Task BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending(
 {
     using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
     int dataCalls = 0;
-    BridgeStateFixture largeData = new() { Text = new string('x', 64 * 1024) };
-    Plugin.RegisterHandlers(server, () => Interlocked.Increment(ref dataCalls) == 1 ? largeData : new BridgeStateFixture(), () => 0);
-    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
-    using (client)
-    using (peer)
+    int outboundSends = 0;
+    TaskCompletionSource<bool> firstSendStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> releaseFirstSend = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.OutboundSendGateForTest = () =>
     {
-        Guid firstUuid = Guid.NewGuid();
-        Guid secondUuid = Guid.NewGuid();
-        await SendText(peer, $"{{\"uuid\":\"{firstUuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Text\"]}}}}");
-        DateTime firstDeadline = DateTime.UtcNow.AddSeconds(2);
-        while (Volatile.Read(ref dataCalls) == 0 && DateTime.UtcNow < firstDeadline)
+        if (Interlocked.Increment(ref outboundSends) == 1)
         {
-            Plugin.PumpPackets(0);
-            await Task.Delay(1);
+            firstSendStarted.TrySetResult(true);
+            return releaseFirstSend.Task;
         }
-        Equal(1, Volatile.Read(ref dataCalls), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
-
-        await SendText(peer, $"{{\"uuid\":\"{secondUuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Score\"]}}}}");
-        DateTime secondDeadline = DateTime.UtcNow.AddSeconds(2);
-        while (Volatile.Read(ref dataCalls) < 2 && DateTime.UtcNow < secondDeadline)
+        return Task.CompletedTask;
+    };
+    Plugin.RegisterHandlers(server, () =>
+    {
+        Interlocked.Increment(ref dataCalls);
+        return new BridgeStateFixture();
+    }, () => 0);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    try
+    {
+        using (client)
+        using (peer)
         {
-            Plugin.PumpPackets(0);
-            await Task.Delay(1);
-        }
-        Equal(2, Volatile.Read(ref dataCalls), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+            Guid firstUuid = Guid.NewGuid();
+            Guid secondUuid = Guid.NewGuid();
+            await SendText(peer, $"{{\"uuid\":\"{firstUuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Text\"]}}}}");
+            DateTime firstDeadline = DateTime.UtcNow.AddSeconds(2);
+            while (!firstSendStarted.Task.IsCompleted && DateTime.UtcNow < firstDeadline)
+            {
+                Plugin.PumpPackets(0);
+                await Task.Delay(1);
+            }
+            await firstSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Equal(1, Volatile.Read(ref dataCalls), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+            Equal(true, server.HandlerTaskCountForTest > 0, nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
 
-        using JsonDocument firstResponse = JsonDocument.Parse(await ReceiveText(peer));
-        using JsonDocument secondResponse = JsonDocument.Parse(await ReceiveText(peer));
-        Equal(true, new[] { firstResponse.RootElement.GetProperty("uuid").GetGuid(), secondResponse.RootElement.GetProperty("uuid").GetGuid() }.Contains(firstUuid), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
-        Equal(true, new[] { firstResponse.RootElement.GetProperty("uuid").GetGuid(), secondResponse.RootElement.GetProperty("uuid").GetGuid() }.Contains(secondUuid), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+            await SendText(peer, $"{{\"uuid\":\"{secondUuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Score\"]}}}}");
+            DateTime secondDeadline = DateTime.UtcNow.AddSeconds(2);
+            while (Volatile.Read(ref dataCalls) < 2 && DateTime.UtcNow < secondDeadline)
+            {
+                Plugin.PumpPackets(0);
+                await Task.Delay(1);
+            }
+            Equal(2, Volatile.Read(ref dataCalls), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+            Equal(true, server.HandlerTaskCountForTest >= 2, nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+
+            releaseFirstSend.TrySetResult(true);
+            using JsonDocument firstResponse = JsonDocument.Parse(await ReceiveText(peer));
+            using JsonDocument secondResponse = JsonDocument.Parse(await ReceiveText(peer));
+            Equal(true, new[] { firstResponse.RootElement.GetProperty("uuid").GetGuid(), secondResponse.RootElement.GetProperty("uuid").GetGuid() }.Contains(firstUuid), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+            Equal(true, new[] { firstResponse.RootElement.GetProperty("uuid").GetGuid(), secondResponse.RootElement.GetProperty("uuid").GetGuid() }.Contains(secondUuid), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+        }
+    }
+    finally
+    {
+        releaseFirstSend.TrySetResult(true);
     }
 }
 
@@ -310,11 +393,14 @@ static async Task<JsonDocument> SendLiteralBridgeRequestAndPump(
     return JsonDocument.Parse(await response.WaitAsync(TimeSpan.FromSeconds(2)));
 }
 
-static void AssertRemoteError(JsonDocument response, Guid uuid, string testName)
+static void AssertRemoteError(JsonDocument response, Guid uuid, string testName, string? expectedMessage = null)
 {
     Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), testName);
     Equal("RemoteError", response.RootElement.GetProperty("type").GetString(), testName);
-    Equal(true, response.RootElement.GetProperty("payload").GetProperty("message").GetString() is not null, testName);
+    string? message = response.RootElement.GetProperty("payload").GetProperty("message").GetString();
+    Equal(true, message is not null, testName);
+    if (expectedMessage is not null)
+        Equal(expectedMessage, message, testName);
 }
 
 static async Task WsDisconnectedCallsFailImmediately()

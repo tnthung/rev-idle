@@ -41,6 +41,33 @@ public sealed class Plugin : BasePlugin
         WsConnection connection,
         Func<object?> getData,
         Func<nint> getWindow)
+        => RegisterHandlers(
+            connection,
+            getData,
+            getWindow,
+            (window, x, y) =>
+            {
+                bool success = UnityUiClickDispatcher.TryCapture(window, x, y, out string? type, out string? path, out string error);
+                return (success, type, path, error);
+            },
+            path =>
+            {
+                bool success = UnityUiClickDispatcher.TryInvoke(path, out string error);
+                return (success, error);
+            },
+            (source, destination) =>
+            {
+                bool success = UnityUiClickDispatcher.TryTransfer(source, destination, out string error);
+                return (success, error);
+            });
+
+    internal static void RegisterHandlers(
+        WsConnection connection,
+        Func<object?> getData,
+        Func<nint> getWindow,
+        Func<nint, int, int, (bool Success, string? Type, string? Path, string Error)> capture,
+        Func<string, (bool Success, string Error)> invoke,
+        Func<string, string, (bool Success, string Error)> transfer)
     {
         _connection = connection;
         connection.Handler<StateReq>(async (context, packet) =>
@@ -62,19 +89,22 @@ public sealed class Plugin : BasePlugin
         connection.Handler<CaptureReq>(async (context, packet) =>
         {
             nint window = getWindow();
-            if (!UnityUiClickDispatcher.TryCapture(window, packet.X, packet.Y, out string? type, out string? path, out string error))
+            (bool success, string? type, string? path, string error) = capture(window, packet.X, packet.Y);
+            if (!success)
                 throw new InvalidOperationException(error);
             await context.Send(new CaptureRes(type, path));
         });
         connection.Handler<InvokeReq>(async (context, packet) =>
         {
-            if (!UnityUiClickDispatcher.TryInvoke(packet.Path, out string error))
+            (bool success, string error) = invoke(packet.Path);
+            if (!success)
                 throw new InvalidOperationException(error);
             await context.Send(new InvokeRes());
         });
         connection.Handler<TransferReq>(async (context, packet) =>
         {
-            if (!UnityUiClickDispatcher.TryTransfer(packet.Source, packet.Destination, out string error))
+            (bool success, string error) = transfer(packet.Source, packet.Destination);
+            if (!success)
                 throw new InvalidOperationException(error);
             await context.Send(new TransferRes());
         });
