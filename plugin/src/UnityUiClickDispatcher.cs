@@ -9,6 +9,8 @@ namespace RevIdle.ScoreTelemetry;
 
 internal static class UnityUiClickDispatcher
 {
+    private static readonly Dictionary<(int SceneHandle, string Name, int SiblingIndex), Transform> SpecialSceneRoots = new();
+
     internal static bool TryInvoke(string path, out string result)
     {
         GameObject? target = FindByPath(path);
@@ -213,16 +215,41 @@ internal static class UnityUiClickDispatcher
                 break;
             }
         }
-        if (!scene.IsValid())
-            return null;
-
         GameObject? current = null;
-        foreach (GameObject root in scene.GetRootGameObjects())
+        if (scene.IsValid())
         {
-            if (root.transform.GetSiblingIndex() == segments[0].SiblingIndex &&
-                Uri.EscapeDataString(root.name) == segments[0].Name)
+            foreach (GameObject root in scene.GetRootGameObjects())
             {
-                current = root;
+                if (IsRootMatch(root.scene.handle, root.name, root.transform.GetSiblingIndex(),
+                        root.transform.parent != null, sceneHandle, segments[0]))
+                {
+                    current = root;
+                    break;
+                }
+            }
+        }
+
+        var rootKey = (sceneHandle, segments[0].Name, segments[0].SiblingIndex);
+        if (current is null && SpecialSceneRoots.TryGetValue(rootKey, out Transform? cachedRoot))
+        {
+            if (cachedRoot != null && cachedRoot.gameObject.scene.IsValid() &&
+                IsRootMatch(cachedRoot.gameObject.scene.handle, cachedRoot.name, cachedRoot.GetSiblingIndex(),
+                    cachedRoot.parent != null, sceneHandle, segments[0]))
+                current = cachedRoot.gameObject;
+            else
+                SpecialSceneRoots.Remove(rootKey);
+        }
+
+        if (current is null)
+        {
+            foreach (Transform candidate in Resources.FindObjectsOfTypeAll<Transform>())
+            {
+                if (!candidate.gameObject.scene.IsValid() ||
+                    !IsRootMatch(candidate.gameObject.scene.handle, candidate.name, candidate.GetSiblingIndex(),
+                        candidate.parent != null, sceneHandle, segments[0]))
+                    continue;
+                SpecialSceneRoots[rootKey] = candidate;
+                current = candidate.gameObject;
                 break;
             }
         }
@@ -241,6 +268,18 @@ internal static class UnityUiClickDispatcher
 
         return current;
     }
+
+    internal static bool IsRootMatch(
+        int candidateSceneHandle,
+        string candidateName,
+        int candidateSiblingIndex,
+        bool candidateHasParent,
+        int sceneHandle,
+        (string Name, int SiblingIndex) segment)
+        => !candidateHasParent &&
+            candidateSceneHandle == sceneHandle &&
+            Uri.EscapeDataString(candidateName) == segment.Name &&
+            candidateSiblingIndex == segment.SiblingIndex;
 
     internal static bool TryParseHierarchyPath(
         string? path,

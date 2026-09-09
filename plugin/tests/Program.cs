@@ -42,6 +42,7 @@ BridgeOwnershipReleaseRequiresDestroyedOrSuccessfulOwnerRemoval();
 DispatcherSkipsNonClickableRaycasts();
 DispatcherParsesExactHierarchyPath();
 DispatcherRejectsMalformedHierarchyPath();
+DispatcherMatchesPersistentSceneRoot();
 ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
 ScrollProtocolRejectsZeroRequestId();
 ScrollQueuePreservesOrderAndRejectsDuplicates();
@@ -80,7 +81,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("83 tests passed.");
+System.Console.WriteLine("84 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -1797,6 +1798,18 @@ static void DispatcherRejectsMalformedHierarchyPath()
         "scene:-148/CANVAS", out _, out _), testName);
     Equal(false, UnityUiClickDispatcher.TryParseHierarchyPath(
         "scene:-148/CANVAS[-1]", out _, out _), testName);
+}
+
+static void DispatcherMatchesPersistentSceneRoot()
+{
+    const string testName = nameof(DispatcherMatchesPersistentSceneRoot);
+
+    Equal(true, UnityUiClickDispatcher.IsRootMatch(
+        -12, "VIEWMANAGER", 0, false, -12, ("VIEWMANAGER", 0)), testName);
+    Equal(false, UnityUiClickDispatcher.IsRootMatch(
+        -12, "VIEWMANAGER", 0, true, -12, ("VIEWMANAGER", 0)), testName);
+    Equal(false, UnityUiClickDispatcher.IsRootMatch(
+        -12, "viewmanager", 0, false, -12, ("VIEWMANAGER", 0)), testName);
 }
 
 static void ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId()
