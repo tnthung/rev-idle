@@ -42,6 +42,7 @@ export default async function main() {
       Action.gotoZodiacEnhance,
       Action.gotoZodiacReforge,
       Action.gotoDilationTree,
+      Action.initDilationTreeLoadout,
       Action.gotoDilation,
       Action.gotoEternityChallenge,
       Action.gotoRevolution,
