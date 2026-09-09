@@ -2,6 +2,7 @@ use super::{
     bindings::HostControls,
     loader::{ScriptModuleLoader, ScriptModuleResolver},
 };
+use crate::bridge::WsConnection;
 use rquickjs::{
     convert::Coerced,
     function::Rest,
@@ -22,8 +23,6 @@ use std::{
     io::{self, Write},
     rc::Rc,
 };
-#[cfg(test)]
-use std::time::Duration;
 
 pub(super) fn format_console_message(args: Rest<Value>) -> rquickjs::Result<String> {
     args.0
@@ -87,29 +86,20 @@ pub(super) struct ScriptSession {
     freeze: Persistent<Function<'static>>,
     context: AsyncContext,
     _runtime: AsyncRuntime,
-    client: reqwest::Client,
+    connection: WsConnection,
 }
 
 impl ScriptSession {
     #[cfg(test)]
     pub(super) async fn new(source: &str) -> Result<Self, String> {
-        Self::new_with_client(
-            source,
-            "test.js",
-            reqwest::Client::builder()
-                .no_proxy()
-                .timeout(Duration::from_secs(2))
-                .build()
-                .map_err(|error| error.to_string())?,
-        )
-        .await
+        Self::new_with_connection(source, "test.js", WsConnection::disconnected_for_test()).await
     }
 
     /// `name` is the module specifier the entry script is declared under; it
     /// also anchors relative `import`s from that script's own directory (see
     /// `ScriptModuleResolver`). Production callers pass the script's real
     /// path; tests pass a synthetic name since none of them import anything.
-    pub(super) async fn new_with_client(source: &str, name: &str, client: reqwest::Client) -> Result<Self, String> {
+    pub(super) async fn new_with_connection(source: &str, name: &str, connection: WsConnection) -> Result<Self, String> {
         let runtime = AsyncRuntime::new().map_err(|error| error.to_string())?;
         runtime.set_loader(ScriptModuleResolver, ScriptModuleLoader).await;
         let context = AsyncContext::full(&runtime).await.map_err(|error| error.to_string())?;
@@ -185,7 +175,7 @@ impl ScriptSession {
             freeze,
             context,
             _runtime: runtime,
-            client,
+            connection,
         })
     }
 
@@ -240,7 +230,7 @@ impl ScriptSession {
 
                     let rev = super::bindings::create_rev(
                         ctx.clone(),
-                        self.client.clone(),
+                        self.connection.clone(),
                         controls.clone(),
                         parse.clone(),
                         freeze.clone(),

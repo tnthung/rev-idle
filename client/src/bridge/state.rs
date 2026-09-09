@@ -1,85 +1,177 @@
-const STATE_URL: &str = "http://127.0.0.1:19841/state";
-
-#[cfg(test)]
-pub(crate) static TEST_SERVER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-pub(crate) async fn request_state(
-    client: &reqwest::Client,
-    keys: &[String],
-) -> Result<String, String> {
-    let mut request = client.get(STATE_URL);
-    if !keys.is_empty() {
-        request = request.query(
-            &keys.iter().map(|key| ("key", key)).collect::<Vec<_>>(),
-        );
-    }
-    let response = request.send().await.map_err(|error| error.to_string())?;
-    let response = response
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
-    let body = response.text().await.map_err(|error| error.to_string())?;
-    let value = serde_json::from_str::<serde_json::Value>(&body)
-        .map_err(|error| error.to_string())?;
-    if !value.is_object() {
-        return Err("state response must be a JSON object".to_owned());
-    }
-    Ok(body)
-}
+use super::{connection::WsConnection, StateReq, StateRes};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{io::{Read, Write}, net::TcpListener, thread};
+    use crate::bridge::{
+        connection::WsConnection,
+        test_support::raw_server,
+    };
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use std::time::Duration;
+    use tokio_tungstenite::tungstenite::Message;
 
-    fn serve_once(status: &str, body: &str) -> thread::JoinHandle<String> {
-        let listener = TcpListener::bind("127.0.0.1:19841").unwrap();
-        let body = body.to_owned();
-        let status = status.to_owned();
-        thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0; 4096];
-            let length = stream.read(&mut request).unwrap();
-            let request = String::from_utf8_lossy(&request[..length]).to_string();
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream.write_all(response.as_bytes()).unwrap();
-            request
-        })
-    }
-
-    fn client() -> reqwest::Client {
-        reqwest::Client::builder()
-            .no_proxy()
-            .timeout(std::time::Duration::from_secs(2))
-            .build()
+    #[tokio::test(flavor = "current_thread")]
+    async fn request_state_uses_state_packet_and_preserves_mixed_json() {
+        let (address, peer_rx) = raw_server().await;
+        let connection = WsConnection::connect_for_test(
+            address,
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+        );
+        let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+            .await
             .unwrap()
+            .unwrap();
+        let keys = ["score".to_owned(), "eternity.dtpSpent".to_owned()];
+        let request = tokio::spawn({
+            let connection = connection.clone();
+            let keys = keys.to_vec();
+            async move { request_state(&connection, &keys).await }
+        });
+        let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let envelope: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+        assert_eq!(envelope.get("type"), Some(&json!("StateReq")));
+        assert_eq!(
+            envelope.get("payload"),
+            Some(&json!({ "keys": ["score", "eternity.dtpSpent"] })),
+        );
+        peer.send(Message::Text(
+            json!({
+                "uuid": envelope["uuid"],
+                "type": "StateRes",
+                "payload": {
+                    "value": {
+                        "score": "1e3",
+                        "enabled": true,
+                        "nested": { "value": null },
+                        "items": [1, "two", false],
+                    },
+                },
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+        assert_eq!(
+            serde_json::from_str::<Value>(&request.await.unwrap().unwrap()).unwrap(),
+            json!({
+                "score": "1e3",
+                "enabled": true,
+                "nested": { "value": null },
+                "items": [1, "two", false],
+            }),
+        );
+        connection.shutdown().await;
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn request_state_preserves_mixed_json_and_selected_query() {
-        let _guard = TEST_SERVER_LOCK.lock().unwrap();
-        let raw = r#"{"score":"1e3","enabled":true,"nested":{"value":null},"items":[1,"two",false]}"#;
-        let server = serve_once("200 OK", raw);
-        let result = request_state(&client(), &["score".to_owned(), "eternity.dtpSpent".to_owned()]).await;
-        let request = server.join().unwrap();
+    async fn request_state_rejects_malformed_response_value() {
+        let (address, peer_rx) = raw_server().await;
+        let connection = WsConnection::connect_for_test(
+            address,
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+        );
+        let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let request = tokio::spawn({
+            let connection = connection.clone();
+            async move { request_state(&connection, &[]).await }
+        });
+        let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let envelope: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+        peer.send(Message::Text(
+            json!({
+                "uuid": envelope["uuid"],
+                "type": "StateRes",
+                "payload": { "unexpected": true },
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
 
-        assert_eq!(result.unwrap(), raw);
-        assert_eq!(request.lines().next().unwrap(), "GET /state?key=score&key=eternity.dtpSpent HTTP/1.1");
+        assert!(request.await.unwrap().is_err());
+        connection.shutdown().await;
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn request_state_rejects_http_malformed_and_non_object_responses() {
-        let _guard = TEST_SERVER_LOCK.lock().unwrap();
-        let server = serve_once("500 Internal Server Error", r#"{"error":"failed"}"#);
-        assert!(request_state(&client(), &[]).await.is_err());
-        server.join().unwrap();
+    async fn request_state_rejects_non_object_response_value() {
+        let (address, peer_rx) = raw_server().await;
+        let connection = WsConnection::connect_for_test(
+            address,
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+        );
+        let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let request = tokio::spawn({
+            let connection = connection.clone();
+            async move { request_state(&connection, &[]).await }
+        });
+        let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let envelope: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+        peer.send(Message::Text(
+            json!({
+                "uuid": envelope["uuid"],
+                "type": "StateRes",
+                "payload": { "value": [] },
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
 
-        for body in ["not json", "[]", "null"] {
-            let server = serve_once("200 OK", body);
-            assert!(request_state(&client(), &[]).await.is_err());
-            server.join().unwrap();
-        }
+        assert_eq!(
+            request.await.unwrap().unwrap_err(),
+            "state response must be a JSON object",
+        );
+        connection.shutdown().await;
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn disconnected_state_request_fails_immediately() {
+        let connection = WsConnection::disconnected_for_test();
+
+        assert_eq!(
+            request_state(&connection, &[]).await.unwrap_err(),
+            "NotConnected",
+        );
+    }
+}
+
+pub(crate) async fn request_state(
+    connection: &WsConnection,
+    keys: &[String],
+) -> Result<String, String> {
+    let StateRes { value } = connection
+        .request(StateReq { keys: keys.to_vec() })
+        .await
+        .map_err(|error| error.to_string())?;
+    if !value.is_object() {
+        return Err("state response must be a JSON object".to_owned());
+    }
+    serde_json::to_string(&value).map_err(|error| error.to_string())
 }

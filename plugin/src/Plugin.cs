@@ -15,6 +15,7 @@ public sealed class Plugin : BasePlugin
 
     private static WsConnection? _connection;
     private static ManualLogSource? _logger;
+    private static nint _window;
 
     public override void Load()
     {
@@ -27,6 +28,8 @@ public sealed class Plugin : BasePlugin
             "Raw packet server port on 127.0.0.1. Set to 0 to disable.").Value;
 
         _connection = WsConnection.Create(configuredPort, message => _logger?.LogError($"[WebSocket] {message}"));
+        if (_connection is not null)
+            RegisterHandlers(_connection, () => GameController.data, () => _window);
         AddComponent<ScoreTicker>();
     }
 
@@ -34,8 +37,82 @@ public sealed class Plugin : BasePlugin
 
     internal static void LogBridgeError(string message) => _logger?.LogError($"[InputBridge] {message}");
 
-    internal static void PumpPackets()
+    internal static void RegisterHandlers(
+        WsConnection connection,
+        Func<object?> getData,
+        Func<nint> getWindow)
+        => RegisterHandlers(
+            connection,
+            getData,
+            getWindow,
+            (window, x, y) =>
+            {
+                bool success = UnityUiClickDispatcher.TryCapture(window, x, y, out string? type, out string? path, out string error);
+                return (success, type, path, error);
+            },
+            path =>
+            {
+                bool success = UnityUiClickDispatcher.TryInvoke(path, out string error);
+                return (success, error);
+            },
+            (source, destination) =>
+            {
+                bool success = UnityUiClickDispatcher.TryTransfer(source, destination, out string error);
+                return (success, error);
+            });
+
+    internal static void RegisterHandlers(
+        WsConnection connection,
+        Func<object?> getData,
+        Func<nint> getWindow,
+        Func<nint, int, int, (bool Success, string? Type, string? Path, string Error)> capture,
+        Func<string, (bool Success, string Error)> invoke,
+        Func<string, string, (bool Success, string Error)> transfer)
     {
+        _connection = connection;
+        connection.Handler<StateReq>(async (context, packet) =>
+        {
+            object? data = getData();
+            if (data is null)
+                throw new InvalidOperationException("State data is unavailable.");
+
+            StatePayloadStatus status = StatePayload.Encode(data, packet.Keys, out byte[] payload);
+            if (status == StatePayloadStatus.InvalidPath)
+                throw new InvalidOperationException("State path is invalid.");
+            if (status == StatePayloadStatus.SerializationFailure)
+                throw new InvalidOperationException("State serialization failed.");
+
+            using JsonDocument document = JsonDocument.Parse(payload);
+            JsonElement value = document.RootElement.Clone();
+            await context.Send(new StateRes(value));
+        });
+        connection.Handler<CaptureReq>(async (context, packet) =>
+        {
+            nint window = getWindow();
+            (bool success, string? type, string? path, string error) = capture(window, packet.X, packet.Y);
+            if (!success)
+                throw new InvalidOperationException(error);
+            await context.Send(new CaptureRes(type, path));
+        });
+        connection.Handler<InvokeReq>(async (context, packet) =>
+        {
+            (bool success, string error) = invoke(packet.Path);
+            if (!success)
+                throw new InvalidOperationException(error);
+            await context.Send(new InvokeRes());
+        });
+        connection.Handler<TransferReq>(async (context, packet) =>
+        {
+            (bool success, string error) = transfer(packet.Source, packet.Destination);
+            if (!success)
+                throw new InvalidOperationException(error);
+            await context.Send(new TransferRes());
+        });
+    }
+
+    internal static void PumpPackets(nint window)
+    {
+        _window = window;
         try
         {
             _connection?.Pump();
@@ -45,49 +122,6 @@ public sealed class Plugin : BasePlugin
             _logger?.LogError($"Packet dispatch failed: {exception}");
         }
     }
-
-    internal static bool CompletePending(HttpScoreServer server, Func<object?> getData, nint window = 0) => server.CompletePendingRequest(request =>
-    {
-        if (request.Kind == HttpScoreServer.RequestKind.State)
-        {
-            object? data;
-            try { data = getData(); }
-            catch (Exception exception)
-            {
-                _logger?.LogError($"State data access failed: {exception}");
-                return (500, Array.Empty<byte>());
-            }
-            if (data is null)
-                return (503, Array.Empty<byte>());
-            StatePayloadStatus status = StatePayload.Encode(data, request.Keys, out byte[] payload);
-            if (status == StatePayloadStatus.SerializationFailure)
-                _logger?.LogError("State serialization failed.");
-            return status switch
-            {
-                StatePayloadStatus.Success => (200, payload),
-                StatePayloadStatus.InvalidPath => (400, Array.Empty<byte>()),
-                _ => (500, Array.Empty<byte>())
-            };
-        }
-
-        if (request.Kind == HttpScoreServer.RequestKind.Invoke)
-        {
-            if (!UnityUiClickDispatcher.TryInvoke(request.Path!, out string error))
-                return (400, JsonSerializer.SerializeToUtf8Bytes(new { error }));
-            return (200, System.Text.Encoding.UTF8.GetBytes("{}"));
-        }
-
-        if (request.Kind == HttpScoreServer.RequestKind.Transfer)
-        {
-            if (!UnityUiClickDispatcher.TryTransfer(request.Path!, request.Destination!, out string error))
-                return (400, JsonSerializer.SerializeToUtf8Bytes(new { error }));
-            return (200, System.Text.Encoding.UTF8.GetBytes("{}"));
-        }
-
-        if (!UnityUiClickDispatcher.TryCapture(window, request.X, request.Y, out string? type, out string? path, out string captureResult))
-            return (400, JsonSerializer.SerializeToUtf8Bytes(new { error = captureResult }));
-        return (200, JsonSerializer.SerializeToUtf8Bytes(new { type, path }));
-    });
 
     internal static void StopServer() => _connection?.Dispose();
 }
@@ -117,7 +151,7 @@ public sealed class ScoreTicker : MonoBehaviour
         DispatchQueuedScrolls();
         DispatchQueuedDrags();
 
-        Plugin.PumpPackets();
+        Plugin.PumpPackets(_bridge?.Window ?? 0);
     }
 
     public void OnDestroy()

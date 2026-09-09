@@ -1,5 +1,6 @@
 use crate::{
     app::ActionGate,
+    bridge::WsConnection,
     global_state::GlobalState,
     window::{post_click_to_game, Axis, WindowControl},
 };
@@ -174,7 +175,7 @@ fn parse_scroll_axis(axis: Opt<Value>) -> Result<Axis, Error> {
 
 pub(super) fn create_rev<'js>(
     ctx: Ctx<'js>,
-    client: reqwest::Client,
+    connection: WsConnection,
     controls: HostControls,
     parse: Function<'js>,
     freeze: Function<'js>,
@@ -197,15 +198,15 @@ pub(super) fn create_rev<'js>(
             std::fs::write(path, content).map_err(|error| host_error(error.to_string()))
         })?,
     )?;
-    let state_client = client.clone();
+    let state_connection = connection.clone();
     let state_raw = Function::new(
         ctx.clone(),
         Async(move |keys: Rest<String>| {
-            let client = state_client.clone();
+            let connection = state_connection.clone();
             async move {
-                crate::bridge::request_state(&client, &keys.0)
+                crate::bridge::request_state(&connection, &keys.0)
                     .await
-                    .map_err(|error| Error::new_from_js_message("state", "HTTP response", error))
+                    .map_err(|error| Error::new_from_js_message("state", "bridge response", error))
             }
         }),
     )?;
@@ -217,12 +218,12 @@ pub(super) fn create_rev<'js>(
     )?;
     let state: Function = state_wrapper.call((state_raw, parse.clone(), freeze.clone()))?;
     rev.set("state", state)?;
-    let invoke_client = client.clone();
+    let invoke_connection = connection.clone();
     let invoke_controls = controls.clone();
     rev.set(
         "invoke",
         Function::new(ctx.clone(), Async(move |path: String| {
-            let client = invoke_client.clone();
+            let connection = invoke_connection.clone();
             let controls = invoke_controls.clone();
             async move {
                 if path.trim().is_empty() {
@@ -231,16 +232,16 @@ pub(super) fn create_rev<'js>(
                 if controls.actions_paused.is_paused() {
                     return Ok(());
                 }
-                crate::bridge::invoke(&client, path).await.map_err(host_error)
+                crate::bridge::invoke(&connection, path).await.map_err(host_error)
             }
         }))?,
     )?;
-    let transfer_client = client.clone();
+    let transfer_connection = connection.clone();
     let transfer_controls = controls.clone();
     rev.set(
         "transfer",
         Function::new(ctx.clone(), Async(move |source: String, destination: String| {
-            let client = transfer_client.clone();
+            let connection = transfer_connection.clone();
             let controls = transfer_controls.clone();
             async move {
                 if source.trim().is_empty() || destination.trim().is_empty() {
@@ -249,7 +250,7 @@ pub(super) fn create_rev<'js>(
                 if controls.actions_paused.is_paused() {
                     return Ok(());
                 }
-                crate::bridge::transfer(&client, source, destination)
+                crate::bridge::transfer(&connection, source, destination)
                     .await
                     .map_err(host_error)
             }

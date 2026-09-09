@@ -107,11 +107,6 @@ async fn shutdown_tasks(
 
 pub(crate) async fn run() -> io::Result<()> {
     let initial_path = initial_script_path(std::env::args_os());
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(2))
-        .build()
-        .map_err(io::Error::other)?;
     let actions_paused = ActionGate::default();
     let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
     let (command_tx, command_rx) = mpsc::channel(32);
@@ -122,11 +117,18 @@ pub(crate) async fn run() -> io::Result<()> {
     let console_commands = command_tx.clone();
     let hotkey = crate::hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx)
         .map_err(io::Error::other)?;
-    let capture = crate::capture::CaptureWorker::start(client.clone()).map_err(io::Error::other)?;
     let connection = crate::bridge::WsConnection::connect(SocketAddr::from((
         [127, 0, 0, 1],
         19841,
     )));
+    let capture = match crate::capture::CaptureWorker::start(connection.clone()) {
+        Ok(capture) => capture,
+        Err(error) => {
+            connection.shutdown().await;
+            return Err(io::Error::other(error));
+        }
+    };
+    let script_connection = connection.clone();
     let local = LocalSet::new();
 
     let result = local
@@ -142,7 +144,7 @@ pub(crate) async fn run() -> io::Result<()> {
             tasks.spawn_local(async move {
                 crate::script::run(
                     command_rx,
-                    client,
+                    script_connection,
                     pause_rx,
                     initial_path,
                     actions_paused,

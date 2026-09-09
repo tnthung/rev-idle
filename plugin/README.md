@@ -1,6 +1,6 @@
 # Revolution Idle Score Telemetry
 
-This BepInEx plugin exposes selected live Revolution Idle values through a loopback HTTP server. Values are fetched on demand; the plugin does not push periodic telemetry.
+This BepInEx plugin exposes selected live Revolution Idle values through a loopback WebSocket bridge. Values are fetched on demand; the plugin does not push periodic telemetry.
 
 ## Requirements
 
@@ -54,7 +54,7 @@ Configure the destination:
 Port = 19841
 ```
 
-`0`, non-numeric values, and values outside `1..65535` disable the server. The server listens only on `127.0.0.1`.
+`0`, non-numeric values, and values outside `1..65535` disable the bridge. The bridge listens only on `127.0.0.1`.
 
 ## Background UI click probe
 
@@ -81,16 +81,9 @@ Only exact, case-sensitive paths are accepted; name lookup is not supported. Pat
 
 Transfer requires two distinct slot objects with one drop handler each and exactly one draggable item in the source. Lookup includes hidden and inactive objects; no screen coordinates or raycasts are used. The plugin calls the item's drag lifecycle and the destination's drop handler directly on Unity's main thread, without activating the panels. The game controls compatibility, validation, and occupied-slot behavior. A resolved promise means handlers were called, not that the game accepted or completed the transfer; check game state before depending on the result. Slots and items must already be instantiated and initialized by the game; hidden-panel transfers remain subject to the handlers' own requirements.
 
-These features require the updated client and plugin: `POST /invoke?path=...` invokes a button, `POST /transfer?source=...&destination=...` dispatches a transfer, and `GET /capture?x=...&y=...` returns `{ "type": "button" | "slot" | null, "path": string | null }` without interacting with the target.
+These features require the updated client and plugin and use the loopback WebSocket bridge. Capture returns `{ "type": "button" | "slot" | null, "path": string | null }` without interacting with the target.
 
 ## Read state
-
-The HTTP endpoint is `GET http://127.0.0.1:19841/state`. In PowerShell, request all values or only the values you need:
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:19841/state
-Invoke-RestMethod 'http://127.0.0.1:19841/state?key=score&key=IP'
-```
 
 In JavaScript, `rev.state()` returns a promise. With no arguments it returns all supported keys; arguments return only those requested, case-sensitively. Requesting exactly one key unwraps the result to that key's value directly, instead of an object with one property:
 
@@ -99,7 +92,7 @@ const state = await rev.state("score", "IP");
 const ep = await rev.state("EP"); // "0e0", not { EP: "0e0" }
 ```
 
-Each call fetches fresh values on demand. The returned object is frozen. Requests reuse one HTTP client and its keep-alive connection when possible. HTTP or response errors reject the promise.
+Each call fetches fresh values on demand over the WebSocket bridge. The returned object is frozen. Bridge or response errors reject the promise.
 
 The complete nested state is documented in the generated [state path reference](STATE_KEYS.md). It includes every reachable gameplay property, collection element/value types, and all compatibility aliases. For finding which path(s) reach a given type, open [STATE_GRAPH.html](STATE_GRAPH.html) directly in a browser: search a type, field name, or alias to see every route from `GameData` that reaches it. Regenerate both after an interop assembly change:
 

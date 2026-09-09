@@ -96,6 +96,8 @@ internal sealed class WsConnection : IDisposable
 
     internal Action<string>? LifecycleSynchronizationForTest { get; set; }
 
+    internal Func<Task>? OutboundSendGateForTest { get; set; }
+
     internal int QueuedOutboundForTest
     {
         get
@@ -625,6 +627,8 @@ internal sealed class WsConnection : IDisposable
                     }
                     try
                     {
+                        if (_owner.OutboundSendGateForTest is Func<Task> outboundSendGate)
+                            await outboundSendGate().ConfigureAwait(false);
                         await _socket.SendAsync(outbound.Bytes, WebSocketMessageType.Text, true, _stopping.Token).ConfigureAwait(false);
                         outbound.Completion.TrySetResult(null);
                     }

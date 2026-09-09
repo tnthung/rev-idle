@@ -1,0 +1,10 @@
+{
+  "StateReq": { "keys": ["score", "eternity.dtpSpent"] },
+  "StateRes": { "value": { "score": "1e3", "enabled": true, "nested": { "value": null }, "items": [1, "two", false] } },
+  "CaptureReq": { "x": 123, "y": -45 },
+  "CaptureRes": { "type": "slot", "path": "scene:1/Canvas[0]/Inventory/3" },
+  "InvokeReq": { "path": "scene:1/Canvas[0]/Buy DTP & More[0]" },
+  "InvokeRes": {},
+  "TransferReq": { "source": "scene:1/Canvas[0]/Inventory/3", "destination": "scene:1/Canvas[0]/Combine/0" },
+  "TransferRes": {}
+}

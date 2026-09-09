@@ -7,18 +7,9 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using RevIdle.ScoreTelemetry;
 
-InvalidPortsDisableServer();
-await ServerQueuesDecodedPathsUnchanged();
-await ServerQueuesEmptyPathsWithoutArguments();
-await ServerReturnsInvalidPathStatus();
-await ServerMatchesExactRoutes();
-await ServerReturnsMethodNotAllowed();
-await ServerReturnsUnavailableState();
-await ServerReturnsSerializationFailureStatus();
-await ServerReturnsDataAccessorFailureStatus();
-await KeepAliveRequestsUseContentLength();
 StatePayloadFormatsBigDoubleValues();
 StatePayloadSerializesCompleteGraph();
 StatePayloadResolvesSelectedPaths();
@@ -35,6 +26,12 @@ StatePayloadRejectsRunawayValueTraversal();
 StatePayloadRejectsImplementationPropertyPaths();
 StatePayloadExcludesIl2CppDelegatesAndUnityEvents();
 StatePayloadExcludesRuntimeTypesAtEveryBoundary();
+BridgePacketPayloadsMatchSharedFixture();
+await BridgeStateHandlerPreservesMixedJsonAndSelectedKeys();
+await BridgeStateHandlerReportsMissingData();
+await BridgeStateHandlerReportsInvalidPath();
+await BridgeUiHandlersReportCorrelatedErrorsOnPumpThread();
+await BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending();
 BridgeDecodesFullWidthCoordinates();
 BridgeRejectsZeroRequestId();
 BridgeMapsTopLeftClientCoordinatesToUnityCoordinates();
@@ -50,9 +47,6 @@ DispatcherFindsFirstScrollableRaycast();
 DragCommandFactoryCombinesStartAndEndEndpoints();
 DragQueuePairsStartAndEndByRequestIdAndRejectsDuplicates();
 DragQueueIgnoresEndWithoutMatchingStart();
-await ServerQueuesUiRequests();
-await ServerRejectsInvalidUiRequests();
-await ServerDropsTimedOutInvocations();
 WsEnvelopeMatchesSharedFixture();
 await WsDisconnectedCallsFailImmediately();
 await WsRequestCorrelatesResponseByUuidAndType();
@@ -83,7 +77,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("74 tests passed.");
+System.Console.WriteLine("80 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -94,6 +88,306 @@ static void WsEnvelopeMatchesSharedFixture()
         "protocol",
         "test-request.json")).TrimEnd();
     Equal(expected, actual, nameof(WsEnvelopeMatchesSharedFixture));
+}
+
+static void BridgePacketPayloadsMatchSharedFixture()
+{
+    using JsonDocument fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+        AppContext.BaseDirectory,
+        "protocol",
+        "bridge-packets.json")));
+    (string Name, object Packet)[] packets = new[]
+    {
+        ("StateReq", (object)new StateReq(new[] { "score", "eternity.dtpSpent" })),
+        ("StateRes", new StateRes(JsonSerializer.Deserialize<JsonElement>("{\"score\":\"1e3\",\"enabled\":true,\"nested\":{\"value\":null},\"items\":[1,\"two\",false]}"))),
+        ("CaptureReq", new CaptureReq(123, -45)),
+        ("CaptureRes", new CaptureRes("slot", "scene:1/Canvas[0]/Inventory/3")),
+        ("InvokeReq", new InvokeReq("scene:1/Canvas[0]/Buy DTP & More[0]")),
+        ("InvokeRes", new InvokeRes()),
+        ("TransferReq", new TransferReq("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0")),
+        ("TransferRes", new TransferRes())
+    };
+
+    foreach ((string name, object packet) in packets)
+    {
+        using JsonDocument envelope = JsonDocument.Parse(WsConnection.SerializeForTest(Guid.Empty, packet));
+        Equal(name, envelope.RootElement.GetProperty("type").GetString(), nameof(BridgePacketPayloadsMatchSharedFixture));
+        Equal(
+            JsonNode.Parse(fixture.RootElement.GetProperty(name).GetRawText())!.ToJsonString(),
+            JsonNode.Parse(envelope.RootElement.GetProperty("payload").GetRawText())!.ToJsonString(),
+            nameof(BridgePacketPayloadsMatchSharedFixture));
+    }
+
+    Equal(
+        "{\"type\":null,\"path\":null}",
+        JsonSerializer.Serialize(new CaptureRes(null, null), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
+        nameof(BridgePacketPayloadsMatchSharedFixture));
+}
+
+static async Task BridgeStateHandlerPreservesMixedJsonAndSelectedKeys()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int dataThread = 0;
+    int pumpThread = 0;
+    Plugin.RegisterHandlers(server, () =>
+    {
+        Volatile.Write(ref dataThread, Environment.CurrentManagedThreadId);
+        return new BridgeStateFixture();
+    }, () => 0);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        string envelope = $"{{\"uuid\":\"{uuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Score\",\"gameData.Enabled\",\"gameData.Nested\",\"gameData.Items\"]}}}}";
+        using JsonDocument response = await SendLiteralBridgeRequestAndPump(server, peer, 0, envelope, thread =>
+        {
+            if (Volatile.Read(ref dataThread) == 0)
+                Volatile.Write(ref pumpThread, thread);
+        });
+        Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), nameof(BridgeStateHandlerPreservesMixedJsonAndSelectedKeys));
+        Equal("StateRes", response.RootElement.GetProperty("type").GetString(), nameof(BridgeStateHandlerPreservesMixedJsonAndSelectedKeys));
+        Equal(pumpThread, dataThread, nameof(BridgeStateHandlerPreservesMixedJsonAndSelectedKeys));
+        Equal(
+            "{\"gameData.Score\":\"1e3\",\"gameData.Enabled\":true,\"gameData.Nested\":{\"Value\":null},\"gameData.Items\":[1,\"two\",false]}",
+            JsonNode.Parse(response.RootElement.GetProperty("payload").GetProperty("value").GetRawText())!.ToJsonString(),
+            nameof(BridgeStateHandlerPreservesMixedJsonAndSelectedKeys));
+    }
+}
+
+static async Task BridgeStateHandlerReportsMissingData()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    Plugin.RegisterHandlers(server, () => null, () => 0);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        using JsonDocument response = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            0,
+            $"{{\"uuid\":\"{uuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Score\"]}}}}",
+            null);
+        AssertRemoteError(response, uuid, nameof(BridgeStateHandlerReportsMissingData), "State data is unavailable.");
+    }
+}
+
+static async Task BridgeStateHandlerReportsInvalidPath()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () => 0);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        using JsonDocument response = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            0,
+            $"{{\"uuid\":\"{uuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Missing\"]}}}}",
+            null);
+        AssertRemoteError(response, uuid, nameof(BridgeStateHandlerReportsInvalidPath), "State path is invalid.");
+    }
+}
+
+static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int windowThread = 0;
+    int captureThread = 0;
+    int capturePumpThread = 0;
+    int captureX = 0;
+    int captureY = 0;
+    nint captureWindow = 0;
+    int invokeThread = 0;
+    int invokePumpThread = 0;
+    string? invokedPath = null;
+    int transferThread = 0;
+    int transferPumpThread = 0;
+    string? transferredSource = null;
+    string? transferredDestination = null;
+    Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () =>
+    {
+        Volatile.Write(ref windowThread, Environment.CurrentManagedThreadId);
+        return (nint)0x1234;
+    },
+    (window, x, y) =>
+    {
+        Volatile.Write(ref captureThread, Environment.CurrentManagedThreadId);
+        captureWindow = window;
+        captureX = x;
+        captureY = y;
+        return (true, "slot", "captured", "");
+    },
+    path =>
+    {
+        Volatile.Write(ref invokeThread, Environment.CurrentManagedThreadId);
+        invokedPath = path;
+        return (false, "invoke failed");
+    },
+    (source, destination) =>
+    {
+        Volatile.Write(ref transferThread, Environment.CurrentManagedThreadId);
+        transferredSource = source;
+        transferredDestination = destination;
+        return (true, "");
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid captureUuid = Guid.NewGuid();
+        using (JsonDocument capture = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            (nint)0x5678,
+            $"{{\"uuid\":\"{captureUuid}\",\"type\":\"CaptureReq\",\"payload\":{{\"x\":123,\"y\":-45}}}}",
+            thread =>
+            {
+                if (Volatile.Read(ref captureThread) == 0)
+                    Volatile.Write(ref capturePumpThread, thread);
+            }))
+        {
+            Equal(captureUuid, capture.RootElement.GetProperty("uuid").GetGuid(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("CaptureRes", capture.RootElement.GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("slot", capture.RootElement.GetProperty("payload").GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("captured", capture.RootElement.GetProperty("payload").GetProperty("path").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        }
+        Equal(capturePumpThread, windowThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal(capturePumpThread, captureThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal((nint)0x1234, captureWindow, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal(123, captureX, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal(-45, captureY, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+
+        Guid invokeUuid = Guid.NewGuid();
+        using (JsonDocument invoke = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            0,
+            $"{{\"uuid\":\"{invokeUuid}\",\"type\":\"InvokeReq\",\"payload\":{{\"path\":\"scene:1/Buy[0]\"}}}}",
+            thread =>
+            {
+                if (Volatile.Read(ref invokeThread) == 0)
+                    Volatile.Write(ref invokePumpThread, thread);
+            }))
+            AssertRemoteError(invoke, invokeUuid, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread), "invoke failed");
+        Equal(invokePumpThread, invokeThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal("scene:1/Buy[0]", invokedPath, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+
+        Guid transferUuid = Guid.NewGuid();
+        using (JsonDocument transfer = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            0,
+            $"{{\"uuid\":\"{transferUuid}\",\"type\":\"TransferReq\",\"payload\":{{\"source\":\"source\",\"destination\":\"destination\"}}}}",
+            thread =>
+            {
+                if (Volatile.Read(ref transferThread) == 0)
+                    Volatile.Write(ref transferPumpThread, thread);
+            }))
+        {
+            Equal(transferUuid, transfer.RootElement.GetProperty("uuid").GetGuid(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("TransferRes", transfer.RootElement.GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        }
+        Equal(transferPumpThread, transferThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal("source", transferredSource, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+        Equal("destination", transferredDestination, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+    }
+}
+
+static async Task BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int dataCalls = 0;
+    int outboundSends = 0;
+    TaskCompletionSource<bool> firstSendStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> releaseFirstSend = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.OutboundSendGateForTest = () =>
+    {
+        if (Interlocked.Increment(ref outboundSends) == 1)
+        {
+            firstSendStarted.TrySetResult(true);
+            return releaseFirstSend.Task;
+        }
+        return Task.CompletedTask;
+    };
+    Plugin.RegisterHandlers(server, () =>
+    {
+        Interlocked.Increment(ref dataCalls);
+        return new BridgeStateFixture();
+    }, () => 0);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    try
+    {
+        using (client)
+        using (peer)
+        {
+            Guid firstUuid = Guid.NewGuid();
+            Guid secondUuid = Guid.NewGuid();
+            await SendText(peer, $"{{\"uuid\":\"{firstUuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Text\"]}}}}");
+            DateTime firstDeadline = DateTime.UtcNow.AddSeconds(2);
+            while (!firstSendStarted.Task.IsCompleted && DateTime.UtcNow < firstDeadline)
+            {
+                Plugin.PumpPackets(0);
+                await Task.Delay(1);
+            }
+            await firstSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Equal(1, Volatile.Read(ref dataCalls), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+            Equal(true, server.HandlerTaskCountForTest > 0, nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+
+            await SendText(peer, $"{{\"uuid\":\"{secondUuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Score\"]}}}}");
+            DateTime secondDeadline = DateTime.UtcNow.AddSeconds(2);
+            while (Volatile.Read(ref dataCalls) < 2 && DateTime.UtcNow < secondDeadline)
+            {
+                Plugin.PumpPackets(0);
+                await Task.Delay(1);
+            }
+            Equal(2, Volatile.Read(ref dataCalls), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+            Equal(true, server.HandlerTaskCountForTest >= 2, nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+
+            releaseFirstSend.TrySetResult(true);
+            using JsonDocument firstResponse = JsonDocument.Parse(await ReceiveText(peer));
+            using JsonDocument secondResponse = JsonDocument.Parse(await ReceiveText(peer));
+            Equal(true, new[] { firstResponse.RootElement.GetProperty("uuid").GetGuid(), secondResponse.RootElement.GetProperty("uuid").GetGuid() }.Contains(firstUuid), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+            Equal(true, new[] { firstResponse.RootElement.GetProperty("uuid").GetGuid(), secondResponse.RootElement.GetProperty("uuid").GetGuid() }.Contains(secondUuid), nameof(BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending));
+        }
+    }
+    finally
+    {
+        releaseFirstSend.TrySetResult(true);
+    }
+}
+
+static async Task<JsonDocument> SendLiteralBridgeRequestAndPump(
+    WsConnection server,
+    WebSocket peer,
+    nint window,
+    string envelope,
+    Action<int>? beforePump)
+{
+    await SendText(peer, envelope);
+    Task<string> response = ReceiveText(peer);
+    DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+    while (!response.IsCompleted && DateTime.UtcNow < deadline)
+    {
+        beforePump?.Invoke(Environment.CurrentManagedThreadId);
+        Plugin.PumpPackets(window);
+        await Task.Delay(1);
+    }
+    return JsonDocument.Parse(await response.WaitAsync(TimeSpan.FromSeconds(2)));
+}
+
+static void AssertRemoteError(JsonDocument response, Guid uuid, string testName, string? expectedMessage = null)
+{
+    Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), testName);
+    Equal("RemoteError", response.RootElement.GetProperty("type").GetString(), testName);
+    string? message = response.RootElement.GetProperty("payload").GetProperty("message").GetString();
+    Equal(true, message is not null, testName);
+    if (expectedMessage is not null)
+        Equal(expectedMessage, message, testName);
 }
 
 static async Task WsDisconnectedCallsFailImmediately()
@@ -1020,217 +1314,6 @@ static async Task WsLateRemoteErrorIsReportedBeforeTombstoneDiscard()
     }
 }
 
-static async Task ServerQueuesUiRequests()
-{
-    foreach (string request in new[] { "POST /invoke?path=scene%3A1%2FBuy+DTP%5B0%5D", "GET /capture?y=456&x=123", "POST /transfer?destination=scene%3A1%2FSlot%5B1%5D&source=scene%3A1%2FSlot%5B0%5D" })
-    {
-        using HttpScoreServer server = CreateServer();
-        using TcpClient client = new();
-        await client.ConnectAsync(IPAddress.Loopback, server.Port);
-        await using NetworkStream stream = client.GetStream();
-        await stream.WriteAsync(Encoding.ASCII.GetBytes($"{request} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-        HttpScoreServer.PendingRequest? captured = null;
-        for (int attempt = 0; attempt < 100 && captured is null; attempt++)
-        {
-            server.CompletePendingRequest(pending =>
-            {
-                captured = pending;
-                return (200, Encoding.UTF8.GetBytes("{}"));
-            });
-            if (captured is null)
-                await Task.Delay(10);
-        }
-        Equal(true, captured is not null, nameof(ServerQueuesUiRequests));
-        if (request.StartsWith("POST /invoke", StringComparison.Ordinal))
-        {
-            Equal(HttpScoreServer.RequestKind.Invoke, captured!.Kind, nameof(ServerQueuesUiRequests));
-            Equal("scene:1/Buy DTP[0]", captured.Path, nameof(ServerQueuesUiRequests));
-        }
-        else if (request.StartsWith("POST /transfer", StringComparison.Ordinal))
-        {
-            Equal(HttpScoreServer.RequestKind.Transfer, captured!.Kind, nameof(ServerQueuesUiRequests));
-            Equal("scene:1/Slot[0]", captured.Path, nameof(ServerQueuesUiRequests));
-            Equal("scene:1/Slot[1]", captured.Destination, nameof(ServerQueuesUiRequests));
-        }
-        else
-        {
-            Equal(HttpScoreServer.RequestKind.Capture, captured!.Kind, nameof(ServerQueuesUiRequests));
-            Equal(123, captured.X, nameof(ServerQueuesUiRequests));
-            Equal(456, captured.Y, nameof(ServerQueuesUiRequests));
-        }
-        Equal(200, (await new ResponseReader(stream).ReadResponse()).StatusCode, nameof(ServerQueuesUiRequests));
-    }
-}
-
-static async Task ServerRejectsInvalidUiRequests()
-{
-    using HttpScoreServer server = CreateServer();
-    foreach ((string request, int status) in new[] {
-        ("GET /invoke?path=Buy", 405), ("POST /capture?x=1&y=2", 405),
-        ("POST /invoke?path=+", 400), ("POST /invoke?path=A&path=B", 400),
-        ("POST /invoke?name=Buy", 400),
-        ("GET /transfer?source=A&destination=B", 405), ("POST /transfer?source=A", 400),
-        ("POST /transfer?source=A&destination=+", 400), ("POST /transfer?source=A&source=B", 400),
-        ("GET /capture?x=1&x=2", 400), ("GET /capture?x=-1&y=2", 400)
-    })
-    {
-        HttpResponse response = await RequestWithServer(server, $"{request} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
-        Equal(status, response.StatusCode, nameof(ServerRejectsInvalidUiRequests));
-        Equal(false, server.CompletePendingRequest(_ => throw new InvalidOperationException("invalid request was queued")), nameof(ServerRejectsInvalidUiRequests));
-    }
-}
-
-static async Task ServerDropsTimedOutInvocations()
-{
-    using HttpScoreServer server = CreateServer();
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("POST /invoke?path=Buy HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(4));
-    Equal(0, await stream.ReadAsync(new byte[1], timeout.Token), nameof(ServerDropsTimedOutInvocations));
-    Equal(false, server.CompletePendingRequest(_ => throw new InvalidOperationException("expired invocation ran")), nameof(ServerDropsTimedOutInvocations));
-}
-
-static void InvalidPortsDisableServer()
-{
-    foreach (string? value in new string?[] { null, "", "not-a-port", "0", "-1", "65536" })
-    {
-        using HttpScoreServer? server = HttpScoreServer.Create(value);
-        if (server is not null)
-            throw new InvalidOperationException($"{nameof(InvalidPortsDisableServer)}: '{value}' should be disabled.");
-    }
-}
-
-static async Task ServerQueuesDecodedPathsUnchanged()
-{
-    using HttpScoreServer server = CreateServer();
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    ResponseReader reader = new(stream);
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=eternity%2EdtpSpent&key=rows%2E1%2EValue&key=eternity%2EdtpSpent HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"eternity.dtpSpent\":7,\"rows.1.Value\":\"one\"}")));
-    Equal(true, keys.SequenceEqual(new[] { "eternity.dtpSpent", "rows.1.Value", "eternity.dtpSpent" }), nameof(ServerQueuesDecodedPathsUnchanged));
-    HttpResponse response = await reader.ReadResponse();
-    Equal(200, response.StatusCode, nameof(ServerQueuesDecodedPathsUnchanged));
-    Equal("application/json", response.ContentType, nameof(ServerQueuesDecodedPathsUnchanged));
-    Equal(response.Body.Length, response.ContentLength, nameof(ServerQueuesDecodedPathsUnchanged));
-    Equal("close", response.Connection, nameof(ServerQueuesDecodedPathsUnchanged));
-    Equal("{\"eternity.dtpSpent\":7,\"rows.1.Value\":\"one\"}", Encoding.UTF8.GetString(response.Body), nameof(ServerQueuesDecodedPathsUnchanged));
-}
-
-static async Task ServerQueuesEmptyPathsWithoutArguments()
-{
-    using HttpScoreServer server = CreateServer();
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    IReadOnlyList<string> keys = await CompletePendingUntil(server, _ => (200, Array.Empty<byte>()));
-    Equal(0, keys.Count, nameof(ServerQueuesEmptyPathsWithoutArguments));
-    HttpResponse response = await new ResponseReader(stream).ReadResponse();
-    Equal(200, response.StatusCode, nameof(ServerQueuesEmptyPathsWithoutArguments));
-}
-
-static async Task ServerReturnsInvalidPathStatus()
-{
-    using HttpScoreServer server = CreateServer();
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    await CompletePluginPendingUntil(server, static () => new PathFixture());
-    HttpResponse response = await new ResponseReader(stream).ReadResponse();
-    Equal(400, response.StatusCode, nameof(ServerReturnsInvalidPathStatus));
-    Equal(0, response.Body.Length, nameof(ServerReturnsInvalidPathStatus));
-}
-
-static async Task ServerMatchesExactRoutes()
-{
-    using HttpScoreServer server = CreateServer();
-    Equal(404, (await RequestWithServer(server, "GET /other HTTP/1.1")).StatusCode, nameof(ServerMatchesExactRoutes));
-    Equal(404, (await RequestWithServer(server, "GET /stateful HTTP/1.1")).StatusCode, nameof(ServerMatchesExactRoutes));
-    Equal(404, (await RequestWithServer(server, "GET /state/extra HTTP/1.1")).StatusCode, nameof(ServerMatchesExactRoutes));
-}
-
-static async Task ServerReturnsMethodNotAllowed()
-{
-    using HttpScoreServer server = CreateServer();
-    Equal(405, (await RequestWithServer(server, "POST /state HTTP/1.1")).StatusCode, nameof(ServerReturnsMethodNotAllowed));
-}
-
-static async Task ServerReturnsUnavailableState()
-{
-    using HttpScoreServer server = CreateServer();
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    await CompletePluginPendingUntil(server, static () => null);
-    HttpResponse response = await new ResponseReader(stream).ReadResponse();
-    Equal(503, response.StatusCode, nameof(ServerReturnsUnavailableState));
-    Equal(0, response.Body.Length, nameof(ServerReturnsUnavailableState));
-}
-
-static async Task ServerReturnsSerializationFailureStatus()
-{
-    using HttpScoreServer server = CreateServer();
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    // Every path must name a root explicitly (see ExtraRoots); "gameData" is
-    // whatever root object the accessor below returns, so this reaches the
-    // fixture's runaway self-reference the same way a real request would.
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=gameData HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    // A throwing getter no longer fails the whole request (see
-    // StatePayloadDistinguishesInvalidPathsAndGetterFailures), so this uses
-    // runaway traversal instead as a case that genuinely cannot serialize.
-    await CompletePluginPendingUntil(server, static () => new SelfReturningValueFixture());
-    HttpResponse response = await new ResponseReader(stream).ReadResponse();
-    Equal(500, response.StatusCode, nameof(ServerReturnsSerializationFailureStatus));
-    Equal(0, response.Body.Length, nameof(ServerReturnsSerializationFailureStatus));
-}
-
-static async Task ServerReturnsDataAccessorFailureStatus()
-{
-    using HttpScoreServer server = CreateServer();
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    await CompletePluginPendingUntil(server, static () => throw new InvalidOperationException("data accessor failed"));
-    HttpResponse response = await new ResponseReader(stream).ReadResponse();
-    Equal(500, response.StatusCode, nameof(ServerReturnsDataAccessorFailureStatus));
-    Equal(0, response.Body.Length, nameof(ServerReturnsDataAccessorFailureStatus));
-}
-
-static async Task KeepAliveRequestsUseContentLength()
-{
-    using HttpScoreServer server = CreateServer();
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    ResponseReader reader = new(stream);
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=score HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"));
-    IReadOnlyList<string> firstKeys = await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"score\":\"1e2\"}")));
-    Equal(true, firstKeys.SequenceEqual(new[] { "score" }), nameof(KeepAliveRequestsUseContentLength));
-    HttpResponse first = await reader.ReadResponse();
-    Equal(200, first.StatusCode, nameof(KeepAliveRequestsUseContentLength));
-    Equal("keep-alive", first.Connection, nameof(KeepAliveRequestsUseContentLength));
-    Equal(first.Body.Length, first.ContentLength, nameof(KeepAliveRequestsUseContentLength));
-    Equal("{\"score\":\"1e2\"}", Encoding.UTF8.GetString(first.Body), nameof(KeepAliveRequestsUseContentLength));
-
-    await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /state?key=IP HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    IReadOnlyList<string> secondKeys = await CompletePendingUntil(server, _ => (200, Encoding.UTF8.GetBytes("{\"IP\":\"2e3\"}")));
-    Equal(true, secondKeys.SequenceEqual(new[] { "IP" }), nameof(KeepAliveRequestsUseContentLength));
-    HttpResponse second = await reader.ReadResponse();
-    Equal(200, second.StatusCode, nameof(KeepAliveRequestsUseContentLength));
-    Equal("close", second.Connection, nameof(KeepAliveRequestsUseContentLength));
-    Equal(second.Body.Length, second.ContentLength, nameof(KeepAliveRequestsUseContentLength));
-    Equal("{\"IP\":\"2e3\"}", Encoding.UTF8.GetString(second.Body), nameof(KeepAliveRequestsUseContentLength));
-}
-
 static void StatePayloadFormatsBigDoubleValues()
 {
     byte[] payload = StatePayload.Encode(new[] { ("score", 2.5, 42d), ("timeInfinity", 3.5, 7d), ("timeEternity", 4.5, 8d) });
@@ -1538,15 +1621,6 @@ static void StatePayloadExcludesRuntimeTypesAtEveryBoundary()
     Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Values.1" }, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
 }
 
-static HttpScoreServer CreateServer()
-{
-    using var probe = new TcpListener(IPAddress.Loopback, 0);
-    probe.Start();
-    int port = ((IPEndPoint)probe.LocalEndpoint).Port;
-    probe.Stop();
-    return HttpScoreServer.Create(port.ToString(CultureInfo.InvariantCulture)) ?? throw new InvalidOperationException("server failed to bind");
-}
-
 static async Task<(TcpClient Client, WebSocket Socket)> ConnectRawClient(WsConnection server)
 {
     TcpClient client = new();
@@ -1555,7 +1629,7 @@ static async Task<(TcpClient Client, WebSocket Socket)> ConnectRawClient(WsConne
         client.GetStream(),
         isServer: false,
         subProtocol: null,
-        keepAliveInterval: Timeout.InfiniteTimeSpan);
+        keepAliveInterval: TimeSpan.FromSeconds(5));
     DateTime deadline = DateTime.UtcNow.AddSeconds(2);
     while (!server.ConnectedForTest && DateTime.UtcNow < deadline)
         await Task.Delay(1);
@@ -1587,44 +1661,6 @@ static async Task<string> ReceiveTextWithTimeout(WebSocket socket, TimeSpan time
 
 static Task SendText(WebSocket socket, string text)
     => socket.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, CancellationToken.None);
-
-static async Task<HttpResponse> RequestWithServer(HttpScoreServer server, string request)
-{
-    using TcpClient client = new();
-    await client.ConnectAsync(IPAddress.Loopback, server.Port);
-    await using NetworkStream stream = client.GetStream();
-    await stream.WriteAsync(Encoding.ASCII.GetBytes($"{request}\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"));
-    return await new ResponseReader(stream).ReadResponse();
-}
-
-static async Task<IReadOnlyList<string>> CompletePendingUntil(HttpScoreServer server, Func<IReadOnlyList<string>, (int StatusCode, byte[] Body)> complete)
-{
-    IReadOnlyList<string>? observed = null;
-    DateTime deadline = DateTime.UtcNow.AddSeconds(4);
-    while (DateTime.UtcNow < deadline)
-    {
-        if (server.CompletePending(keys =>
-        {
-            observed = keys.ToArray();
-            return complete(keys);
-        }))
-            return observed!;
-        await Task.Delay(10);
-    }
-    throw new InvalidOperationException("timed out waiting for a pending request");
-}
-
-static async Task CompletePluginPendingUntil(HttpScoreServer server, Func<object?> getData)
-{
-    DateTime deadline = DateTime.UtcNow.AddSeconds(4);
-    while (DateTime.UtcNow < deadline)
-    {
-        if (Plugin.CompletePending(server, getData))
-            return;
-        await Task.Delay(10);
-    }
-    throw new InvalidOperationException("timed out waiting for a pending request");
-}
 
 static void BridgeDecodesFullWidthCoordinates()
 {
@@ -1821,12 +1857,24 @@ sealed record TestRes(string Value);
 sealed record OtherRes(string Value);
 sealed record UnknownReq(string Value);
 
+sealed class BridgeStateFixture
+{
+    public string Score { get; init; } = "1e3";
+    public bool Enabled { get; init; } = true;
+    public BridgeNestedStateFixture Nested { get; init; } = new();
+    public object[] Items { get; init; } = new object[] { 1, "two", false };
+    public string Text { get; init; } = "small";
+}
+
+sealed class BridgeNestedStateFixture
+{
+    public object? Value { get; init; }
+}
+
 sealed class ThrowingResponse
 {
     public int Value => throw new InvalidOperationException("serialization failed");
 }
-
-sealed record HttpResponse(int StatusCode, string ContentType, int ContentLength, string Connection, byte[] Body);
 
 enum SerializerFixtureKind
 {
@@ -1984,66 +2032,4 @@ sealed class ExcludedRuntimeFixture
     public object Selected { get; init; } = new();
     public object Unity { get; init; } = new();
     public object[] Values { get; init; } = Array.Empty<object>();
-}
-
-sealed class ResponseReader
-{
-    private readonly NetworkStream _stream;
-    private byte[] _buffer = Array.Empty<byte>();
-
-    public ResponseReader(NetworkStream stream)
-    {
-        _stream = stream;
-    }
-
-    public async Task<HttpResponse> ReadResponse()
-    {
-        byte[] readBuffer = new byte[1024];
-        while (true)
-        {
-            int delimiter = FindHeaderDelimiter();
-            if (delimiter >= 0)
-            {
-                string[] lines = Encoding.ASCII.GetString(_buffer, 0, delimiter).Split("\r\n");
-                string[] status = lines[0].Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
-                int contentLength = 0;
-                string contentType = "";
-                string connection = "";
-                foreach (string line in lines.Skip(1))
-                {
-                    string[] pair = line.Split(':', 2);
-                    if (pair.Length != 2)
-                        continue;
-                    if (pair[0].Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
-                        contentLength = int.Parse(pair[1].Trim(), CultureInfo.InvariantCulture);
-                    if (pair[0].Equals("Content-Type", StringComparison.OrdinalIgnoreCase))
-                        contentType = pair[1].Trim();
-                    if (pair[0].Equals("Connection", StringComparison.OrdinalIgnoreCase))
-                        connection = pair[1].Trim();
-                }
-                int bodyStart = delimiter + 4;
-                if (_buffer.Length - bodyStart >= contentLength)
-                {
-                    byte[] body = _buffer[bodyStart..(bodyStart + contentLength)];
-                    _buffer = _buffer[(bodyStart + contentLength)..];
-                    return new HttpResponse(int.Parse(status[1], CultureInfo.InvariantCulture), contentType, contentLength, connection, body);
-                }
-            }
-
-            int read = await _stream.ReadAsync(readBuffer).AsTask().WaitAsync(TimeSpan.FromSeconds(4));
-            if (read == 0)
-                throw new InvalidOperationException("connection closed before response");
-            int oldLength = _buffer.Length;
-            Array.Resize(ref _buffer, oldLength + read);
-            readBuffer.AsSpan(0, read).CopyTo(_buffer.AsSpan(oldLength));
-        }
-    }
-
-    private int FindHeaderDelimiter()
-    {
-        for (int i = 0; i <= _buffer.Length - 4; i++)
-            if (_buffer[i] == '\r' && _buffer[i + 1] == '\n' && _buffer[i + 2] == '\r' && _buffer[i + 3] == '\n')
-                return i;
-        return -1;
-    }
 }
