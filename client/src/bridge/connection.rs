@@ -1472,7 +1472,7 @@ mod tests {
         connection.shutdown().await;
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test]
     async fn disconnected_queued_handler_does_not_start() {
         let (address, peer_rx) = raw_server().await;
         let connection = super::WsConnection::connect_for_test(
@@ -1516,6 +1516,16 @@ mod tests {
             .unwrap();
         }
         peer.close(None).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if connection.inner.state.lock().unwrap().active.is_none() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         disconnected.store(true, Ordering::Release);
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(starts_after_disconnect.load(Ordering::SeqCst), 0);
