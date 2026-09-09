@@ -535,7 +535,17 @@ async function bootstrapDilation() {
 
 
 async function finishDTP40() {
-  if (await States.spentDTP() >= 40 && await States.totalDTP() > 40) {
+  const totalDTP = Math.min(await States.totalDTP(), 40);
+
+  for (const stage of DT_STAGES.reverse()) {
+    if (totalDTP < stage.dtp || Number(await stage.state()) >= stage.target) continue;
+    await stage.loadout.apply();
+    await wait_for(async _ => Number(await stage.state()) >= stage.target, 500, 3000);
+    await rev.sleep(4000);
+    return;
+  }
+
+  if (await States.spentDTP() >= 40) {
     if (!finish40DTP) {
       console.log("Finished DTP 40.");
       finish40DTP = true;
@@ -544,17 +554,7 @@ async function finishDTP40() {
     return true;
   }
 
-  const totalDTP = Math.min(await States.totalDTP(), 40);
-
-  for (const stage of DT_STAGES) {
-    if (totalDTP < stage.dtp || Number(await stage.state()) >= stage.target) continue;
-    await stage.loadout.apply();
-    await wait_for(async _ => Number(await stage.state()) >= stage.target, 500, 3000);
-    await rev.sleep(4000);
-    return;
-  }
-
-  await DilationTree[`DTP${totalDTP}`].apply();
+  await DilationTree[`DTP${Math.min(totalDTP, 40)}`].apply();
   await Action.toggleDilation();
   await rev.sleep(1000);
   await Action.toggleDilation();
