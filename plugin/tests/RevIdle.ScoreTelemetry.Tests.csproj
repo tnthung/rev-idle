@@ -12,7 +12,6 @@
     <Compile Include="Program.cs" />
     <Compile Include="..\src\WsConnection.cs" Link="WsConnection.cs" />
     <Compile Include="..\src\BridgePackets.cs" Link="BridgePackets.cs" />
-    <Compile Include="..\src\HttpScoreServer.cs" Link="HttpScoreServer.cs" />
     <Compile Include="..\src\StatePayload.cs" Link="StatePayload.cs" />
     <Compile Include="..\src\ExtraRoots.cs" Link="ExtraRoots.cs" />
     <Compile Include="..\src\Plugin.cs" Link="Plugin.cs" />

@@ -123,49 +123,6 @@ public sealed class Plugin : BasePlugin
         }
     }
 
-    internal static bool CompletePending(HttpScoreServer server, Func<object?> getData, nint window = 0) => server.CompletePendingRequest(request =>
-    {
-        if (request.Kind == HttpScoreServer.RequestKind.State)
-        {
-            object? data;
-            try { data = getData(); }
-            catch (Exception exception)
-            {
-                _logger?.LogError($"State data access failed: {exception}");
-                return (500, Array.Empty<byte>());
-            }
-            if (data is null)
-                return (503, Array.Empty<byte>());
-            StatePayloadStatus status = StatePayload.Encode(data, request.Keys, out byte[] payload);
-            if (status == StatePayloadStatus.SerializationFailure)
-                _logger?.LogError("State serialization failed.");
-            return status switch
-            {
-                StatePayloadStatus.Success => (200, payload),
-                StatePayloadStatus.InvalidPath => (400, Array.Empty<byte>()),
-                _ => (500, Array.Empty<byte>())
-            };
-        }
-
-        if (request.Kind == HttpScoreServer.RequestKind.Invoke)
-        {
-            if (!UnityUiClickDispatcher.TryInvoke(request.Path!, out string error))
-                return (400, JsonSerializer.SerializeToUtf8Bytes(new { error }));
-            return (200, System.Text.Encoding.UTF8.GetBytes("{}"));
-        }
-
-        if (request.Kind == HttpScoreServer.RequestKind.Transfer)
-        {
-            if (!UnityUiClickDispatcher.TryTransfer(request.Path!, request.Destination!, out string error))
-                return (400, JsonSerializer.SerializeToUtf8Bytes(new { error }));
-            return (200, System.Text.Encoding.UTF8.GetBytes("{}"));
-        }
-
-        if (!UnityUiClickDispatcher.TryCapture(window, request.X, request.Y, out string? type, out string? path, out string captureResult))
-            return (400, JsonSerializer.SerializeToUtf8Bytes(new { error = captureResult }));
-        return (200, JsonSerializer.SerializeToUtf8Bytes(new { type, path }));
-    });
-
     internal static void StopServer() => _connection?.Dispose();
 }
 
