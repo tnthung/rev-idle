@@ -40,6 +40,8 @@ BridgeQueueDequeuesInOrderAndClears();
 BridgeCallbackIdentityRequiresUndisposedActiveWindowAndSubclass();
 BridgeOwnershipReleaseRequiresDestroyedOrSuccessfulOwnerRemoval();
 DispatcherSkipsNonClickableRaycasts();
+DispatcherParsesExactHierarchyPath();
+DispatcherRejectsMalformedHierarchyPath();
 ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
 ScrollProtocolRejectsZeroRequestId();
 ScrollQueuePreservesOrderAndRejectsDuplicates();
@@ -78,7 +80,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("81 tests passed.");
+System.Console.WriteLine("83 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -1766,6 +1768,35 @@ static void DispatcherSkipsNonClickableRaycasts()
 
     Equal(2, UnityUiClickDispatcher.FindFirstClickableIndex(new[] { false, false, true }), testName);
     Equal(-1, UnityUiClickDispatcher.FindFirstClickableIndex(new[] { false, false }), testName);
+}
+
+static void DispatcherParsesExactHierarchyPath()
+{
+    const string testName = nameof(DispatcherParsesExactHierarchyPath);
+
+    Equal(true, UnityUiClickDispatcher.TryParseHierarchyPath(
+        "scene:-148/CANVAS[0]/safe%20area[1]/item%2Fname[12]",
+        out int sceneHandle,
+        out (string Name, int SiblingIndex)[] segments), testName);
+    Equal(-148, sceneHandle, testName);
+    Equal(3, segments.Length, testName);
+    Equal(("CANVAS", 0), segments[0], testName);
+    Equal(("safe%20area", 1), segments[1], testName);
+    Equal(("item%2Fname", 12), segments[2], testName);
+}
+
+static void DispatcherRejectsMalformedHierarchyPath()
+{
+    const string testName = nameof(DispatcherRejectsMalformedHierarchyPath);
+
+    Equal(false, UnityUiClickDispatcher.TryParseHierarchyPath(
+        null!, out _, out _), testName);
+    Equal(false, UnityUiClickDispatcher.TryParseHierarchyPath(
+        "scene:invalid/CANVAS[0]", out _, out _), testName);
+    Equal(false, UnityUiClickDispatcher.TryParseHierarchyPath(
+        "scene:-148/CANVAS", out _, out _), testName);
+    Equal(false, UnityUiClickDispatcher.TryParseHierarchyPath(
+        "scene:-148/CANVAS[-1]", out _, out _), testName);
 }
 
 static void ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId()

@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 namespace RevIdle.ScoreTelemetry;
@@ -9,22 +11,17 @@ internal static class UnityUiClickDispatcher
 {
     internal static bool TryInvoke(string path, out string result)
     {
-        List<Button> matches = new();
-        foreach (Button candidateButton in Resources.FindObjectsOfTypeAll<Button>())
-        {
-            if (candidateButton.gameObject.scene.IsValid() &&
-                GetPath(candidateButton.gameObject) == path)
-                matches.Add(candidateButton);
-        }
+        GameObject? target = FindByPath(path);
+        Button[] matches = target is null ? Array.Empty<Button>() : target.GetComponents<Button>().ToArray();
 
-        if (matches.Count == 0)
+        if (matches.Length == 0)
         {
             result = $"invoke target not found: '{path}'";
             return false;
         }
-        if (matches.Count != 1)
+        if (matches.Length != 1)
         {
-            result = $"invoke target is ambiguous: '{path}' matches {matches.Count} buttons";
+            result = $"invoke target is ambiguous: '{path}' matches {matches.Length} buttons";
             return false;
         }
 
@@ -103,26 +100,14 @@ internal static class UnityUiClickDispatcher
             return false;
         }
 
-        List<GameObject> sources = new();
-        List<GameObject> destinations = new();
-        foreach (Transform candidate in Resources.FindObjectsOfTypeAll<Transform>())
+        GameObject? sourceSlot = FindByPath(source);
+        GameObject? destinationSlot = FindByPath(destination);
+        if (sourceSlot is null || destinationSlot is null)
         {
-            if (!candidate.gameObject.scene.IsValid())
-                continue;
-            string path = GetPath(candidate.gameObject);
-            if (path == source)
-                sources.Add(candidate.gameObject);
-            if (path == destination)
-                destinations.Add(candidate.gameObject);
-        }
-        if (sources.Count != 1 || destinations.Count != 1)
-        {
-            result = $"transfer requires unique slot paths: source matched {sources.Count}, destination matched {destinations.Count}";
+            result = $"transfer requires unique slot paths: source matched {(sourceSlot is null ? 0 : 1)}, destination matched {(destinationSlot is null ? 0 : 1)}";
             return false;
         }
 
-        GameObject sourceSlot = sources[0];
-        GameObject destinationSlot = destinations[0];
         var sourceHandlers = sourceSlot.GetComponents<Component>()
             .Select(component => component.TryCast<IDropHandler>()).Where(handler => handler is not null).ToArray();
         var destinationHandlers = destinationSlot.GetComponents<Component>()
@@ -211,6 +196,83 @@ internal static class UnityUiClickDispatcher
             parent = parent.parent;
         }
         return $"scene:{target.scene.handle}/{path}";
+    }
+
+    private static GameObject? FindByPath(string path)
+    {
+        if (!TryParseHierarchyPath(path, out int sceneHandle, out (string Name, int SiblingIndex)[] segments))
+            return null;
+
+        Scene scene = default;
+        for (int index = 0; index < SceneManager.sceneCount; index++)
+        {
+            Scene candidate = SceneManager.GetSceneAt(index);
+            if (candidate.handle == sceneHandle)
+            {
+                scene = candidate;
+                break;
+            }
+        }
+        if (!scene.IsValid())
+            return null;
+
+        GameObject? current = null;
+        foreach (GameObject root in scene.GetRootGameObjects())
+        {
+            if (root.transform.GetSiblingIndex() == segments[0].SiblingIndex &&
+                Uri.EscapeDataString(root.name) == segments[0].Name)
+            {
+                current = root;
+                break;
+            }
+        }
+        if (current is null)
+            return null;
+
+        for (int index = 1; index < segments.Length; index++)
+        {
+            if (segments[index].SiblingIndex >= current.transform.childCount)
+                return null;
+            Transform child = current.transform.GetChild(segments[index].SiblingIndex);
+            if (Uri.EscapeDataString(child.name) != segments[index].Name)
+                return null;
+            current = child.gameObject;
+        }
+
+        return current;
+    }
+
+    internal static bool TryParseHierarchyPath(
+        string? path,
+        out int sceneHandle,
+        out (string Name, int SiblingIndex)[] segments)
+    {
+        sceneHandle = 0;
+        segments = Array.Empty<(string Name, int SiblingIndex)>();
+        if (path is null)
+            return false;
+        int firstSlash = path.IndexOf('/');
+        if (!path.StartsWith("scene:", StringComparison.Ordinal) ||
+            firstSlash <= 6 ||
+            !int.TryParse(path.Substring(6, firstSlash - 6), NumberStyles.AllowLeadingSign,
+                CultureInfo.InvariantCulture, out sceneHandle))
+            return false;
+
+        string[] rawSegments = path.Substring(firstSlash + 1).Split('/');
+        var parsed = new (string Name, int SiblingIndex)[rawSegments.Length];
+        for (int index = 0; index < rawSegments.Length; index++)
+        {
+            int bracket = rawSegments[index].LastIndexOf('[');
+            if (bracket < 0 ||
+                !rawSegments[index].EndsWith(']') ||
+                !int.TryParse(rawSegments[index].Substring(bracket + 1, rawSegments[index].Length - bracket - 2),
+                    NumberStyles.None, CultureInfo.InvariantCulture, out int siblingIndex))
+                return false;
+            parsed[index] = (rawSegments[index].Substring(0, bracket), siblingIndex);
+        }
+
+        segments = parsed;
+        return segments.Length > 0;
     }
 
     internal static int FindFirstClickableIndex(IReadOnlyList<bool> clickable)
