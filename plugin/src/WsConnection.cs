@@ -668,7 +668,13 @@ internal sealed class WsConnection : IDisposable
                     message.SetLength(0);
                     try
                     {
-                        Envelope? envelope = JsonSerializer.Deserialize<Envelope>(text, SerializerOptions);
+                        using JsonDocument document = JsonDocument.Parse(text);
+                        if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                            !document.RootElement.TryGetProperty("uuid", out JsonElement uuid) ||
+                            uuid.ValueKind != JsonValueKind.String ||
+                            !uuid.TryGetGuid(out _))
+                            throw new JsonException("Envelope uuid is required and must be a UUID.");
+                        Envelope? envelope = document.RootElement.Deserialize<Envelope>(SerializerOptions);
                         if (envelope is null)
                             throw new JsonException("Envelope was null.");
                         _owner.HandleEnvelope(this, envelope);

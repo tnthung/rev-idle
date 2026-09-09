@@ -64,6 +64,7 @@ await WsTimeoutSendsCancelAndDropsLateResponse();
 await WsDisconnectFailsPendingAndAllowsNewClient();
 await WsRejectsSecondActiveClient();
 await WsMalformedPacketsDoNotStopReader();
+await WsMissingUuidPacketIsReportedAndReaderContinues();
 await WsCancelPreventsQueuedHandlerStart();
 await WsCancelBlocksRunningHandlerResponse();
 await WsDuplicateActiveUuidKeepsOriginalOwner();
@@ -82,7 +83,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("73 tests passed.");
+System.Console.WriteLine("74 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -337,6 +338,57 @@ static async Task WsMalformedPacketsDoNotStopReader()
         pumping.Cancel();
         await pump;
         Equal(uuid, document.RootElement.GetProperty("uuid").GetGuid(), nameof(WsMalformedPacketsDoNotStopReader));
+    }
+}
+
+static async Task WsMissingUuidPacketIsReportedAndReaderContinues()
+{
+    ConcurrentQueue<string> reports = new();
+    int handled = 0;
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2), reports.Enqueue);
+    server.Handler<TestReq>((context, packet) =>
+    {
+        Interlocked.Increment(ref handled);
+        return context.Send(new TestRes(packet.Value));
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    using (CancellationTokenSource pumping = new())
+    {
+        Task pump = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    server.Pump();
+                    await Task.Delay(5, pumping.Token);
+                }
+            }
+            catch (OperationCanceledException) when (pumping.IsCancellationRequested)
+            {
+            }
+        });
+        try
+        {
+            await SendText(peer, "{\"type\":\"TestReq\",\"payload\":{\"value\":\"missing-uuid\"}}");
+            DateTime deadline = DateTime.UtcNow.AddSeconds(1);
+            while (!reports.Any(report => report.Contains("uuid", StringComparison.OrdinalIgnoreCase)) && DateTime.UtcNow < deadline)
+                await Task.Delay(5);
+            Equal(true, reports.Any(report => report.Contains("uuid", StringComparison.OrdinalIgnoreCase)), nameof(WsMissingUuidPacketIsReportedAndReaderContinues));
+            Guid uuid = Guid.NewGuid();
+            await SendText(peer, WsConnection.SerializeForTest(uuid, new TestReq("valid-after-missing-uuid")));
+            using JsonDocument response = JsonDocument.Parse(await ReceiveText(peer));
+            Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), nameof(WsMissingUuidPacketIsReportedAndReaderContinues));
+            Equal("valid-after-missing-uuid", response.RootElement.GetProperty("payload").GetProperty("value").GetString(), nameof(WsMissingUuidPacketIsReportedAndReaderContinues));
+            Equal(1, Volatile.Read(ref handled), nameof(WsMissingUuidPacketIsReportedAndReaderContinues));
+        }
+        finally
+        {
+            pumping.Cancel();
+            await pump.WaitAsync(TimeSpan.FromSeconds(2));
+        }
     }
 }
 

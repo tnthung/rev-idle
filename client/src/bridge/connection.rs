@@ -551,7 +551,7 @@ impl WsConnection {
         let uuid = Uuid::new_v4();
         let envelope = Envelope::new(uuid, P::TYPE, packet)
             .map_err(|error| WsError::Protocol(error.to_string()))?;
-        let (response, response_receiver) = oneshot::channel();
+        let (response, mut response_receiver) = oneshot::channel();
         {
             let mut state = self.inner.state.lock().unwrap();
             if state
@@ -581,7 +581,7 @@ impl WsConnection {
             pending_guard.disarm();
             return Err(error);
         }
-        match tokio::time::timeout(self.response_timeout, response_receiver).await {
+        match tokio::time::timeout(self.response_timeout, &mut response_receiver).await {
             Ok(Ok(Ok(payload))) => {
                 pending_guard.disarm();
                 serde_json::from_value(payload).map_err(|error| WsError::Protocol(error.to_string()))
@@ -595,26 +595,9 @@ impl WsConnection {
                 Err(WsError::Closed)
             }
             Err(_) => {
-                let timed_out = {
-                    let mut state = self.inner.state.lock().unwrap();
-                    if state
-                        .pending
-                        .get(&uuid)
-                        .is_some_and(|pending| pending.generation == active.generation)
-                    {
-                        state.pending.remove(&uuid);
-                        state.timed_out.push_back(uuid);
-                        state.timed_out_set.insert(uuid);
-                        while state.timed_out.len() > TIMED_OUT_CAPACITY {
-                            if let Some(oldest) = state.timed_out.pop_front() {
-                                state.timed_out_set.remove(&oldest);
-                            }
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                };
+                let timed_out = self
+                    .inner
+                    .remove_pending_and_tombstone(uuid, active.generation);
                 pending_guard.disarm();
                 if timed_out {
                     send_best_effort(
@@ -624,7 +607,12 @@ impl WsConnection {
                     );
                     Err(WsError::Timeout)
                 } else {
-                    Err(WsError::Closed)
+                    match response_receiver.await {
+                        Ok(Ok(payload)) => serde_json::from_value(payload)
+                            .map_err(|error| WsError::Protocol(error.to_string())),
+                        Ok(Err(error)) => Err(error),
+                        Err(_) => Err(WsError::Closed),
+                    }
                 }
             }
         }
@@ -1684,6 +1672,49 @@ mod tests {
         .unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(handled.load(Ordering::SeqCst), 0);
+        connection.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn timeout_waits_for_response_after_reader_removes_pending() {
+        let (address, peer_rx) = raw_server().await;
+        let connection = super::WsConnection::connect_for_test(
+            address,
+            Duration::from_millis(20),
+            Duration::from_millis(20),
+        );
+        let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let request = tokio::spawn({
+            let connection = connection.clone();
+            async move { connection.request(TestReq { value: "race".to_owned() }).await }
+        });
+        let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        let envelope: super::Envelope =
+            serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+        let pending = connection
+            .inner
+            .state
+            .lock()
+            .unwrap()
+            .pending
+            .remove(&envelope.uuid)
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        pending
+            .response
+            .send(Ok(serde_json::to_value(TestRes { value: "race-ok".to_owned() }).unwrap()))
+            .ok();
+        assert_eq!(
+            request.await.unwrap(),
+            Ok(TestRes { value: "race-ok".to_owned() }),
+        );
         connection.shutdown().await;
     }
 
