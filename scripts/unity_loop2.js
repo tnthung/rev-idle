@@ -592,8 +592,13 @@ async function waitForUnit() {
   const currentTree = await DilationTree.current();
   for (let i=0; i<unusedDTP; i++)
     for (const extra of DT_EXTRAS)
-      if (currentTree[extra.key]++ < extra.target) {
-        await extra.node();
+      if (currentTree[extra.key] < extra.target) {
+        currentTree[extra.key]++
         break;
       }
+
+  await currentTree.apply();
+  await Action.toggleDilation();
+  await rev.sleep(1000);
+  await Action.toggleDilation();
 }
