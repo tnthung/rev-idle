@@ -45,6 +45,7 @@ await ControlBridgeDoesNotSendUsingReconnectedGeneration();
 await WsPacketContextCarriesOriginGeneration();
 ControlPresentationProjectsClosedPhases();
 ControlIconsPreserveNegativeSpace();
+ControlOverlayBindsButtonsToBackgroundGraphic();
 DispatcherSkipsNonClickableRaycasts();
 DispatcherMapsClientCoordinatesToUnityCoordinates();
 DispatcherParsesExactHierarchyPath();
@@ -698,6 +699,14 @@ static void ControlIconsPreserveNegativeSpace()
     Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 11, 7), testName);
     Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 11, 8), testName);
     Equal(false, ControlOverlay.IconPixel(ControlIcon.Resume, 7, 7), testName);
+}
+
+static void ControlOverlayBindsButtonsToBackgroundGraphic()
+{
+    const string testName = nameof(ControlOverlayBindsButtonsToBackgroundGraphic);
+    string source = File.ReadAllText(Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory, "..", "..", "..", "..", "src", "ControlOverlay.cs")));
+    Equal(1, source.Split("button.targetGraphic = image;", StringSplitOptions.None).Length - 1, testName);
 }
 
 static async Task WsConnectionGenerationTracksSessions()
