@@ -244,12 +244,13 @@ struct State {
 struct Inner {
     state: Mutex<State>,
     generation: watch::Sender<u64>,
+    _generation_receiver: watch::Receiver<u64>,
     reported: AtomicUsize,
 }
 
 impl Inner {
     fn new() -> Self {
-        let (generation, _) = watch::channel(0);
+        let (generation, generation_receiver) = watch::channel(0);
         Self {
             state: Mutex::new(State {
                 active: None,
@@ -262,6 +263,7 @@ impl Inner {
                 shutting_down: false,
             }),
             generation,
+            _generation_receiver: generation_receiver,
             reported: AtomicUsize::new(0),
         }
     }
@@ -389,9 +391,7 @@ impl Inner {
         let (pending, inbound) = {
             let mut state = self.state.lock().unwrap();
             state.shutting_down = true;
-            if state.active.take().is_some() {
-                self.generation.send(0).ok();
-            }
+            state.active = None;
             state.timed_out.clear();
             state.timed_out_set.clear();
             let pending = state.pending.drain().map(|(_, pending)| pending).collect::<Vec<_>>();
@@ -1225,6 +1225,16 @@ mod tests {
         generation.changed().await.unwrap();
         assert_eq!(*generation.borrow(), 2);
         connection.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn connection_generation_late_subscription_observes_active_generation() {
+        let connection = super::WsConnection::disconnected_for_test();
+        let (outbound, _) = tokio::sync::mpsc::channel(1);
+        assert_eq!(connection.inner.activate(outbound), 1);
+        let generation = connection.connection_generation();
+        assert_eq!(*generation.borrow(), 1);
+        connection.inner.close_generation(1);
     }
 
     async fn raw_server() -> (
