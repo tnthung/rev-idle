@@ -1,3 +1,4 @@
+import { States } from "./states";
 
 
 export class Action extends Function {
@@ -28,6 +29,11 @@ export class Action extends Function {
 
   invoke(path, delayMs=100) {
     this.steps.push({ type: "invoke", path, delayMs });
+    return this;
+  }
+
+  silentInvoke(path, delayMs=100) {
+    this.steps.push({ type: "silentInvoke", path, delayMs });
     return this;
   }
 
@@ -76,6 +82,9 @@ export class Action extends Function {
           break;
         case "invoke":
           await rev.invoke(step.path);
+          break;
+        case "silentInvoke":
+          await rev.invoke(step.path).then(_ => {});
           break;
         case "transfer":
           await rev.transfer(step.source, step.destination);
@@ -169,16 +178,37 @@ export class Action extends Function {
 
   static gotoUnity = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_unity[4]");
 
-  static gotoAstrology     = this.gotoUnity.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/tab_menu[1]/tab_astrology[0]");
-  static gotoPlanetShop    = this.gotoAstrology.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_content[1]/ctn_planet_shop[7]/btn_planet_shop[1]");
-  static gotoZodiacMerge   = this.gotoPlanetShop.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_zodiac_actions[1]/btn_merging[0]");
-  static gotoZodiacEnhance = this.gotoPlanetShop.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_zodiac_actions[1]/btn_enchancing[1]");
-  static gotoZodiacReforge = this.gotoPlanetShop.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_zodiac_actions[1]/btn_redistribution[2]");
+  static gotoAstrology       = this.gotoUnity.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/tab_menu[1]/tab_astrology[0]");
+  static gotoPlanet          = this.gotoAstrology.clone().silentInvoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/btn_close[5]");
+  static gotoPlanetShop      = this.gotoAstrology.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_content[1]/ctn_planet_shop[7]/btn_planet_shop[1]");
+  static gotoZodiacMerge     = this.gotoPlanetShop.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_zodiac_actions[1]/btn_merging[0]");
+  static gotoZodiacEnhance   = this.gotoPlanetShop.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_zodiac_actions[1]/btn_enchancing[1]");
+  static gotoZodiacReforge   = this.gotoPlanetShop.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_zodiac_actions[1]/btn_redistribution[2]");
+  static gotoZodiacSacrifice = this.gotoPlanetShop.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_zodiac_actions[1]/btn_sacrificing[3]");
+
+  static sortZodiacByRarity = this.gotoPlanetShop.clone()
+    .invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_inventory[2]/lbl_title[0]/btn_sort[1]")
+    .invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/ContextMenuBackground[1]/context_menu%28Clone%29[0]/viewport[0]/content[0]/context_menu_item%28Clone%29[6]");
+
+  static ZODIAC_PLANET_SLOT_SUN     = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_sun[0]";
+  static ZODIAC_PLANET_SLOT_MERCURY = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_mercury[1]";
+  static ZODIAC_PLANET_SLOT_VENUS   = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_venus[2]";
+  static ZODIAC_PLANET_SLOT_MOON    = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_moon[3]";
+  static ZODIAC_PLANET_SLOT_MARS    = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_mars[4]";
+  static ZODIAC_PLANET_SLOT_JUPITER = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_jupiter[5]";
+  static ZODIAC_PLANET_SLOT_SATURN  = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_saturn[6]";
+  static ZODIAC_PLANET_SLOT_URANUS  = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_uranus[7]";
+  static ZODIAC_PLANET_SLOT_NEPTUNE = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_neptune[8]";
+  static ZODIAC_PLANET_SLOT_PLUTO   = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_pluto[9]";
+  static ZODIAC_PLANET_SLOT_CHIRON  = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_chiron[10]";
+  static ZODIAC_PLANET_SLOT_FORTUNE = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_fortune[11]";
 
   static ZODIAC_SELL_SLOT         = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_sell[0]/item_slot_zodiac_sell[0]";
   static ZODIAC_CELL_BUTTON       = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_sell[0]/btn_sell[1]";
   static ZODIAC_MERGE_BUTTON      = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_merging[1]/content[1]/btn_action[3]";
   static ZODIAC_MERGE_RESULT_SLOT = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_merging[1]/content[1]/ctn_result[4]/item_slot_zodiac_result[2]";
+  static ZODIAC_SACRIFICE_SLOT    = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_sacrificing[4]/content[1]/item_slot_zodiac[1]";
+  static ZODIAC_SACRIFICE_BUTTON  = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_sacrificing[4]/content[1]/btn_action[2]";
 
   static ZODIAC_INV_SLOT(n) {
     n = Number(n);
@@ -198,6 +228,13 @@ export class Action extends Function {
     await rev.invoke(this.ZODIAC_CELL_BUTTON);
   }
 
+  static async sacrificeZodiac(n) {
+    await this.gotoZodiacSacrifice();
+    await rev.transfer(this.ZODIAC_INV_SLOT(n), this.ZODIAC_SACRIFICE_SLOT);
+    await rev.sleep(100);
+    await rev.invoke(this.ZODIAC_SACRIFICE_BUTTON);
+  }
+
   static async mergeZodiac(a, b, c) {
     await this.gotoZodiacMerge();
     await rev.transfer(this.ZODIAC_INV_SLOT(a), this.ZODIAC_MERGE_SLOT(0));
@@ -207,6 +244,30 @@ export class Action extends Function {
     await rev.invoke(this.ZODIAC_MERGE_BUTTON);
     await rev.sleep(100);
     await rev.transfer(this.ZODIAC_MERGE_RESULT_SLOT, this.ZODIAC_INV_SLOT(a));
+  }
+
+  static async equipZodiac(n, to) {
+    await this.gotoPlanet();
+    await rev.sleep(100);
+    if (!this[`ZODIAC_PLANET_SLOT_${to}`]) throw new Error("Invalid equip target");
+    await rev.transfer(this.ZODIAC_INV_SLOT(n), this[`ZODIAC_PLANET_SLOT_${to}`]);
+  }
+
+  static async takeOffZodiac(from) {
+    await this.gotoPlanet();
+    await rev.sleep(100);
+    if (!this[`ZODIAC_PLANET_SLOT_${from}`]) throw new Error("Invalid unequip target");
+
+    const inv = await States.unityZodiacInventory();
+    const len = Object.keys(inv).length;
+
+    for (let i=0; i<len; i++) {
+      if (inv[i]) continue;
+      await rev.transfer(this[`ZODIAC_PLANET_SLOT_${from}`], this.ZODIAC_INV_SLOT(i));
+      return true;
+    }
+
+    return false;
   }
 
   static gotoUnityTrial = this.gotoUnity.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/tab_menu[1]/tab_trials[1]");

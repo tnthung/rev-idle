@@ -1,4 +1,11 @@
-import { ZodiacRarity, UnityZodiac, States, ZodiacSign, ZodiacElement } from "./lib/states";
+import {
+  ZodiacRarity,
+  UnityZodiac,
+  States,
+  ZodiacSign,
+  ZodiacElement,
+  ZodiacStatType,
+} from "./lib/states";
 
 
 export default {
@@ -38,9 +45,28 @@ export default {
       return true;
   },
 
+  shouldSacrificeZodiac(/** @type {UnityZodiac} */ zodiac) {
+    if (zodiac.locked)
+      return false;
+
+    return isMultGainSacrifice(zodiac);
+  },
+
   // Suffix can be used to differentiate different group. Merge only zodiacs
   // with the same suffix (i.e. in the same group)
   mergeKeySuffix(/** @type {UnityZodiac} */ zodiac) {
     return "";
-  }
+  },
+
+  // Given the planet, the current zodiac equipped there, and the possible zodiacs to choose from.
+  // Equip the returned key of that zodiac in the possibleZodiacs record. Return null to take it off.
+  // The chosen zodiac for previous planet will not be included for subsequent selections
+  // (i.e. it will be removed from possibleZodiacs).
+  equipZodiacFor(
+    /** @type {"SUN" | "MERCURY" | "VENUS" | "MOON" | "MARS" | "JUPITER" | "SATURN" | "URANUS" | "NEPTUNE" | "PLUTO" | "CHIRON" | "FORTUNE"} */ planet,
+    /** @type {UnityZodiac | null} */ currentZodiac,
+    /** @type {Record<string, UnityZodiac>} */ possibleZodiacs
+  ) {
+    return planet;
+  },
 };

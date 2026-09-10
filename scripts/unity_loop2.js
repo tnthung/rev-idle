@@ -123,7 +123,9 @@ export default async function main() {
 
 async function mergeAndSellZodiac() {
   let sold = 0;
+  let sacrificed = 0;
   let merged = 0;
+  let equipped = 0;
   const buckets = {};
 
   for (const [pos, zodiac] of Object.entries(await States.unityZodiacInventory())) {
@@ -133,6 +135,12 @@ async function mergeAndSellZodiac() {
     if (executionConfig.shouldSellZodiac(z)) {
       await Action.sellZodiac(pos);
       sold++;
+      continue;
+    }
+
+    if (executionConfig.shouldSacrificeZodiac(z)) {
+      await Action.sacrificeZodiac(pos);
+      sacrificed++;
       continue;
     }
 
@@ -165,7 +173,45 @@ async function mergeAndSellZodiac() {
     buckets[nextKey].push(toMerge[0]);
   }
 
-  console.log(`Zodiacs sold: ${sold}, Zodiacs merged: ${merged}`);
+  const planets = [
+    "SUN",
+    "MERCURY",
+    "VENUS",
+    "MOON",
+    "MARS",
+    "JUPITER",
+    "SATURN",
+    "URANUS",
+    "NEPTUNE",
+    "PLUTO",
+    "CHIRON",
+    "FORTUNE",
+  ];
+
+  for (let pid=0; pid<planets.length; pid++) {
+    const inventoryZodiacs = Object.entries(await States.unityZodiacInventory());
+    const planetZodiacs = Object.entries(await States.planetZodiacInventory())
+      .map(([k, z]) => [k.toUpperCase(), z]).filter(([k]) => planets.slice(pid).includes(k));
+
+    const planet = planets[pid];
+    const possibleZodiacs = Object.fromEntries([...inventoryZodiacs, ...planetZodiacs]);
+    const currentZodiacs = possibleZodiacs[planet];
+    const nextZodiacs = executionConfig.equipZodiacFor(planet, currentZodiacs, possibleZodiacs);
+
+    if (nextZodiacs) {
+      if (nextZodiacs !== planet) { // only actually equip if the key is not the current planet
+        await Action.equipZodiac(nextZodiacs, planet);
+        equipped++;
+      }
+
+      continue;
+    }
+
+    if (!await Action.takeOffZodiac(planet))
+      throw new Error(`Failed to take off zodiac for planet ${planet}`);
+  }
+
+  console.log(`Zodiacs sold: ${sold}\nZodiacs sacrificed: ${sacrificed}\nZodiacs merged: ${merged}\nZodiacs equipped: ${equipped}`);
 }
 
 

@@ -20,6 +20,9 @@ export class States {
   static nextGold              = () => rev.state("gameData.attacks.goldOnUnity");
   static attackRelics          = () => rev.state("gameData.attacks.relics");
 
+  /** @type {function(): Promise<number>} */
+  static zodiacInventorySlotCount = () => rev.state("gameController.inventory.SlotZodiac.CurrentValue");
+
   /** @type {function(): Promise<string>} */
   static currentAttackDamage = () => rev.state("gameData.attacks.totalAtkMult");
 
@@ -84,6 +87,7 @@ export class UnityZodiac {
     this.rarityPlus = Number(rarityPlus);
     this.score = score;
     this.sign = ZodiacSign[sign];
+    /** @type {ZodiacStat[]} */
     this.stats = stats.map(stat => new ZodiacStat(stat));
   }
 
