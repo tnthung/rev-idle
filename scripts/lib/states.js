@@ -9,7 +9,6 @@ export class States {
   static supernovaLevel        = () => rev.state("gameData.eternity.supernovaLv");
   static eternities            = () => rev.state("gameData.eternity.eters");
   static totalAP               = () => rev.state("gameData.eternity.APbought");
-  static eternalChallenge      = async (n) => new EternalChallenge(await rev.state(`gameData.eternity.challenges.${n}`));
   static DilationMaxScore      = () => rev.state("dilationMaxScoreCurrent");
   static inDilation            = () => rev.state("gameData.eternity.inDilation");
   static totalDTP              = () => rev.state("DTP");
@@ -21,10 +20,18 @@ export class States {
   static maxAttackLevelReached = () => rev.state("gameData.attacks.maxLevelReached");
   static gold                  = () => rev.state("gameData.attacks.gold");
   static nextGold              = () => rev.state("gameData.attacks.goldOnUnity");
+
+  /** @type {function(number): Promise<EternalChallenge>} */
+  static eternalChallenge = (n) => rev.state(`gameData.eternity.challenges.${n}`)
+    .then(data => new EternalChallenge(data));
+
+  /** @type {function(): Promise<UnityZodiac[]>} */
+  static nextUnityZodiacs = () => rev.state("gameData.unity.NextZodiacs")
+    .then(data => data.map(zodiac => new UnityZodiac(zodiac)));
 }
 
 
-class EternalChallenge {
+export class EternalChallenge {
   constructor({ completeDiff, inChallenge, Unlocked, num }) {
     this.challengeLevel = num;
     this.completeDiff = completeDiff;
@@ -34,11 +41,64 @@ class EternalChallenge {
 }
 
 
+export class UnityZodiac {
+  constructor({
+    Element,
+    IsEmpty,
+    RangeOffset,
+    Season,
+    hasPlanet,
+    level,
+    locked,
+    planet,
+    quality,
+    rarity,
+    rarityPlus,
+    score,
+    sign,
+    stats,
+  }) {
+    this.Element = ZodiacElement[Element];
+    this.IsEmpty = IsEmpty;
+    this.RangeOffset = RangeOffset;
+    this.Season = ZodiacSeason[Season];
+    this.hasPlanet = hasPlanet;
+    this.level = Number(level);
+    this.locked = locked;
+    this.planet = planet;
+    this.quality = quality;
+    this.rarity = ZodiacRarity[rarity];
+    this.rarityPlus = Number(rarityPlus);
+    this.score = score;
+    this.sign = ZodiacSign[sign];
+    this.stats = stats.map(stat => new ZodiacStat(stat));
+  }
+
+  get mergeKey() {
+    return `${this.Element};${this.rarity};${this.rarityPlus}`;
+  }
+}
+
+
+export class ZodiacStat {
+  constructor({ type, value }) {
+    this.type = type;
+    this.value = value;
+  }
+}
+
+
 export const ZodiacElement = Enum(
   "Fire",
   "Water",
   "Earth",
   "Wind");
+
+export const ZodiacSeason = Enum(
+  "Spring",
+  "Summer",
+  "Autumn",
+  "Winter");
 
 export const ZodiacSign = Enum(
   "Aries",
@@ -65,3 +125,32 @@ export const ZodiacRarity = Enum(
   "Godly",
   "Divine",
   "Immortal");
+
+export const ZodiacStatType = Enum(
+  "MultsGain",
+  "CommonExponent",
+  "AscensionPower",
+  "PromPower",
+  "LapsSpeed",
+  "SlowdownPower",
+
+  "IPGain",
+  "GenExponent",
+  "MultPerBoughtGen",
+  "InfinityGain",
+  "StarBase",
+  "StardustExponent",
+
+  "LabMultPower",
+  "SupernovaReq",
+  "EPGain",
+  "EternityGain",
+  "DPGain",
+  "FreeLabLevels",
+
+  "GameSpeed",
+  "LuckAdd",
+  "Ach29Reward",
+  "DTPCost",
+  "CenterDTUEffect",
+  "ZodiacQualityMult");

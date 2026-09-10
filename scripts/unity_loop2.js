@@ -1,6 +1,6 @@
 import { Action } from "./lib/action.js";
 import { exponent, wait_for, wait_for_exponent } from "./lib/utils.js";
-import { States, ZodiacElement, ZodiacRarity } from "./lib/states.js";
+import { States, UnityZodiac, ZodiacElement, ZodiacRarity } from "./lib/states.js";
 import { DilationTree, DT_STAGES, DT_EXTRAS } from "./lib/dilation_tree.js";
 
 
@@ -99,258 +99,46 @@ export default async function main() {
 }
 
 
-async function mergeAndSellHardTrialZodiac() {
-  await Action.gotoZodiacMerge();
+async function mergeAndSellZodiac() {
+  await Action.gotoPlanetShop();
 
-  const {
-    targetSigns,
-    targetMinRarity,
-    genericMinRarity,
-    preserveDivinePlusPerTarget,
-    minZodiacLevel,
-  } = executionConfig;
+  let sold = 0;
+  let merged = 0;
+  const buckets = {};
 
-  console.log("Starting HT zodiac merge/sell...");
+  for (const [pos, zodiac] of Object.entries(await States.unityZodiacInventory())) {
+    /** @type {UnityZodiac} */
+    const z = new UnityZodiac(zodiac);
 
-  const targetSignSet = new Set(targetSigns);
-
-  let sellCount = 0;
-  let mergeCount = 0;
-
-  /*
-   * Store entries instead of only positions so we can use zodiac.score
-   * to preferentially preserve stronger copies when deciding which
-   * Divine zodiacs become merge fodder.
-   *
-   * key:
-   *   target;<sign>;<rarity>
-   *   generic;<element>;<rarity>
-   */
-  const buckets = new Map();
-
-  const targetKey = (sign, rarity) =>
-    `target;${sign};${rarity}`;
-
-  const genericKey = (element, rarity) =>
-    `generic;${element};${rarity}`;
-
-  const getBucket = key => {
-    let bucket = buckets.get(key);
-    if (!bucket) {
-      bucket = [];
-      buckets.set(key, bucket);
-    }
-    return bucket;
-  };
-
-  const scoreOf = entry => {
-    const score = Number(entry.zodiac?.score ?? 0);
-    return Number.isFinite(score) ? score : 0;
-  };
-
-  /*
-   * Put an already-preserved zodiac into the appropriate bucket.
-   *
-   * This is also used after merging. That's important for generic Wind
-   * merges: Gemini + Gemini + Libra, for example, could produce an
-   * Aquarius/Libra, at which point it must become protected.
-   */
-  const addToBucket = (pos, zodiac) => {
-    const rarity = ZodiacRarity[zodiac.rarity];
-    if (rarity === undefined)
-      throw new Error(`Unknown Zodiac rarity: ${zodiac.rarity}`);
-
-    if (targetSignSet.has(zodiac.sign)) {
-      getBucket(targetKey(zodiac.sign, rarity)).push({ pos, zodiac });
-      return;
-    }
-
-    const element = ZodiacElement[zodiac.Element];
-    if (element === undefined)
-      throw new Error(`Unknown Zodiac element: ${zodiac.Element}`);
-
-    getBucket(genericKey(element, rarity)).push({ pos, zodiac });
-  };
-
-  /*
-   * Merge three entries and then inspect the ACTUAL result.
-   *
-   * positions[0] is assumed to be the result slot, matching the
-   * behavior relied upon by your existing mergeAndSellZodiac().
-   */
-  const mergeEntries = async entries => {
-    const positions = entries.map(entry => entry.pos);
-    const resultPos = positions[0];
-
-    await Action.mergeZodiac(...positions);
-    mergeCount++;
-
-    /*
-     * Re-read because generic same-element merging does not guarantee
-     * which sign comes out.
-     */
-    const inventory = await States.unityZodiacInventory();
-    const result = inventory[resultPos];
-
-    if (!result) {
-      console.warn(`Could not find merged zodiac at position ${resultPos}`);
-      return;
-    }
-
-    addToBucket(resultPos, result);
-  };
-
-  /*
-   * Initial inventory classification / selling.
-   */
-  const inventory = await States.unityZodiacInventory();
-  for (const [pos, zodiac] of Object.entries(inventory)) {
-    if (zodiac.locked) continue;
-
-    const rarity = ZodiacRarity[zodiac.rarity];
-
-    if (rarity === undefined)
-      throw new Error(`Unknown Zodiac rarity: ${zodiac.rarity}`);
-
-    const minRarity = ZodiacRarity[
-      targetSignSet.has(zodiac.sign)
-        ? targetMinRarity
-        : genericMinRarity];
-
-    if (rarity < minRarity || Number(zodiac.level) < minZodiacLevel) {
+    if (executionConfig.shouldSellZodiac(z)) {
       await Action.sellZodiac(pos);
-      sellCount++;
+      sold++;
       continue;
     }
 
-    addToBucket(pos, zodiac);
+    const key = `${z.mergeKey};${executionConfig.mergeKeySuffix(z)}`;
+    buckets[key] = buckets[key] || [];
+    buckets[key].push(pos);
   }
 
-  /*
-   * Don't assume the numeric enums are contiguous.
-   */
-  const elements = [
-    ...new Set(Object.values(ZodiacElement)
-      .filter(value => typeof value === "number")),
-  ].sort((a, b) => a - b);
+  for (const [key, bucket] of Object.entries(buckets)) {
+    if (bucket.length < 3)
+      continue;
 
-  const rarities = [
-    ...new Set(Object.values(ZodiacRarity)
-      .filter(value => typeof value === "number")),
-  ].sort((a, b) => a - b);
+    const [e, r, p, s] = key.split(";");
+    const nextKey = r === ZodiacRarity.Immortal
+      ? `${e};${r};${p+1};${s}`
+      : `${e};${r+1};${p};${s}`;
 
-  /*
-   * -------------------------------------------------------------
-   * PHASE 1:
-   * Generic zodiac merging.
-   *
-   * Same behavior as your old merger:
-   *   same element + same rarity
-   *
-   * But Aquarius/Libra have already been removed from these buckets.
-   *
-   * If a generic Wind merge creates an Aquarius or Libra,
-   * mergeEntries() reclassifies it into a target bucket.
-   * -------------------------------------------------------------
-   */
-  for (const rarity of rarities) {
-    if (
-      rarity < genericMinRarity ||
-      rarity >= ZodiacRarity.Immortal
-    ) continue;
+    const toMerge = bucket.splice(0, 3);
+    await Action.mergeZodiac(...toMerge);
+    merged++;
 
-    for (const element of elements) {
-      const bucket = getBucket(genericKey(element, rarity));
-      while (bucket.length >= 3) {
-        const entries = bucket.splice(0, 3);
-        await mergeEntries(entries);
-      }
-    }
+    bucket[nextKey] = bucket[nextKey] || [];
+    bucket[nextKey].push(toMerge[0]);
   }
 
-  /*
-   * -------------------------------------------------------------
-   * PHASE 2:
-   * Target Aquarius / Libra merging.
-   *
-   * Epic -> Legendary
-   * Legendary -> Mythic
-   * Mythic -> Godly
-   * Godly -> Divine
-   *
-   * These are merged ONLY with identical signs.
-   * -------------------------------------------------------------
-   */
-  for (const sign of targetSigns) {
-    for (const rarity of rarities) {
-      if (
-        rarity < targetMinRarity ||
-        rarity >= ZodiacRarity.Divine
-      ) continue;
-
-      const bucket = getBucket(targetKey(sign, rarity));
-
-      /*
-       * Merge weaker copies first so that if 1-2 are left over,
-       * the stronger current copies survive.
-       */
-      bucket.sort((a, b) => scoreOf(a) - scoreOf(b)
-      );
-
-      while (bucket.length >= 3) {
-        const entries = bucket.splice(0, 3);
-        await mergeEntries(entries);
-      }
-    }
-
-    /*
-     * -----------------------------------------------------------
-     * PHASE 3:
-     * Divine -> Immortal, but only when doing so still leaves us
-     * with at least preserveDivinePlusPerTarget usable Divine+
-     * copies of this sign.
-     *
-     * A merge turns:
-     *
-     *   3 Divine -> 1 Immortal
-     *
-     * so the total number of Divine+ copies decreases by 2.
-     * -----------------------------------------------------------
-     */
-    const divineBucket = getBucket(targetKey(sign, ZodiacRarity.Divine));
-    const immortalBucket = getBucket(targetKey(sign, ZodiacRarity.Immortal));
-
-    /*
-     * Keep the strongest Divine copies when possible.
-     */
-    divineBucket.sort((a, b) => scoreOf(a) - scoreOf(b));
-
-    while (
-      divineBucket.length >= 3 &&
-      divineBucket.length + immortalBucket.length - 2 >= preserveDivinePlusPerTarget
-    ) {
-      await mergeEntries(divineBucket.splice(0, 3));
-
-      /*
-       * mergeEntries() will normally add the resulting Immortal
-       * to immortalBucket via addToBucket(), so the counts above
-       * remain current.
-       */
-    }
-  }
-
-  /*
-   * Some generic merges may have generated lower-rarity target
-   * zodiacs after their target rarity phase had already passed.
-   * That's harmless: the next call will process them.
-   */
-
-  console.log(
-    "HT zodiac cleanup finished.",
-    "Sold:",
-    sellCount,
-    "Merged:",
-    mergeCount);
+  console.log(`Zodiacs sold: ${sold}, Zodiacs merged: ${merged}`);
 }
 
 
@@ -365,7 +153,7 @@ async function bootstrapEternity() {
     return true;
   }
 
-  await mergeAndSellHardTrialZodiac().catch(e =>
+  await mergeAndSellZodiac().catch(e =>
     console.error("Error happened while merging and selling zodiac:\n", e));
 
   rev.write_file("__zodiac.json", JSON.stringify({
