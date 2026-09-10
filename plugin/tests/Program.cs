@@ -44,6 +44,7 @@ DispatcherMatchesPersistentSceneRoot();
 DispatcherFindsFirstScrollableRaycast();
 WsEnvelopeMatchesSharedFixture();
 await WsDisconnectedCallsFailImmediately();
+await WsConnectionGenerationTracksSessions();
 await WsRequestCorrelatesResponseByUuidAndType();
 await WsConcurrentSendsShareOneWriter();
 await WsHandlersStartWithoutWaitingForEarlierHandlers();
@@ -405,6 +406,24 @@ static async Task WsDisconnectedCallsFailImmediately()
     using WsConnection connection = WsConnection.DisconnectedForTest();
     await ThrowsAsync<WsNotConnectedException>(() => connection.Request(new TestReq("request")), nameof(WsDisconnectedCallsFailImmediately));
     await ThrowsAsync<WsNotConnectedException>(() => connection.Send(new TestReq("send")), nameof(WsDisconnectedCallsFailImmediately));
+}
+
+static async Task WsConnectionGenerationTracksSessions()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    Equal(0L, server.ConnectionGeneration, nameof(WsConnectionGenerationTracksSessions));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Equal(true, server.ConnectionGeneration > 0, nameof(WsConnectionGenerationTracksSessions));
+        peer.Dispose();
+        client.Dispose();
+    }
+    DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+    while (server.ConnectionGeneration != 0 && DateTime.UtcNow < deadline)
+        await Task.Delay(1);
+    Equal(0L, server.ConnectionGeneration, nameof(WsConnectionGenerationTracksSessions));
 }
 
 static async Task WsRequestCorrelatesResponseByUuidAndType()

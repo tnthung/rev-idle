@@ -243,11 +243,13 @@ struct State {
 
 struct Inner {
     state: Mutex<State>,
+    generation: watch::Sender<u64>,
     reported: AtomicUsize,
 }
 
 impl Inner {
     fn new() -> Self {
+        let (generation, _) = watch::channel(0);
         Self {
             state: Mutex::new(State {
                 active: None,
@@ -259,6 +261,7 @@ impl Inner {
                 inbound: HashMap::new(),
                 shutting_down: false,
             }),
+            generation,
             reported: AtomicUsize::new(0),
         }
     }
@@ -276,6 +279,7 @@ impl Inner {
         state.next_generation += 1;
         let generation = state.next_generation;
         state.active = Some(Active { generation, outbound });
+        self.generation.send(generation).ok();
         generation
     }
 
@@ -342,6 +346,7 @@ impl Inner {
                 .is_some_and(|active| active.generation == generation)
             {
                 state.active = None;
+                self.generation.send(0).ok();
                 state.timed_out.clear();
                 state.timed_out_set.clear();
             }
@@ -384,7 +389,9 @@ impl Inner {
         let (pending, inbound) = {
             let mut state = self.state.lock().unwrap();
             state.shutting_down = true;
-            state.active = None;
+            if state.active.take().is_some() {
+                self.generation.send(0).ok();
+            }
             state.timed_out.clear();
             state.timed_out_set.clear();
             let pending = state.pending.drain().map(|(_, pending)| pending).collect::<Vec<_>>();
@@ -507,6 +514,10 @@ impl WsConnection {
         if let Some(supervisor) = supervisor {
             supervisor.await.ok();
         }
+    }
+
+    pub(crate) fn connection_generation(&self) -> watch::Receiver<u64> {
+        self.inner.generation.subscribe()
     }
 
     #[cfg(test)]
@@ -1186,6 +1197,34 @@ mod tests {
             connection.send(TestReq { value: "send".to_owned() }).await.unwrap_err(),
             super::WsError::NotConnected,
         );
+    }
+
+    #[tokio::test]
+    async fn connection_generation_tracks_reconnects() {
+        let (address, first_peer_rx, second_peer_rx) = raw_server_with_reconnect().await;
+        let connection = super::WsConnection::connect_for_test(
+            address,
+            Duration::from_millis(20),
+            Duration::from_millis(100),
+        );
+        let mut generation = connection.connection_generation();
+        assert_eq!(*generation.borrow(), 0);
+        let mut first_peer = tokio::time::timeout(Duration::from_secs(1), first_peer_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        generation.changed().await.unwrap();
+        assert_eq!(*generation.borrow(), 1);
+        first_peer.close(None).await.unwrap();
+        generation.changed().await.unwrap();
+        assert_eq!(*generation.borrow(), 0);
+        let _second_peer = tokio::time::timeout(Duration::from_secs(1), second_peer_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        generation.changed().await.unwrap();
+        assert_eq!(*generation.borrow(), 2);
+        connection.shutdown().await;
     }
 
     async fn raw_server() -> (

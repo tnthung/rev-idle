@@ -80,6 +80,15 @@ internal sealed class WsConnection : IDisposable
 
     public int Port { get; }
 
+    public long ConnectionGeneration
+    {
+        get
+        {
+            lock (_gate)
+                return _active?.Generation ?? 0;
+        }
+    }
+
     internal bool ConnectedForTest
     {
         get
