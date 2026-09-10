@@ -73,10 +73,6 @@ Transfer requires two distinct slot objects with one drop handler each and exact
 
 These features require the updated client and plugin and use the loopback WebSocket bridge. Capture returns `{ "type": "button" | "slot" | null, "path": string | null }` without interacting with the target.
 
-## Script controls
-
-The plugin adds three 20-by-20 controls to the bottom-right corner of the game: Reload/Stop (`↻`/`■`), Resume/Pause (`▶`/`Ⅱ`), and one-shot Capture (`⌖`). Hover a button for its tooltip. Controls stay disabled until the client connects, and their enabled state follows the current script and capture state.
-
 ## Read state
 
 In JavaScript, `rev.state()` returns a promise. With no arguments it returns all supported keys; arguments return only those requested, case-sensitively. Requesting exactly one key unwraps the result to that key's value directly, instead of an object with one property:
