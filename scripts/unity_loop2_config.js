@@ -1,9 +1,28 @@
-import { ZodiacRarity, UnityZodiac } from "./lib/states";
+import { ZodiacRarity, UnityZodiac, States, ZodiacSign, ZodiacElement } from "./lib/states";
 
 
 export default {
   ECWaitTime: 3000,
   attackMode: true,
+
+  async zodiacToGetOnNextUnit() {
+    const POSITION = ["Left", "Top", "Bottom", "Right"];
+
+    let maxRarity = null;
+
+    for (const [pos, zodiac] of Object.entries((await States.nextUnityZodiacs()))) {
+      if (zodiac.sign === ZodiacSign.Pisces)
+        return POSITION[pos];
+
+      if (zodiac.Element === ZodiacElement.Water)
+        return POSITION[pos];
+
+      if (!maxRarity || maxRarity[1] < zodiac.rarity)
+        maxRarity = [pos, zodiac.rarity];
+    }
+
+    return POSITION[maxRarity[0]];
+  },
 
   shouldSellZodiac(/** @type {UnityZodiac} */ zodiac) {
     if (zodiac.level < 100)

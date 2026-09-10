@@ -75,7 +75,7 @@ export default async function main() {
   // check attack level
   if (executionConfig.attackMode) {
     if (Number(await States.attackLevel()) >= Number(await States.maxAttackLevelReached()))
-      await Action.unitWith();
+      await Action.unitWith(await executionConfig.zodiacToGetOnNextUnit());
   }
 
   // check unity run duration
