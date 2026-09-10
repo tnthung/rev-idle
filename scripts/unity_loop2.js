@@ -98,7 +98,7 @@ export default async function main() {
       tooSlow = (nowHpM / damagePerSec) > executionConfig.attack_eta_threshold_s;
     }
 
-    if (tooSlow || level.level >= await States.maxAttackLevelReached())
+    if (tooSlow)
       await Action.unitWith(await executionConfig.zodiacToGetOnNextUnit());
   }
 
