@@ -1,4 +1,5 @@
 use super::connection::{Packet, Requestable};
+use crate::app::{ScriptPhase, StateUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -13,7 +14,7 @@ pub(crate) struct StateRes {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct CaptureReq {
+pub(crate) struct UiPathReq {
     pub(crate) x: i32,
     pub(crate) y: i32,
     pub(crate) width: i32,
@@ -21,7 +22,7 @@ pub(crate) struct CaptureReq {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct CaptureRes {
+pub(crate) struct UiPathRes {
     #[serde(rename = "type")]
     pub(crate) target_type: Option<String>,
     pub(crate) path: Option<String>,
@@ -81,6 +82,19 @@ pub(crate) struct PressCommand {
     pub(crate) key: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct ReloadScript {}
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct StopScript {}
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct PauseScript {}
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct ResumeScript {}
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct StartCapture {}
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct StopCapture {}
+
 impl Packet for StateReq {
     const TYPE: &'static str = "StateReq";
 }
@@ -89,13 +103,21 @@ impl Packet for StateRes {
     const TYPE: &'static str = "StateRes";
 }
 
-impl Packet for CaptureReq {
-    const TYPE: &'static str = "CaptureReq";
+impl Packet for UiPathReq {
+    const TYPE: &'static str = "UiPathReq";
 }
 
-impl Packet for CaptureRes {
-    const TYPE: &'static str = "CaptureRes";
+impl Packet for UiPathRes {
+    const TYPE: &'static str = "UiPathRes";
 }
+
+impl Packet for ReloadScript { const TYPE: &'static str = "ReloadScript"; }
+impl Packet for StopScript { const TYPE: &'static str = "StopScript"; }
+impl Packet for PauseScript { const TYPE: &'static str = "PauseScript"; }
+impl Packet for ResumeScript { const TYPE: &'static str = "ResumeScript"; }
+impl Packet for StartCapture { const TYPE: &'static str = "StartCapture"; }
+impl Packet for StopCapture { const TYPE: &'static str = "StopCapture"; }
+impl Packet for StateUpdate { const TYPE: &'static str = "StateUpdate"; }
 
 impl Packet for InvokeReq {
     const TYPE: &'static str = "InvokeReq";
@@ -133,8 +155,8 @@ impl Requestable for StateReq {
     type Response = StateRes;
 }
 
-impl Requestable for CaptureReq {
-    type Response = CaptureRes;
+impl Requestable for UiPathReq {
+    type Response = UiPathRes;
 }
 
 impl Requestable for InvokeReq {
@@ -176,12 +198,12 @@ mod tests {
                 .unwrap(),
             ),
             (
-                CaptureReq::TYPE,
-                serde_json::to_value(CaptureReq { x: 123, y: -45, width: 1920, height: 1080 }).unwrap(),
+                UiPathReq::TYPE,
+                serde_json::to_value(UiPathReq { x: 123, y: -45, width: 1920, height: 1080 }).unwrap(),
             ),
             (
-                CaptureRes::TYPE,
-                serde_json::to_value(CaptureRes {
+                UiPathRes::TYPE,
+                serde_json::to_value(UiPathRes {
                     target_type: Some("slot".to_owned()),
                     path: Some("scene:1/Canvas[0]/Inventory/3".to_owned()),
                 })
@@ -236,6 +258,13 @@ mod tests {
                 PressCommand::TYPE,
                 serde_json::to_value(PressCommand { key: "enter".to_owned() }).unwrap(),
             ),
+            (ReloadScript::TYPE, serde_json::to_value(ReloadScript {}).unwrap()),
+            (StopScript::TYPE, serde_json::to_value(StopScript {}).unwrap()),
+            (PauseScript::TYPE, serde_json::to_value(PauseScript {}).unwrap()),
+            (ResumeScript::TYPE, serde_json::to_value(ResumeScript {}).unwrap()),
+            (StartCapture::TYPE, serde_json::to_value(StartCapture {}).unwrap()),
+            (StopCapture::TYPE, serde_json::to_value(StopCapture {}).unwrap()),
+            (StateUpdate::TYPE, serde_json::to_value(StateUpdate { phase: ScriptPhase::Paused, capture: true }).unwrap()),
         ];
 
         for (packet_type, packet) in packets {
@@ -246,7 +275,7 @@ mod tests {
     #[test]
     fn capture_response_serializes_nullable_fields() {
         assert_eq!(
-            serde_json::to_value(CaptureRes {
+            serde_json::to_value(UiPathRes {
                 target_type: None,
                 path: None,
             })

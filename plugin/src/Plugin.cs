@@ -47,7 +47,7 @@ public sealed class Plugin : BasePlugin
             getWindow,
             (window, x, y, width, height) =>
             {
-                bool success = UnityUiClickDispatcher.TryCapture(x, y, width, height, out string? type, out string? path, out string error);
+                bool success = UnityUiClickDispatcher.TryFindUiPath(x, y, width, height, out string? type, out string? path, out string error);
                 return (success, type, path, error);
             },
             path =>
@@ -110,13 +110,13 @@ public sealed class Plugin : BasePlugin
             JsonElement value = document.RootElement.Clone();
             await context.Send(new StateRes(value));
         });
-        connection.Handler<CaptureReq>(async (context, packet) =>
+        connection.Handler<UiPathReq>(async (context, packet) =>
         {
             nint window = getWindow();
             (bool success, string? type, string? path, string error) = capture(window, packet.X, packet.Y, packet.Width, packet.Height);
             if (!success)
                 throw new InvalidOperationException(error);
-            await context.Send(new CaptureRes(type, path));
+            await context.Send(new UiPathRes(type, path));
         });
         connection.Handler<InvokeReq>(async (context, packet) =>
         {

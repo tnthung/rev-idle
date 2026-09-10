@@ -1,7 +1,7 @@
-use super::{connection::WsConnection, CaptureReq, CaptureRes};
+use super::{connection::WsConnection, UiPathReq, UiPathRes};
 
 #[derive(serde::Deserialize)]
-pub(crate) struct CaptureTarget {
+pub(crate) struct UiPathTarget {
     #[serde(rename = "type")]
     pub(crate) target_type: Option<String>,
     pub(crate) path: Option<String>,
@@ -20,7 +20,7 @@ mod tests {
     use tokio_tungstenite::tungstenite::Message;
 
     #[tokio::test(flavor = "current_thread")]
-    async fn request_capture_routes_coordinates_and_maps_target_fields() {
+    async fn request_ui_path_routes_coordinates_and_maps_target_fields() {
         let (address, peer_rx) = raw_server().await;
         let connection = WsConnection::connect_for_test(
             address,
@@ -33,7 +33,7 @@ mod tests {
             .unwrap();
         let request = tokio::spawn({
             let connection = connection.clone();
-            async move { request_capture(&connection, 123, -45, 1920, 1080).await }
+            async move { request_ui_path(&connection, 123, -45, 1920, 1080).await }
         });
         let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
             .await
@@ -41,7 +41,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let envelope: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
-        assert_eq!(envelope.get("type"), Some(&json!("CaptureReq")));
+        assert_eq!(envelope.get("type"), Some(&json!("UiPathReq")));
         assert_eq!(
             envelope.get("payload"),
             Some(&json!({ "x": 123, "y": -45, "width": 1920, "height": 1080 })),
@@ -49,7 +49,7 @@ mod tests {
         peer.send(Message::Text(
             json!({
                 "uuid": envelope["uuid"],
-                "type": "CaptureRes",
+                "type": "UiPathRes",
                 "payload": {
                     "type": "slot",
                     "path": "scene:1/Canvas[0]/Inventory/3",
@@ -68,18 +68,18 @@ mod tests {
     }
 }
 
-pub(crate) async fn request_capture(
+pub(crate) async fn request_ui_path(
     connection: &WsConnection,
     x: i32,
     y: i32,
     width: i32,
     height: i32,
-) -> Result<CaptureTarget, String> {
-    let CaptureRes { target_type, path } = connection
-        .request(CaptureReq { x, y, width, height })
+) -> Result<UiPathTarget, String> {
+    let UiPathRes { target_type, path } = connection
+        .request(UiPathReq { x, y, width, height })
         .await
         .map_err(|error| error.to_string())?;
-    Ok(CaptureTarget {
+    Ok(UiPathTarget {
         target_type,
         path,
     })

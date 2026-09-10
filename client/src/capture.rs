@@ -87,10 +87,10 @@ fn post_quit(thread_id: u32) -> Result<(), String> {
 }
 
 async fn describe_capture(connection: &WsConnection, x: i32, y: i32, width: i32, height: i32, write_clipboard: impl FnOnce(&str) -> Result<(), String>) -> Vec<String> {
-    use crate::bridge::CaptureTarget;
+    use crate::bridge::UiPathTarget;
 
-    match crate::bridge::request_capture(connection, x, y, width, height).await {
-        Ok(CaptureTarget { target_type: Some(target_type), path: Some(path) })
+    match crate::bridge::request_ui_path(connection, x, y, width, height).await {
+        Ok(UiPathTarget { target_type: Some(target_type), path: Some(path) })
             if target_type == "button" || target_type == "slot" => {
             if let Err(error) = write_clipboard(&path) {
                 return vec![format!("click: {x}, {y}; {target_type}: {path:?}; clipboard write failed: {error}")];

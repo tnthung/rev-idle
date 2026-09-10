@@ -96,8 +96,8 @@ static void BridgePacketPayloadsMatchSharedFixture()
     {
         ("StateReq", (object)new StateReq(new[] { "score", "eternity.dtpSpent" })),
         ("StateRes", new StateRes(JsonSerializer.Deserialize<JsonElement>("{\"score\":\"1e3\",\"enabled\":true,\"nested\":{\"value\":null},\"items\":[1,\"two\",false]}"))),
-        ("CaptureReq", new CaptureReq(123, -45, 1920, 1080)),
-        ("CaptureRes", new CaptureRes("slot", "scene:1/Canvas[0]/Inventory/3")),
+        ("UiPathReq", new UiPathReq(123, -45, 1920, 1080)),
+        ("UiPathRes", new UiPathRes("slot", "scene:1/Canvas[0]/Inventory/3")),
         ("InvokeReq", new InvokeReq("scene:1/Canvas[0]/Buy DTP & More[0]")),
         ("InvokeRes", new InvokeRes()),
         ("TransferReq", new TransferReq("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0")),
@@ -105,7 +105,14 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("ClickCommand", new ClickCommand(1200, 80, 1920, 1080)),
         ("ScrollCommand", new ScrollCommand(600, 400, -1, 1, 1920, 1080)),
         ("DragCommand", new DragCommand(1200, 80, 600, 400, 1920, 1080)),
-        ("PressCommand", new PressCommand("enter"))
+        ("PressCommand", new PressCommand("enter")),
+        ("ReloadScript", new ReloadScript()),
+        ("StopScript", new StopScript()),
+        ("PauseScript", new PauseScript()),
+        ("ResumeScript", new ResumeScript()),
+        ("StartCapture", new StartCapture()),
+        ("StopCapture", new StopCapture()),
+        ("StateUpdate", new StateUpdate("paused", true))
     };
 
     foreach ((string name, object packet) in packets)
@@ -120,7 +127,7 @@ static void BridgePacketPayloadsMatchSharedFixture()
 
     Equal(
         "{\"type\":null,\"path\":null}",
-        JsonSerializer.Serialize(new CaptureRes(null, null), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
+        JsonSerializer.Serialize(new UiPathRes(null, null), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
         nameof(BridgePacketPayloadsMatchSharedFixture));
 }
 
@@ -247,7 +254,7 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
             server,
             peer,
             (nint)0x5678,
-            $"{{\"uuid\":\"{captureUuid}\",\"type\":\"CaptureReq\",\"payload\":{{\"x\":123,\"y\":-45,\"width\":1920,\"height\":1080}}}}",
+            $"{{\"uuid\":\"{captureUuid}\",\"type\":\"UiPathReq\",\"payload\":{{\"x\":123,\"y\":-45,\"width\":1920,\"height\":1080}}}}",
             thread =>
             {
                 if (Volatile.Read(ref captureThread) == 0)
@@ -255,7 +262,7 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
             }))
         {
             Equal(captureUuid, capture.RootElement.GetProperty("uuid").GetGuid(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
-            Equal("CaptureRes", capture.RootElement.GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("UiPathRes", capture.RootElement.GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
             Equal("slot", capture.RootElement.GetProperty("payload").GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
             Equal("captured", capture.RootElement.GetProperty("payload").GetProperty("path").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
         }

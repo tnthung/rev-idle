@@ -1,8 +1,10 @@
 mod command;
 mod pause;
+mod status;
 
 pub(crate) use command::ScriptCommand;
 pub(crate) use pause::{ActionGate, PauseUpdate};
+pub(crate) use status::{ScriptPhase, StateUpdate};
 
 use std::{
     io,

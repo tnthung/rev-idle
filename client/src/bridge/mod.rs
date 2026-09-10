@@ -1,7 +1,7 @@
 mod state;
 mod invoke;
 mod input;
-mod capture;
+mod ui_path;
 mod transfer;
 mod connection;
 mod packets;
@@ -9,13 +9,14 @@ mod packets;
 pub(crate) mod test_support;
 
 pub(crate) use packets::{
-    CaptureReq, CaptureRes, ClickCommand, DragCommand, InvokeReq, InvokeRes, PressCommand, ScrollCommand,
-    StateReq, StateRes, TransferReq, TransferRes,
+    ClickCommand, DragCommand, InvokeReq, InvokeRes, PauseScript, PressCommand, ReloadScript, ResumeScript,
+    ScrollCommand, StartCapture, StateReq, StateRes, StopCapture, StopScript, TransferReq, TransferRes,
+    UiPathReq, UiPathRes,
 };
 
 pub(crate) use state::request_state;
 pub(crate) use invoke::invoke;
 pub(crate) use input::{click, drag, press, scroll};
-pub(crate) use capture::{request_capture, CaptureTarget};
+pub(crate) use ui_path::{request_ui_path, UiPathTarget};
 pub(crate) use transfer::transfer;
 pub(crate) use connection::WsConnection;

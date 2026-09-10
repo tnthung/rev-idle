@@ -38,7 +38,7 @@ internal static class UnityUiClickDispatcher
         return true;
     }
 
-    internal static bool TryCapture(int x, int y, int width, int height, out string? type, out string? path, out string result)
+    internal static bool TryFindUiPath(int x, int y, int width, int height, out string? type, out string? path, out string result)
     {
         type = null;
         path = null;
