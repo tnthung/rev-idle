@@ -99,7 +99,7 @@ export class UnityZodiac {
 
 export class ZodiacStat {
   constructor({ type, value }) {
-    this.type = type;
+    this.type = ZodiacStatType[type];
     this.value = value;
   }
 }
