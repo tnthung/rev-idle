@@ -509,6 +509,17 @@ impl WsConnection {
 
     pub(crate) async fn shutdown(&self) {
         self.shutdown.send(true).ok();
+        let active_generation = self
+            .inner
+            .state
+            .lock()
+            .unwrap()
+            .active
+            .as_ref()
+            .map(|active| active.generation);
+        if let Some(active_generation) = active_generation {
+            self.inner.close_generation(active_generation);
+        }
         self.inner.close_all();
         let supervisor = self.supervisor.lock().unwrap().take();
         if let Some(supervisor) = supervisor {
@@ -1235,6 +1246,21 @@ mod tests {
         let generation = connection.connection_generation();
         assert_eq!(*generation.borrow(), 1);
         connection.inner.close_generation(1);
+    }
+
+    #[tokio::test]
+    async fn connection_generation_shutdown_publishes_disconnected() {
+        let connection = super::WsConnection::disconnected_for_test();
+        let (outbound, _) = tokio::sync::mpsc::channel(1);
+        connection.inner.activate(outbound);
+        let mut generation = connection.connection_generation();
+        assert_eq!(*generation.borrow(), 1);
+        connection.shutdown().await;
+        tokio::time::timeout(Duration::from_secs(1), generation.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(*generation.borrow(), 0);
     }
 
     async fn raw_server() -> (
