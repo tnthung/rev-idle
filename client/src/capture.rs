@@ -81,10 +81,10 @@ fn post_quit(thread_id: u32) -> Result<(), String> {
         .map_err(|error| format!("PostThreadMessageW failed: {error}"))
 }
 
-async fn describe_capture(connection: &WsConnection, x: i32, y: i32, write_clipboard: impl FnOnce(&str) -> Result<(), String>) -> String {
+async fn describe_capture(connection: &WsConnection, x: i32, y: i32, width: i32, height: i32, write_clipboard: impl FnOnce(&str) -> Result<(), String>) -> String {
     use crate::bridge::CaptureTarget;
 
-    match crate::bridge::request_capture(connection, x, y).await {
+    match crate::bridge::request_capture(connection, x, y, width, height).await {
         Ok(CaptureTarget { target_type: Some(target_type), path: Some(path) })
             if target_type == "button" || target_type == "slot" => {
             if let Err(error) = write_clipboard(&path) {
@@ -116,13 +116,13 @@ fn run_capture_loop(hook: HHOOK, connection: WsConnection, runtime: tokio::runti
                 x: message.wParam.0 as u32 as i32,
                 y: message.lParam.0 as i32,
             };
-            if let Some((x, y)) = window::screen_to_client_position(point.x, point.y)
+            if let Some((x, y, width, height)) = window::screen_to_client_position(point.x, point.y)
                 .ok()
                 .flatten()
             {
                 let connection = connection.clone();
                 runtime.spawn(async move {
-                    println!("{}", describe_capture(&connection, x, y, |path| {
+                    println!("{}", describe_capture(&connection, x, y, width, height, |path| {
                         window::WindowControl::write_clipboard(&window::Win32WindowControl, path)
                     }).await);
                 });
@@ -282,7 +282,7 @@ mod tests {
                 .unwrap();
             let copied = Rc::new(RefCell::new(None));
             let copied_for_callback = copied.clone();
-            let description = super::describe_capture(&connection, 123, 456, |path| {
+            let description = super::describe_capture(&connection, 123, 456, 1920, 1080, |path| {
                 *copied_for_callback.borrow_mut() = Some(path.to_owned());
                 Ok(())
             });
@@ -299,7 +299,7 @@ mod tests {
             .unwrap();
             let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
             assert_eq!(request.get("type"), Some(&json!("CaptureReq")));
-            assert_eq!(request.get("payload"), Some(&json!({ "x": 123, "y": 456 })));
+            assert_eq!(request.get("payload"), Some(&json!({ "x": 123, "y": 456, "width": 1920, "height": 1080 })));
             peer.send(Message::Text(
                 json!({
                     "uuid": request["uuid"],

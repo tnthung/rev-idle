@@ -2,7 +2,7 @@ use crate::{
     app::ActionGate,
     bridge::WsConnection,
     global_state::GlobalState,
-    window::{post_click_to_game, Axis, WindowControl},
+    window::{Axis, WindowControl},
 };
 use rquickjs::{
     function::{Async, Opt, Rest},
@@ -27,7 +27,9 @@ pub(super) enum Button {
     Middle,
 }
 
-pub(super) struct BridgeMouseInput;
+pub(super) struct BridgeMouseInput {
+    pub(super) connection: WsConnection,
+}
 
 pub(super) trait MouseInput {
     fn click_at(
@@ -36,6 +38,14 @@ pub(super) trait MouseInput {
         y: i32,
         button: Button,
     ) -> Result<(), String>;
+
+    fn scroll(&mut self, _x: i32, _y: i32, _length: i32, _axis: Axis) -> Result<(), String> {
+        Err("mouse scrolling is not supported".to_string())
+    }
+
+    fn drag(&mut self, _x1: i32, _y1: i32, _x2: i32, _y2: i32) -> Result<(), String> {
+        Err("mouse dragging is not supported".to_string())
+    }
 }
 
 pub(super) fn click_at_with<C>(
@@ -56,7 +66,18 @@ impl MouseInput for BridgeMouseInput {
         y: i32,
         _button: Button,
     ) -> Result<(), String> {
-        click_at_with(x, y, post_click_to_game)
+        let (width, height) = crate::window::client_size()?;
+        click_at_with(x, y, |x, y| crate::bridge::click(&self.connection, x, y, width, height))
+    }
+
+    fn scroll(&mut self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
+        let (width, height) = crate::window::client_size()?;
+        crate::bridge::scroll(&self.connection, x, y, length, axis, width, height)
+    }
+
+    fn drag(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
+        let (width, height) = crate::window::client_size()?;
+        crate::bridge::drag(&self.connection, x1, y1, x2, y2, width, height)
     }
 }
 
@@ -363,7 +384,7 @@ pub(super) fn create_rev<'js>(
         )?,
     )?;
 
-    let scroll_window = controls.window.clone();
+    let scroll_mouse = controls.mouse.clone();
     let scroll_paused = controls.actions_paused.clone();
     rev.set(
         "scroll",
@@ -377,12 +398,12 @@ pub(super) fn create_rev<'js>(
                 if scroll_paused.is_paused() {
                     return Ok(());
                 }
-                scroll_window.scroll(x, y, length, axis).map_err(host_error)
+                scroll_mouse.borrow_mut().scroll(x, y, length, axis).map_err(host_error)
             },
         )?,
     )?;
 
-    let drag_window = controls.window.clone();
+    let drag_mouse = controls.mouse.clone();
     let drag_paused = controls.actions_paused.clone();
     rev.set(
         "drag",
@@ -396,7 +417,7 @@ pub(super) fn create_rev<'js>(
                 if drag_paused.is_paused() {
                     return Ok(());
                 }
-                drag_window.drag(x1, y1, x2, y2).map_err(host_error)
+                drag_mouse.borrow_mut().drag(x1, y1, x2, y2).map_err(host_error)
             },
         )?,
     )?;

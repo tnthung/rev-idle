@@ -44,6 +44,7 @@ pub(crate) enum WsError {
     Remote(String),
     UnexpectedResponse { expected: &'static str, actual: String },
     Protocol(String),
+    OutboundFull,
     AlreadyResponded,
 }
 
@@ -518,6 +519,23 @@ impl WsConnection {
         let envelope = Envelope::new(Uuid::new_v4(), P::TYPE, packet)
             .map_err(|error| WsError::Protocol(error.to_string()))?;
         self.inner.enqueue(active, envelope).await
+    }
+
+    pub(crate) fn try_send<P: Packet>(&self, packet: P) -> Result<(), WsError> {
+        let active = self.inner.active()?;
+        let envelope = Envelope::new(Uuid::new_v4(), P::TYPE, packet)
+            .map_err(|error| WsError::Protocol(error.to_string()))?;
+        if !self.inner.is_active(active.generation) {
+            return Err(WsError::Closed);
+        }
+        let (written, _) = oneshot::channel();
+        active
+            .outbound
+            .try_send(Outbound { envelope, written })
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => WsError::OutboundFull,
+                mpsc::error::TrySendError::Closed(_) => WsError::Closed,
+            })
     }
 
     pub(crate) fn handler<P, F, Fut>(&self, handler: F) -> Result<(), WsError>

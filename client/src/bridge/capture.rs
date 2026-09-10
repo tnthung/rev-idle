@@ -33,7 +33,7 @@ mod tests {
             .unwrap();
         let request = tokio::spawn({
             let connection = connection.clone();
-            async move { request_capture(&connection, 123, -45).await }
+            async move { request_capture(&connection, 123, -45, 1920, 1080).await }
         });
         let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
             .await
@@ -44,7 +44,7 @@ mod tests {
         assert_eq!(envelope.get("type"), Some(&json!("CaptureReq")));
         assert_eq!(
             envelope.get("payload"),
-            Some(&json!({ "x": 123, "y": -45 })),
+            Some(&json!({ "x": 123, "y": -45, "width": 1920, "height": 1080 })),
         );
         peer.send(Message::Text(
             json!({
@@ -72,9 +72,11 @@ pub(crate) async fn request_capture(
     connection: &WsConnection,
     x: i32,
     y: i32,
+    width: i32,
+    height: i32,
 ) -> Result<CaptureTarget, String> {
     let CaptureRes { target_type, path } = connection
-        .request(CaptureReq { x, y })
+        .request(CaptureReq { x, y, width, height })
         .await
         .map_err(|error| error.to_string())?;
     Ok(CaptureTarget {

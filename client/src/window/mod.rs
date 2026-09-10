@@ -1,11 +1,9 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use windows::{
     Win32::{
         Foundation::{POINT, RECT},
         Graphics::Gdi::ClientToScreen,
         UI::WindowsAndMessaging::{
-            GetClientRect, GetWindowRect, PostMessageW, SetWindowPos, ShowWindow,
+            GetClientRect, GetWindowRect, SetWindowPos, ShowWindow,
             SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_RESTORE,
         },
     },
@@ -13,13 +11,8 @@ use windows::{
 
 mod discovery;
 mod clipboard;
-mod bridge_input;
 mod geometry;
 
-use bridge_input::{
-    post_bridge_click_with, post_bridge_drag_endpoint_with,
-    post_bridge_scroll_with, request_id_from, DRAG_END_BRIDGE_MESSAGE, DRAG_START_BRIDGE_MESSAGE,
-};
 use clipboard::{read_unicode_clipboard, write_unicode_clipboard};
 use discovery::find_game_window;
 use geometry::{outer_size_for_client, ClientGeometry};
@@ -41,102 +34,28 @@ pub trait WindowControl {
         Err("clipboard reading is not supported".to_string())
     }
 
-    fn scroll(
-        &self,
-        _x: i32,
-        _y: i32,
-        _length: i32,
-        _axis: Axis,
-    ) -> Result<(), String> {
-        Err("window scrolling is not supported".to_string())
-    }
-
-    fn drag(
-        &self,
-        _x1: i32,
-        _y1: i32,
-        _x2: i32,
-        _y2: i32,
-    ) -> Result<(), String> {
-        Err("window dragging is not supported".to_string())
-    }
 }
 
 #[derive(Default)]
 pub struct Win32WindowControl;
 
-pub(crate) fn post_click_to_game(x: i32, y: i32) -> Result<(), String> {
+pub(crate) fn client_size() -> Result<(i32, i32), String> {
     let hwnd = find_game_window()?;
-    let request_id = request_id_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| format!("system clock is before UNIX epoch: {error}"))?
-            .as_nanos(),
-        std::process::id(),
-    );
-
-    post_bridge_click_with(x, y, request_id, |message, wparam, lparam| unsafe {
-        PostMessageW(Some(hwnd), message, wparam, lparam)
-    })
-}
-
-pub(crate) fn post_scroll_to_game(
-    x: i32,
-    y: i32,
-    length: i32,
-    axis: Axis,
-) -> Result<(), String> {
-    let hwnd = find_game_window()?;
-    let request_id = request_id_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| format!("system clock is before UNIX epoch: {error}"))?
-            .as_nanos(),
-        std::process::id(),
-    );
-
-    post_bridge_scroll_with(
-        x,
-        y,
-        length,
-        axis,
-        request_id,
-        |message, wparam, lparam| unsafe {
-            PostMessageW(Some(hwnd), message, wparam, lparam)
-        },
-    )
-}
-
-pub(crate) fn post_drag_to_game(x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
-    let hwnd = find_game_window()?;
-    let request_id = request_id_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|error| format!("system clock is before UNIX epoch: {error}"))?
-            .as_nanos(),
-        std::process::id(),
-    );
-
-    post_bridge_drag_endpoint_with(
-        DRAG_START_BRIDGE_MESSAGE,
-        x1,
-        y1,
-        request_id,
-        |message, wparam, lparam| unsafe { PostMessageW(Some(hwnd), message, wparam, lparam) },
-    )?;
-    post_bridge_drag_endpoint_with(
-        DRAG_END_BRIDGE_MESSAGE,
-        x2,
-        y2,
-        request_id,
-        |message, wparam, lparam| unsafe { PostMessageW(Some(hwnd), message, wparam, lparam) },
-    )
+    let mut client_rect = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut client_rect) }
+        .map_err(|error| format!("GetClientRect failed: {error}"))?;
+    Ok((
+        client_rect.right.checked_sub(client_rect.left)
+            .ok_or_else(|| "arithmetic overflow while reading client width".to_string())?,
+        client_rect.bottom.checked_sub(client_rect.top)
+            .ok_or_else(|| "arithmetic overflow while reading client height".to_string())?,
+    ))
 }
 
 pub(crate) fn screen_to_client_position(
     screen_x: i32,
     screen_y: i32,
-) -> Result<Option<(i32, i32)>, String> {
+) -> Result<Option<(i32, i32, i32, i32)>, String> {
     let hwnd = find_game_window()?;
     let mut client_rect = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client_rect) }
@@ -161,7 +80,8 @@ pub(crate) fn screen_to_client_position(
         width,
         height,
     })
-    .screen_to_client(screen_x, screen_y))
+    .screen_to_client(screen_x, screen_y)
+    .map(|(x, y)| (x, y, width, height)))
 }
 
 impl WindowControl for Win32WindowControl {
@@ -253,13 +173,6 @@ impl WindowControl for Win32WindowControl {
         Ok(())
     }
 
-    fn scroll(&self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
-        post_scroll_to_game(x, y, length, axis)
-    }
-
-    fn drag(&self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
-        post_drag_to_game(x1, y1, x2, y2)
-    }
 }
 
 #[cfg(test)]

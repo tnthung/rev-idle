@@ -7,9 +7,12 @@
 - [x] `console.clear()` for clearing the console.
 - [x] `rev.read_file(path)` for reading the contents of a file, `null` if not exists.
 - [x] `rev.write_file(path, content)` for writing contents to a file.
-- [ ] Rework transportation layer.
+- [x] Rework transportation layer.
+- [x] Replace windows messaging with new transportation layer.
 - [ ] `rev.delete_file(path)` for deleting a file.
 - [ ] `rev.press(key)` for simulating a key press.
+- [ ] `rev.shell(command)` for executing a shell command.
+- [ ] Remove unused warning.
 - [ ] In-game UI injection.
 - [ ] Make capture button background Red when in capture mode.
 - [ ] Change resume icon to point to the right.

@@ -3,10 +3,6 @@ name = "client"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "window_message_probe"
-path = "bin/window_message_probe.rs"
-
 [dependencies]
 num               = "0.4.3"
 serde_json        = "1.0.151"

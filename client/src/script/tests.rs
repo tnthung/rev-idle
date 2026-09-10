@@ -105,14 +105,15 @@ impl WindowControl for RecordingWindow {
         Ok(self.clipboard.borrow().clone())
     }
 
-    fn scroll(&self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
-        self.events.borrow_mut().push(HostEvent::Scroll(x, y, length, axis)); Ok(())
-    }
 }
 struct RecordingMouse { events: Rc<RefCell<Vec<HostEvent>>> }
 impl MouseInput for RecordingMouse {
     fn click_at(&mut self, x: i32, y: i32, button: Button) -> Result<(), String> {
         self.events.borrow_mut().push(HostEvent::Click(x, y, button)); Ok(())
+    }
+
+    fn scroll(&mut self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
+        self.events.borrow_mut().push(HostEvent::Scroll(x, y, length, axis)); Ok(())
     }
 
 }

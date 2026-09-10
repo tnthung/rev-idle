@@ -56,17 +56,7 @@ Port = 19841
 
 `0`, non-numeric values, and values outside `1..65535` disable the bridge. The bridge listens only on `127.0.0.1`.
 
-## Background UI click probe
-
-The plugin accepts only the fixed background-input bridge message and dispatches matching clicks to Unity uGUI handlers. It does not use `Input.GetMouseButtonDown()`, focus the game window, or move the cursor by default.
-
-Run the background click probe from the repository root:
-
-```powershell
-cargo +1.97.1 run --manifest-path client/Cargo.toml --bin window_message_probe
-```
-
-Add `--focus` only when explicit window focus is desired.
+Click, scroll, and drag commands use the same raw packet connection. They dispatch to Unity uGUI handlers without focusing the game window or moving the cursor.
 
 ## Capture, invoke, and transfer UI elements
 

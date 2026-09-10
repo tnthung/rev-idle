@@ -31,25 +31,14 @@ await BridgeStateHandlerPreservesMixedJsonAndSelectedKeys();
 await BridgeStateHandlerReportsMissingData();
 await BridgeStateHandlerReportsInvalidPath();
 await BridgeUiHandlersReportCorrelatedErrorsOnPumpThread();
+await BridgeInputHandlersRunOnPumpThread();
 await BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending();
-BridgeDecodesFullWidthCoordinates();
-BridgeRejectsZeroRequestId();
-BridgeMapsTopLeftClientCoordinatesToUnityCoordinates();
-BridgeQueueRejectsDuplicatesAndOverflow();
-BridgeQueueDequeuesInOrderAndClears();
-BridgeCallbackIdentityRequiresUndisposedActiveWindowAndSubclass();
-BridgeOwnershipReleaseRequiresDestroyedOrSuccessfulOwnerRemoval();
 DispatcherSkipsNonClickableRaycasts();
+DispatcherMapsClientCoordinatesToUnityCoordinates();
 DispatcherParsesExactHierarchyPath();
 DispatcherRejectsMalformedHierarchyPath();
 DispatcherMatchesPersistentSceneRoot();
-ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId();
-ScrollProtocolRejectsZeroRequestId();
-ScrollQueuePreservesOrderAndRejectsDuplicates();
 DispatcherFindsFirstScrollableRaycast();
-DragCommandFactoryCombinesStartAndEndEndpoints();
-DragQueuePairsStartAndEndByRequestIdAndRejectsDuplicates();
-DragQueueIgnoresEndWithoutMatchingStart();
 WsEnvelopeMatchesSharedFixture();
 await WsDisconnectedCallsFailImmediately();
 await WsRequestCorrelatesResponseByUuidAndType();
@@ -81,7 +70,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("84 tests passed.");
+System.Console.WriteLine("85 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -104,12 +93,15 @@ static void BridgePacketPayloadsMatchSharedFixture()
     {
         ("StateReq", (object)new StateReq(new[] { "score", "eternity.dtpSpent" })),
         ("StateRes", new StateRes(JsonSerializer.Deserialize<JsonElement>("{\"score\":\"1e3\",\"enabled\":true,\"nested\":{\"value\":null},\"items\":[1,\"two\",false]}"))),
-        ("CaptureReq", new CaptureReq(123, -45)),
+        ("CaptureReq", new CaptureReq(123, -45, 1920, 1080)),
         ("CaptureRes", new CaptureRes("slot", "scene:1/Canvas[0]/Inventory/3")),
         ("InvokeReq", new InvokeReq("scene:1/Canvas[0]/Buy DTP & More[0]")),
         ("InvokeRes", new InvokeRes()),
         ("TransferReq", new TransferReq("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0")),
-        ("TransferRes", new TransferRes())
+        ("TransferRes", new TransferRes()),
+        ("ClickCommand", new ClickCommand(1200, 80, 1920, 1080)),
+        ("ScrollCommand", new ScrollCommand(600, 400, -1, 1, 1920, 1080)),
+        ("DragCommand", new DragCommand(1200, 80, 600, 400, 1920, 1080))
     };
 
     foreach ((string name, object packet) in packets)
@@ -218,7 +210,7 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
         Volatile.Write(ref windowThread, Environment.CurrentManagedThreadId);
         return (nint)0x1234;
     },
-    (window, x, y) =>
+    (window, x, y, width, height) =>
     {
         Volatile.Write(ref captureThread, Environment.CurrentManagedThreadId);
         captureWindow = window;
@@ -238,7 +230,10 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
         transferredSource = source;
         transferredDestination = destination;
         return (true, "");
-    });
+    },
+    (window, command) => (true, ""),
+    (window, command) => (true, ""),
+    (window, command) => (true, ""));
     (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
     using (client)
     using (peer)
@@ -248,7 +243,7 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
             server,
             peer,
             (nint)0x5678,
-            $"{{\"uuid\":\"{captureUuid}\",\"type\":\"CaptureReq\",\"payload\":{{\"x\":123,\"y\":-45}}}}",
+            $"{{\"uuid\":\"{captureUuid}\",\"type\":\"CaptureReq\",\"payload\":{{\"x\":123,\"y\":-45,\"width\":1920,\"height\":1080}}}}",
             thread =>
             {
                 if (Volatile.Read(ref captureThread) == 0)
@@ -474,6 +469,68 @@ static async Task WsHandlersStartWithoutWaitingForEarlierHandlers()
         Equal(secondUuid, responseDocument.RootElement.GetProperty("uuid").GetGuid(), nameof(WsHandlersStartWithoutWaitingForEarlierHandlers));
         releaseFirst.TrySetResult(true);
     }
+}
+
+static async Task BridgeInputHandlersRunOnPumpThread()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int pumpThread = 0;
+    int handlerThread = 0;
+    int registered = 0;
+    var commands = new List<object>();
+    TaskCompletionSource<bool> allRegistered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.LifecycleSynchronizationForTest = stage =>
+    {
+        if (stage == "inbound-registered" && Interlocked.Increment(ref registered) == 3)
+            allRegistered.TrySetResult(true);
+    };
+    Plugin.RegisterHandlers(
+        server,
+        () => new BridgeStateFixture(),
+        () => 0,
+        (window, x, y, width, height) => (true, null, null, ""),
+        path => (true, ""),
+        (source, destination) => (true, ""),
+        (window, command) =>
+        {
+            handlerThread = Environment.CurrentManagedThreadId;
+            commands.Add(command);
+            return (true, "");
+        },
+        (window, command) =>
+        {
+            handlerThread = Environment.CurrentManagedThreadId;
+            commands.Add(command);
+            return (true, "");
+        },
+        (window, command) =>
+        {
+            handlerThread = Environment.CurrentManagedThreadId;
+            commands.Add(command);
+            return (true, "");
+        });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        foreach (string envelope in new[]
+        {
+            $"{{\"uuid\":\"{Guid.NewGuid()}\",\"type\":\"ClickCommand\",\"payload\":{{\"x\":1200,\"y\":80,\"width\":1920,\"height\":1080}}}}",
+            $"{{\"uuid\":\"{Guid.NewGuid()}\",\"type\":\"ScrollCommand\",\"payload\":{{\"x\":600,\"y\":400,\"length\":-1,\"axis\":1,\"width\":1920,\"height\":1080}}}}",
+            $"{{\"uuid\":\"{Guid.NewGuid()}\",\"type\":\"DragCommand\",\"payload\":{{\"startX\":1200,\"startY\":80,\"endX\":600,\"endY\":400,\"width\":1920,\"height\":1080}}}}"
+        })
+        {
+            await SendText(peer, envelope);
+        }
+        await allRegistered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        pumpThread = Environment.CurrentManagedThreadId;
+        Plugin.PumpPackets(0);
+    }
+
+    Equal(pumpThread, handlerThread, nameof(BridgeInputHandlersRunOnPumpThread));
+    Equal(new ClickCommand(1200, 80, 1920, 1080), commands[0], nameof(BridgeInputHandlersRunOnPumpThread));
+    Equal(new ScrollCommand(600, 400, -1, 1, 1920, 1080), commands[1], nameof(BridgeInputHandlersRunOnPumpThread));
+    Equal(new DragCommand(1200, 80, 600, 400, 1920, 1080), commands[2], nameof(BridgeInputHandlersRunOnPumpThread));
 }
 
 static async Task WsPumpStartsAtMostOneQueuedHandlerPerCall()
@@ -1698,77 +1755,21 @@ static async Task<string> ReceiveTextWithTimeout(WebSocket socket, TimeSpan time
 static Task SendText(WebSocket socket, string text)
     => socket.SendAsync(Encoding.UTF8.GetBytes(text), WebSocketMessageType.Text, true, CancellationToken.None);
 
-static void BridgeDecodesFullWidthCoordinates()
-{
-    nint packed = unchecked((nint)(long)0x12345678ABCDEF01UL);
-    Equal(true, InputBridgeProtocol.TryDecode(42, packed, out ClickCommand command), nameof(BridgeDecodesFullWidthCoordinates));
-    Equal(42UL, command.RequestId, nameof(BridgeDecodesFullWidthCoordinates));
-    Equal(0xABCDEF01U, command.X, nameof(BridgeDecodesFullWidthCoordinates));
-    Equal(0x12345678U, command.Y, nameof(BridgeDecodesFullWidthCoordinates));
-}
-
-static void BridgeRejectsZeroRequestId()
-{
-    Equal(false, InputBridgeProtocol.TryDecode(0, 0, out _), nameof(BridgeRejectsZeroRequestId));
-}
-
-static void BridgeMapsTopLeftClientCoordinatesToUnityCoordinates()
-{
-    var command = new ClickCommand(1, 1200, 80);
-    Equal(true, InputBridgeProtocol.TryMapToUnity(command, 1920, 1080, 1920, 1080, out float x, out float y), nameof(BridgeMapsTopLeftClientCoordinatesToUnityCoordinates));
-    Near(1200f, x, nameof(BridgeMapsTopLeftClientCoordinatesToUnityCoordinates));
-    Near(999f, y, nameof(BridgeMapsTopLeftClientCoordinatesToUnityCoordinates));
-    Equal(false, InputBridgeProtocol.TryMapToUnity(command, 1200, 1080, 1920, 1080, out _, out _), nameof(BridgeMapsTopLeftClientCoordinatesToUnityCoordinates));
-}
-
-static void BridgeQueueRejectsDuplicatesAndOverflow()
-{
-    var queue = new ClickCommandQueue();
-    Equal(true, queue.TryEnqueue(new ClickCommand(1, 1, 1)), nameof(BridgeQueueRejectsDuplicatesAndOverflow));
-    Equal(false, queue.TryEnqueue(new ClickCommand(1, 2, 2)), nameof(BridgeQueueRejectsDuplicatesAndOverflow));
-    for (ulong id = 2; id <= 32; id++)
-        Equal(true, queue.TryEnqueue(new ClickCommand(id, 1, 1)), nameof(BridgeQueueRejectsDuplicatesAndOverflow));
-    Equal(false, queue.TryEnqueue(new ClickCommand(33, 1, 1)), nameof(BridgeQueueRejectsDuplicatesAndOverflow));
-}
-
-static void BridgeQueueDequeuesInOrderAndClears()
-{
-    var queue = new ClickCommandQueue();
-    queue.TryEnqueue(new ClickCommand(10, 1, 2));
-    queue.TryEnqueue(new ClickCommand(11, 3, 4));
-    Equal(true, queue.TryDequeue(out ClickCommand first), nameof(BridgeQueueDequeuesInOrderAndClears));
-    Equal(10UL, first.RequestId, nameof(BridgeQueueDequeuesInOrderAndClears));
-    queue.Clear();
-    Equal(false, queue.TryDequeue(out _), nameof(BridgeQueueDequeuesInOrderAndClears));
-}
-
-static void BridgeCallbackIdentityRequiresUndisposedActiveWindowAndSubclass()
-{
-    const string testName = nameof(BridgeCallbackIdentityRequiresUndisposedActiveWindowAndSubclass);
-    nint activeWindow = (nint)0x1234;
-
-    Equal(true, Win32InputBridge.IsCallbackIdentityValid(false, activeWindow, activeWindow, Win32InputBridge.SubclassId), testName);
-    Equal(false, Win32InputBridge.IsCallbackIdentityValid(true, activeWindow, activeWindow, Win32InputBridge.SubclassId), testName);
-    Equal(false, Win32InputBridge.IsCallbackIdentityValid(false, (nint)0x5678, activeWindow, Win32InputBridge.SubclassId), testName);
-    Equal(false, Win32InputBridge.IsCallbackIdentityValid(false, activeWindow, activeWindow, Win32InputBridge.SubclassId + 1), testName);
-}
-
-static void BridgeOwnershipReleaseRequiresDestroyedOrSuccessfulOwnerRemoval()
-{
-    const string testName = nameof(BridgeOwnershipReleaseRequiresDestroyedOrSuccessfulOwnerRemoval);
-
-    Equal(true, Win32InputBridge.CanReleaseManagedOwnership(true, false, false), testName);
-    Equal(true, Win32InputBridge.CanReleaseManagedOwnership(false, true, true), testName);
-    Equal(false, Win32InputBridge.CanReleaseManagedOwnership(false, true, false), testName);
-    Equal(false, Win32InputBridge.CanReleaseManagedOwnership(false, false, true), testName);
-}
-
 static void DispatcherSkipsNonClickableRaycasts()
 {
     const string testName = nameof(DispatcherSkipsNonClickableRaycasts);
 
     Equal(2, UnityUiClickDispatcher.FindFirstClickableIndex(new[] { false, false, true }), testName);
     Equal(-1, UnityUiClickDispatcher.FindFirstClickableIndex(new[] { false, false }), testName);
+}
+
+static void DispatcherMapsClientCoordinatesToUnityCoordinates()
+{
+    const string testName = nameof(DispatcherMapsClientCoordinatesToUnityCoordinates);
+    Equal(true, UnityUiClickDispatcher.TryMapToUnity(1200, 80, 1920, 1080, 1280, 720, out float x, out float y), testName);
+    Equal(800f, x, testName);
+    Equal(true, MathF.Abs(665.6667f - y) < 0.0001f, testName);
+    Equal(false, UnityUiClickDispatcher.TryMapToUnity(1200, 80, 1200, 1080, 1280, 720, out _, out _), testName);
 }
 
 static void DispatcherParsesExactHierarchyPath()
@@ -1814,97 +1815,10 @@ static void DispatcherMatchesPersistentSceneRoot()
         -12, "viewmanager", 0, false, -12, ("VIEWMANAGER", 0)), testName);
 }
 
-static void ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId()
-{
-    const string testName = nameof(ScrollProtocolDecodesCoordinatesSignedLengthAxisAndRequestId);
-    Equal((uint)0x8418, InputBridgeProtocol.ScrollMessageId, testName);
-    Equal(true, InputBridgeProtocol.TryDecodeScroll(
-        unchecked((nuint)((42UL << 33) | (1UL << 32) | 0xFFFFFFFCUL)),
-        unchecked((nint)(long)0x12345678_ABCDEF01UL),
-        out ScrollCommand command), testName);
-    Equal(42UL, command.RequestId, testName);
-    Equal(-4, command.Length, testName);
-    Equal(1U, command.Axis, testName);
-    Equal(0xABCDEF01U, command.X, testName);
-    Equal(0x12345678U, command.Y, testName);
-}
-
-static void ScrollProtocolRejectsZeroRequestId()
-{
-    Equal(false, InputBridgeProtocol.TryDecodeScroll(
-        unchecked((nuint)((1UL << 32) | 5UL)),
-        (nint)1,
-        out _), nameof(ScrollProtocolRejectsZeroRequestId));
-}
-
-static void ScrollQueuePreservesOrderAndRejectsDuplicates()
-{
-    const string testName = nameof(ScrollQueuePreservesOrderAndRejectsDuplicates);
-    var queue = new ScrollCommandQueue();
-    Equal(true, InputBridgeProtocol.TryDecodeScroll(
-        unchecked((nuint)((7UL << 33) | unchecked((uint)-2))),
-        unchecked((nint)(long)0x00000002_00000001UL),
-        out ScrollCommand first), testName);
-    Equal(true, queue.TryEnqueue(first), testName);
-    Equal(false, queue.TryEnqueue(first), testName);
-    Equal(true, queue.TryDequeue(out ScrollCommand command), testName);
-    Equal(7UL, command.RequestId, testName);
-}
-
 static void DispatcherFindsFirstScrollableRaycast()
 {
     const string testName = nameof(DispatcherFindsFirstScrollableRaycast);
     Equal(1, UnityUiClickDispatcher.FindFirstScrollableIndex(new[] { false, true, false }), testName);
-}
-
-static void DragCommandFactoryCombinesStartAndEndEndpoints()
-{
-    const string testName = nameof(DragCommandFactoryCombinesStartAndEndEndpoints);
-    var start = new ClickCommand(7, 100, 200);
-    var end = new ClickCommand(7, 300, 400);
-    DragCommand drag = DragCommandFactory.FromEndpoints(start, end);
-    Equal(7UL, drag.RequestId, testName);
-    Equal(100U, drag.StartX, testName);
-    Equal(200U, drag.StartY, testName);
-    Equal(300U, drag.EndX, testName);
-    Equal(400U, drag.EndY, testName);
-}
-
-static void DragQueuePairsStartAndEndByRequestIdAndRejectsDuplicates()
-{
-    const string testName = nameof(DragQueuePairsStartAndEndByRequestIdAndRejectsDuplicates);
-    var queue = new DragCommandQueue();
-
-    Equal(true, queue.TryBeginDrag(new ClickCommand(5, 10, 20)), testName);
-    Equal(false, queue.TryBeginDrag(new ClickCommand(5, 99, 99)), testName);
-    Equal(false, queue.TryDequeue(out _), testName);
-
-    Equal(true, queue.TryEndDrag(new ClickCommand(5, 30, 40)), testName);
-    Equal(false, queue.TryEndDrag(new ClickCommand(5, 30, 40)), testName);
-
-    Equal(true, queue.TryDequeue(out DragCommand command), testName);
-    Equal(5UL, command.RequestId, testName);
-    Equal(10U, command.StartX, testName);
-    Equal(20U, command.StartY, testName);
-    Equal(30U, command.EndX, testName);
-    Equal(40U, command.EndY, testName);
-
-    queue.Clear();
-    Equal(false, queue.TryDequeue(out _), testName);
-}
-
-static void DragQueueIgnoresEndWithoutMatchingStart()
-{
-    const string testName = nameof(DragQueueIgnoresEndWithoutMatchingStart);
-    var queue = new DragCommandQueue();
-    Equal(false, queue.TryEndDrag(new ClickCommand(9, 1, 1)), testName);
-    Equal(false, queue.TryDequeue(out _), testName);
-}
-
-static void Near(float expected, float actual, string testName)
-{
-    if (MathF.Abs(expected - actual) > 0.0001f)
-        throw new InvalidOperationException($"{testName}: expected approximately '{expected}', got '{actual}'.");
 }
 
 static void Equal<T>(T expected, T actual, string testName)

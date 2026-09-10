@@ -44,7 +44,9 @@ pub(crate) async fn run(
     console_locked: Arc<AtomicBool>,
     capture_state: CaptureState,
 ) -> Result<(), String> {
-    let mouse: SharedMouse = Rc::new(RefCell::new(BridgeMouseInput));
+    let mouse: SharedMouse = Rc::new(RefCell::new(BridgeMouseInput {
+        connection: connection.clone(),
+    }));
 
     run_with_controls_and_lifecycle(
         commands,

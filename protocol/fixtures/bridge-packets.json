@@ -1,10 +1,13 @@
 {
   "StateReq": { "keys": ["score", "eternity.dtpSpent"] },
   "StateRes": { "value": { "score": "1e3", "enabled": true, "nested": { "value": null }, "items": [1, "two", false] } },
-  "CaptureReq": { "x": 123, "y": -45 },
+  "CaptureReq": { "x": 123, "y": -45, "width": 1920, "height": 1080 },
   "CaptureRes": { "type": "slot", "path": "scene:1/Canvas[0]/Inventory/3" },
   "InvokeReq": { "path": "scene:1/Canvas[0]/Buy DTP & More[0]" },
   "InvokeRes": {},
   "TransferReq": { "source": "scene:1/Canvas[0]/Inventory/3", "destination": "scene:1/Canvas[0]/Combine/0" },
-  "TransferRes": {}
+  "TransferRes": {},
+  "ClickCommand": { "x": 1200, "y": 80, "width": 1920, "height": 1080 },
+  "ScrollCommand": { "x": 600, "y": 400, "length": -1, "axis": 1, "width": 1920, "height": 1080 },
+  "DragCommand": { "startX": 1200, "startY": 80, "endX": 600, "endY": 400, "width": 1920, "height": 1080 }
 }

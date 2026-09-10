@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
@@ -39,19 +38,11 @@ internal static class UnityUiClickDispatcher
         return true;
     }
 
-    internal static bool TryCapture(nint window, int x, int y, out string? type, out string? path, out string result)
+    internal static bool TryCapture(int x, int y, int width, int height, out string? type, out string? path, out string result)
     {
         type = null;
         path = null;
-        if (window == 0 || !GetClientRect(window, out Rect client))
-        {
-            result = $"invalid bounds at ({x}, {y})";
-            return false;
-        }
-
-        if (!InputBridgeProtocol.TryMapToUnity(
-                new ClickCommand(1, unchecked((uint)x), unchecked((uint)y)), client.Right - client.Left, client.Bottom - client.Top,
-                Screen.width, Screen.height, out float unityX, out float unityY))
+        if (!TryMapToUnity(x, y, width, height, Screen.width, Screen.height, out float unityX, out float unityY))
         {
             result = $"invalid bounds at ({x}, {y})";
             return false;
@@ -335,24 +326,9 @@ internal static class UnityUiClickDispatcher
         return -1;
     }
 
-    internal static bool TryDispatchScroll(nint window, ScrollCommand command, out string result)
+    internal static bool TryDispatchScroll(ScrollCommand command, out string result)
     {
-        if (window == 0 || !GetClientRect(window, out Rect client))
-        {
-            result = $"invalid bounds at ({command.X}, {command.Y})";
-            return false;
-        }
-
-        int clientWidth = client.Right - client.Left;
-        int clientHeight = client.Bottom - client.Top;
-        if (!InputBridgeProtocol.TryMapToUnity(
-                new ClickCommand(command.RequestId, command.X, command.Y),
-                clientWidth,
-                clientHeight,
-                Screen.width,
-                Screen.height,
-                out float unityX,
-                out float unityY))
+        if (!TryMapToUnity(command.X, command.Y, command.Width, command.Height, Screen.width, Screen.height, out float unityX, out float unityY))
         {
             result = $"invalid bounds at ({command.X}, {command.Y})";
             return false;
@@ -405,27 +381,9 @@ internal static class UnityUiClickDispatcher
         return true;
     }
 
-    internal static bool TryDispatch(
-        nint window,
-        ClickCommand command,
-        out string result)
+    internal static bool TryDispatch(ClickCommand command, out string result)
     {
-        if (window == 0 || !GetClientRect(window, out Rect client))
-        {
-            result = $"invalid bounds at ({command.X}, {command.Y})";
-            return false;
-        }
-
-        int clientWidth = client.Right - client.Left;
-        int clientHeight = client.Bottom - client.Top;
-        if (!InputBridgeProtocol.TryMapToUnity(
-                command,
-                clientWidth,
-                clientHeight,
-                Screen.width,
-                Screen.height,
-                out float unityX,
-                out float unityY))
+        if (!TryMapToUnity(command.X, command.Y, command.Width, command.Height, Screen.width, Screen.height, out float unityX, out float unityY))
         {
             result = $"invalid bounds at ({command.X}, {command.Y})";
             return false;
@@ -493,25 +451,10 @@ internal static class UnityUiClickDispatcher
         return true;
     }
 
-    internal static bool TryDispatchDrag(nint window, DragCommand command, out string result)
+    internal static bool TryDispatchDrag(DragCommand command, out string result)
     {
-        if (window == 0 || !GetClientRect(window, out Rect client))
-        {
-            result = $"invalid bounds at ({command.StartX}, {command.StartY})";
-            return false;
-        }
-
-        int clientWidth = client.Right - client.Left;
-        int clientHeight = client.Bottom - client.Top;
-
-        if (!InputBridgeProtocol.TryMapToUnity(
-                new ClickCommand(command.RequestId, command.StartX, command.StartY),
-                clientWidth, clientHeight, Screen.width, Screen.height,
-                out float startX, out float startY) ||
-            !InputBridgeProtocol.TryMapToUnity(
-                new ClickCommand(command.RequestId, command.EndX, command.EndY),
-                clientWidth, clientHeight, Screen.width, Screen.height,
-                out float endX, out float endY))
+        if (!TryMapToUnity(command.StartX, command.StartY, command.Width, command.Height, Screen.width, Screen.height, out float startX, out float startY) ||
+            !TryMapToUnity(command.EndX, command.EndY, command.Width, command.Height, Screen.width, Screen.height, out float endX, out float endY))
         {
             result = $"invalid bounds for drag ({command.StartX}, {command.StartY}) -> ({command.EndX}, {command.EndY})";
             return false;
@@ -604,15 +547,26 @@ internal static class UnityUiClickDispatcher
         return true;
     }
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool GetClientRect(nint window, out Rect client);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Rect
+    internal static bool TryMapToUnity(
+        int x,
+        int y,
+        int clientWidth,
+        int clientHeight,
+        int screenWidth,
+        int screenHeight,
+        out float unityX,
+        out float unityY)
     {
-        internal int Left;
-        internal int Top;
-        internal int Right;
-        internal int Bottom;
+        if (clientWidth <= 0 || clientHeight <= 0 || screenWidth <= 0 || screenHeight <= 0 ||
+            x < 0 || y < 0 || x >= clientWidth || y >= clientHeight)
+        {
+            unityX = 0;
+            unityY = 0;
+            return false;
+        }
+
+        unityX = x * (float)screenWidth / clientWidth;
+        unityY = screenHeight - 1f - y * (float)screenHeight / clientHeight;
+        return true;
     }
 }
