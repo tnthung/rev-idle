@@ -63,7 +63,7 @@ export default async function main() {
 
     rev.global.pauseDuration = 0;
     rev.global.pauseStart = null;
-    rev.global.unityStart = null;
+    rev.global.unityStart = Date.now();
     eternityBootstrapped = false;
     first9ECCompleted = false;
     allECCompleted = false;
