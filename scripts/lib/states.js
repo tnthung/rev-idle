@@ -16,10 +16,11 @@ export class States {
   static spentDTP              = () => rev.state("dtpSpent");
   static unityZodiacInventory  = () => rev.state("gameData.unity.inventory");
   static planetZodiacInventory = () => rev.state("gameData.unity.planetsInventory");
-  static attackLevel           = () => rev.state("gameData.attacks.level.level");
-  static maxAttackLevelReached = () => rev.state("gameData.attacks.maxLevelReached");
   static gold                  = () => rev.state("gameData.attacks.gold");
   static nextGold              = () => rev.state("gameData.attacks.goldOnUnity");
+
+  /** @type {function(): Promise<string>} */
+  static currentAttackDamage = () => rev.state("gameData.attacks.totalAtkMult");
 
   /** @type {function(number): Promise<EternalChallenge>} */
   static eternalChallenge = (n) => rev.state(`gameData.eternity.challenges.${n}`)
@@ -28,6 +29,14 @@ export class States {
   /** @type {function(): Promise<UnityZodiac[]>} */
   static nextUnityZodiacs = () => rev.state("gameData.unity.NextZodiacs")
     .then(data => data.map(zodiac => new UnityZodiac(zodiac)));
+
+  /** @type {function(): Promise<AttackLevel>} */
+  static attackLevel = () => rev.state("gameData.attacks.level")
+    .then(data => new AttackLevel(data));
+
+  /** @type {function(): Promise<number>} */
+  static maxAttackLevelReached = () => rev.state("gameData.attacks.maxLevelReached")
+    .then(Number);
 }
 
 
@@ -84,6 +93,17 @@ export class ZodiacStat {
   constructor({ type, value }) {
     this.type = type;
     this.value = value;
+  }
+}
+
+
+export class AttackLevel {
+  constructor({ currentHP, goldGain, level, maxHP, unlocked }) {
+    this.currentHP = currentHP;
+    this.goldGain = goldGain;
+    this.level = Number(level);
+    this.maxHP = maxHP;
+    this.unlocked = unlocked;
   }
 }
 

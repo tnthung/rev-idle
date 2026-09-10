@@ -1,10 +1,11 @@
 import { Action } from "./lib/action.js";
-import { exponent, wait_for, wait_for_exponent } from "./lib/utils.js";
-import { States, UnityZodiac, ZodiacElement, ZodiacRarity } from "./lib/states.js";
+import { exponent, mantissa, wait_for, wait_for_exponent } from "./lib/utils.js";
+import { States, UnityZodiac, ZodiacRarity } from "./lib/states.js";
 import { DilationTree, DT_STAGES, DT_EXTRAS } from "./lib/dilation_tree.js";
 
 
 const UNITY_RUN_THRESHOLD = 200 * 1000;
+const ATTACK_ETA_THRESHOLD = 30;
 
 
 export async function beforePause() {
@@ -19,11 +20,12 @@ export async function afterResume() {
 
 
 let initialized = false;
+let executionConfig = await import("./unity_loop2_config.js").then(m => m.default);
 let eternityBootstrapped = false;
 let first9ECCompleted = false;
 let allECCompleted = false;
 let finish40DTP = false;
-let executionConfig = await import("./unity_loop2_config.js").then(m => m.default);
+let lastAttackCheck = null;
 
 export default async function main() {
   executionConfig = (await import("./unity_loop2_config.js")).default;
@@ -70,11 +72,37 @@ export default async function main() {
     first9ECCompleted = false;
     allECCompleted = false;
     finish40DTP = false;
+    lastAttackCheck = null;
   }
 
   // check attack level
   if (executionConfig.attackMode) {
-    if (Number(await States.attackLevel()) >= Number(await States.maxAttackLevelReached()))
+    const level = await States.attackLevel();
+
+    let tooSlow = false;
+
+    speedCheck: if (!lastAttackCheck)
+      lastAttackCheck = [Date.now(), level.currentHP, level.level];
+
+    // check if the attack is too slow once per second
+    else if (Date.now() - lastAttackCheck[0] > 1000) {
+      const nowHp = level.currentHP;
+      const [lastTime, lastHP, lastLevel] = lastAttackCheck;
+      lastAttackCheck = [Date.now(), nowHp, level.level];
+
+      if (lastLevel !== level.level)
+        break speedCheck;
+
+      const timeDiff     = (Date.now() - lastTime) / 1000;
+      const hpEDiff      = Number(exponent(lastHP) - exponent(nowHp));
+      const lastHpM      = mantissa(lastHP) * 10 ** hpEDiff;
+      const nowHpM       = mantissa(nowHp);
+      const damagePerSec = (lastHpM - nowHpM) / timeDiff;
+
+      tooSlow = (nowHpM / damagePerSec) > ATTACK_ETA_THRESHOLD;
+    }
+
+    if (tooSlow || level.level >= await States.maxAttackLevelReached())
       await Action.unitWith(await executionConfig.zodiacToGetOnNextUnit());
   }
 
@@ -86,8 +114,6 @@ export default async function main() {
 
   try {
     if (!await bootstrapEternity().catch(e => console.error("Error happened while bootstrapping eternity:\n", e))) return;
-    // if (!await completeFirst9EC().catch(e => console.error("Error happened while completing first 9 eternal challenges:\n", e))) return;
-    // if (!await complete10thEC().catch(e => console.error("Error happened while completing the 10th eternal challenge:\n", e))) return;
     if (!await completeEC().catch(e => console.error("Error happened while completing the eternal challenges:\n", e))) return;
     if (!await bootstrapDilation().catch(e => console.error("Error happened while bootstrapping dilation:\n", e))) return;
     if (!await finishDTP40().catch(e => console.error("Error happened while finishing DTP 40:\n", e))) return;
@@ -233,87 +259,6 @@ async function completeEC() {
   if (!allECCompleted) {
     console.log("All eternal challenges completed.");
     allECCompleted = true;
-  }
-
-  return true;
-}
-
-
-async function completeFirst9EC() {
-  let allCompleted = true;
-
-  for (let c=0; c<9; c++) {
-    while (true) {
-      const ec = await States.eternalChallenge(c);
-      if (ec.completeDiff >= 5) break;
-
-      if (!ec.inChallenge) {
-        await Action[`selectEternityChallenge${c+1}`]();
-        await Action.toggleEternityChallenge();
-      }
-
-      await wait_for(
-        async () => !(await States.eternalChallenge(c)).inChallenge,
-        50, executionConfig.ECWaitTime);
-
-      if ((await States.eternalChallenge(c)).inChallenge) {
-        await Action.toggleEternityChallenge();
-        allCompleted = false;
-        break;
-      }
-    }
-  }
-
-  if (!allCompleted) {
-    await rev.sleep(1000);
-    await Action.claimEP();
-    return;
-  }
-
-  if (!first9ECCompleted) {
-    console.log("All first 9 eternal challenges completed.");
-    first9ECCompleted = true;
-  }
-
-  return true;
-}
-
-
-async function complete10thEC() {
-  const ec10 = await States.eternalChallenge(9);
-  if (ec10.completeDiff >= 5) {
-    if (!allECCompleted) {
-      console.log("All eternal challenges completed.");
-      allECCompleted = true;
-    }
-
-    return true;
-  }
-
-  if (ec10.inChallenge)
-    await Action.toggleEternityChallenge();
-
-  for (let i=0; i<3; i++) {
-    await Action.toggleDilation();
-    await rev.sleep(500);
-    await Action.toggleDilation();
-  }
-
-  while (true) {
-    const ec10 = await States.eternalChallenge(9);
-    if (ec10.completeDiff >= 5) break;
-
-    if (!ec10.inChallenge) {
-      await Action.selectEternityChallenge10();
-      await Action.toggleEternityChallenge();
-    }
-
-    await rev.sleep(100);
-
-    if ((await States.eternalChallenge(9)).inChallenge) {
-      await Action.toggleEternityChallenge();
-      return;
-    }
   }
 
   return true;
