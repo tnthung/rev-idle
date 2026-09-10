@@ -5,7 +5,7 @@ use super::{
 #[cfg(test)]
 use super::State;
 use crate::{
-    app::{ActionGate, PauseUpdate, ScriptCommand},
+    app::{ActionGate, PauseUpdate, ScriptCommand, StateUpdate},
     bridge::WsConnection,
     capture::CaptureState,
     window::Win32WindowControl,
@@ -43,6 +43,7 @@ pub(crate) async fn run(
     script_running: Arc<AtomicBool>,
     console_locked: Arc<AtomicBool>,
     capture_state: CaptureState,
+    state_updates: watch::Sender<StateUpdate>,
 ) -> Result<(), String> {
     let mouse: SharedMouse = Rc::new(RefCell::new(BridgeMouseInput {
         connection: connection.clone(),
@@ -59,6 +60,7 @@ pub(crate) async fn run(
         script_running,
         console_locked,
         capture_state,
+        state_updates,
     )
     .await
 }
@@ -67,6 +69,36 @@ pub(crate) async fn run(
 pub(super) async fn run_with_controls(
     commands: mpsc::Receiver<ScriptCommand>,
     _states: watch::Receiver<State>,
+    hotkey_pauses: watch::Receiver<PauseUpdate>,
+    initial_path: Option<std::path::PathBuf>,
+    controls: HostControls,
+    loop_delay: Duration,
+) -> Result<(), String> {
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+    let script_running = Arc::new(AtomicBool::new(false));
+    let console_locked = Arc::new(AtomicBool::new(false));
+    let capture_state = CaptureState::default();
+    let (state_updates, _) = watch::channel(StateUpdate::new(false, false, false, false));
+    run_with_controls_and_lifecycle(
+        commands,
+        WsConnection::disconnected_for_test(),
+        hotkey_pauses,
+        initial_path,
+        controls,
+        loop_delay,
+        shutdown,
+        script_running,
+        console_locked,
+        capture_state,
+        state_updates,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(super) async fn run_with_controls_and_state(
+    commands: mpsc::Receiver<ScriptCommand>,
+    state_updates: watch::Sender<StateUpdate>,
     hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
     controls: HostControls,
@@ -87,6 +119,7 @@ pub(super) async fn run_with_controls(
         script_running,
         console_locked,
         capture_state,
+        state_updates,
     )
     .await
 }
@@ -103,6 +136,7 @@ async fn run_with_controls_and_lifecycle(
     script_running: Arc<AtomicBool>,
     console_locked: Arc<AtomicBool>,
     capture_state: CaptureState,
+    state_updates: watch::Sender<StateUpdate>,
 ) -> Result<(), String> {
     let mut current_path = initial_path;
     let mut session = match current_path.as_deref() {
@@ -137,6 +171,16 @@ async fn run_with_controls_and_lifecycle(
         if *shutdown.borrow() {
             script_running.store(false, Ordering::Release);
             return Ok(());
+        }
+
+        let state = StateUpdate::new(
+            current_path.is_some(),
+            session.is_some(),
+            paused,
+            capture_state.is_enabled(),
+        );
+        if *state_updates.borrow() != state {
+            state_updates.send_replace(state);
         }
 
         // Recomputed every iteration (rather than at each of the many places
@@ -314,14 +358,14 @@ async fn run_with_controls_and_lifecycle(
                         eprintln!("cannot capture while script is running");
                     }
                 },
-                ScriptCommand::EnableCapture => {
+                ScriptCommand::StartCapture => {
                     if session.is_none() || paused {
-                        if !capture_state.is_enabled() {
-                            capture_state.set_enabled(true);
-                        }
+                        capture_state.set_enabled(true);
                     }
                 }
-                ScriptCommand::CaptureConsumed => {}
+                ScriptCommand::StopCapture | ScriptCommand::CaptureConsumed => {
+                    capture_state.set_enabled(false);
+                }
                 ScriptCommand::Exit => {
                     capture_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);

@@ -123,6 +123,16 @@ pub(crate) async fn run() -> io::Result<()> {
         [127, 0, 0, 1],
         19841,
     )));
+    if let Err(error) = crate::bridge::register_control_handlers(&connection, command_tx.clone()) {
+        connection.shutdown().await;
+        return Err(io::Error::other(error));
+    }
+    let (state_tx, state_rx) = watch::channel(crate::app::StateUpdate::new(
+        initial_path.is_some(),
+        false,
+        false,
+        capture_state.is_enabled(),
+    ));
     let capture = match crate::capture::CaptureWorker::start(connection.clone(), command_tx.clone()) {
         Ok(capture) => capture,
         Err(error) => {
@@ -131,6 +141,7 @@ pub(crate) async fn run() -> io::Result<()> {
         }
     };
     let script_connection = connection.clone();
+    let publisher_connection = connection.clone();
     let local = LocalSet::new();
 
     let result = local
@@ -140,6 +151,19 @@ pub(crate) async fn run() -> io::Result<()> {
             let console_locked_for_task = console_locked.clone();
             tasks.spawn_local(async move {
                 crate::console::run(console_commands, console_shutdown, console_locked_for_task).await
+            });
+            let publisher_shutdown = shutdown_rx.clone();
+            let publisher_connection = publisher_connection.clone();
+            let publisher_generation = publisher_connection.connection_generation();
+            tasks.spawn_local(async move {
+                crate::bridge::publish_state(
+                    publisher_connection,
+                    state_rx,
+                    publisher_generation,
+                    publisher_shutdown,
+                )
+                .await;
+                Ok(())
             });
             let script_shutdown = shutdown_rx.clone();
             let script_running_for_task = script_running.clone();
@@ -154,6 +178,7 @@ pub(crate) async fn run() -> io::Result<()> {
                     script_running_for_task,
                     console_locked,
                     capture_state,
+                    state_tx,
                 )
                 .await
                 .map_err(io::Error::other)
@@ -177,7 +202,7 @@ pub(crate) async fn run() -> io::Result<()> {
                                 let _ = command_tx.send(ScriptCommand::Stop).await;
                             }
                             CtrlCAction::StopCapture => {
-                                let _ = command_tx.send(ScriptCommand::Capture).await;
+                                let _ = command_tx.send(ScriptCommand::StopCapture).await;
                             }
                             CtrlCAction::Ignore => {}
                         }

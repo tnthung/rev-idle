@@ -336,4 +336,12 @@ mod tests {
         assert_eq!(capture_event(false, WPARAM(WM_LBUTTONDOWN as usize), point), None);
         assert_eq!(capture_event(true, WPARAM(514), point), None);
     }
+
+    #[test]
+    fn capture_claim_disarms_before_coordinate_lookup() {
+        let enabled = AtomicBool::new(true);
+        assert!(claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize)));
+        assert!(!enabled.load(Ordering::Acquire));
+        assert!(!claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize)));
+    }
 }
