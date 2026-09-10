@@ -3,7 +3,7 @@ import { ZodiacRarity, UnityZodiac, States, ZodiacSign, ZodiacElement } from "./
 
 export default {
   unity_run_threshold_s: 200,
-  attack_eta_threshold_s: 30,
+  attack_eta_threshold_s: 10,
 
   ECWaitTime: 3000,
   attackMode: true,
@@ -28,6 +28,9 @@ export default {
   },
 
   shouldSellZodiac(/** @type {UnityZodiac} */ zodiac) {
+    if (zodiac.locked)
+      return false;
+
     if (zodiac.level < 100)
       return true;
 
