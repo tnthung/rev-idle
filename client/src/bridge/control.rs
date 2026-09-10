@@ -14,7 +14,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<ReloadScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.try_send(ScriptCommand::Reload).ok();
+            command_tx.send(ScriptCommand::Reload).await.ok();
             Ok(())
         }
     })?;
@@ -22,7 +22,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<StopScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.try_send(ScriptCommand::Stop).ok();
+            command_tx.send(ScriptCommand::Stop).await.ok();
             Ok(())
         }
     })?;
@@ -30,7 +30,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<PauseScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.try_send(ScriptCommand::Pause).ok();
+            command_tx.send(ScriptCommand::Pause).await.ok();
             Ok(())
         }
     })?;
@@ -38,7 +38,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<ResumeScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.try_send(ScriptCommand::Resume).ok();
+            command_tx.send(ScriptCommand::Resume).await.ok();
             Ok(())
         }
     })?;
@@ -46,7 +46,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<StartCapture, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.try_send(ScriptCommand::StartCapture).ok();
+            command_tx.send(ScriptCommand::StartCapture).await.ok();
             Ok(())
         }
     })?;
@@ -54,7 +54,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<StopCapture, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.try_send(ScriptCommand::StopCapture).ok();
+            command_tx.send(ScriptCommand::StopCapture).await.ok();
             Ok(())
         }
     })?;
@@ -69,9 +69,11 @@ pub(crate) async fn publish_state(
 ) {
     let mut state_channel_open = true;
     let mut generation_channel_open = true;
+    let mut last_sent = None;
     let generation = *generations.borrow_and_update();
     if generation != 0 {
         let state = *state_updates.borrow_and_update();
+        last_sent = Some((generation, state));
         if *shutdown.borrow() {
             return;
         }
@@ -103,18 +105,21 @@ pub(crate) async fn publish_state(
                 let generation = *generations.borrow_and_update();
                 if generation != 0 {
                     let state = *state_updates.borrow_and_update();
-                    if *shutdown.borrow() {
-                        return;
-                    }
-                    tokio::select! {
-                        biased;
-                        changed = shutdown.changed() => {
-                            if changed.is_err() || *shutdown.borrow() {
-                                return;
-                            }
+                    if last_sent != Some((generation, state)) {
+                        last_sent = Some((generation, state));
+                        if *shutdown.borrow() {
+                            return;
                         }
-                        result = connection.send(state) => {
-                            let _ = result;
+                        tokio::select! {
+                            biased;
+                            changed = shutdown.changed() => {
+                                if changed.is_err() || *shutdown.borrow() {
+                                    return;
+                                }
+                            }
+                            result = connection.send(state) => {
+                                let _ = result;
+                            }
                         }
                     }
                 }
@@ -125,7 +130,9 @@ pub(crate) async fn publish_state(
                     continue;
                 }
                 let state = *state_updates.borrow_and_update();
-                if *generations.borrow() != 0 {
+                let generation = *generations.borrow();
+                if generation != 0 && last_sent != Some((generation, state)) {
+                    last_sent = Some((generation, state));
                     if *shutdown.borrow() {
                         return;
                     }
@@ -211,6 +218,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn notification_handlers_wait_for_command_capacity() {
+        let (address, peer_rx) = raw_server().await;
+        let connection = WsConnection::connect_for_test(
+            address,
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+        );
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        register_control_handlers(&connection, command_tx.clone()).unwrap();
+        let registered_sender_count = command_tx.strong_count();
+        let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let packets = [
+            (ReloadScript::TYPE, ScriptCommand::Reload),
+            (StopScript::TYPE, ScriptCommand::Stop),
+            (PauseScript::TYPE, ScriptCommand::Pause),
+            (ResumeScript::TYPE, ScriptCommand::Resume),
+            (StartCapture::TYPE, ScriptCommand::StartCapture),
+            (StopCapture::TYPE, ScriptCommand::StopCapture),
+        ];
+        for (packet_type, expected) in packets {
+            command_tx.send(ScriptCommand::Reload).await.unwrap();
+            peer.send(Message::Text(
+                json!({
+                    "uuid": uuid::Uuid::new_v4(),
+                    "type": packet_type,
+                    "payload": {},
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while command_tx.strong_count() == registered_sender_count {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            tokio::task::yield_now().await;
+            assert!(command_tx.strong_count() > registered_sender_count);
+            assert_eq!(command_rx.recv().await.unwrap(), ScriptCommand::Reload);
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), command_rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                expected,
+            );
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while command_tx.strong_count() != registered_sender_count {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        connection.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn closed_command_receiver_does_not_reply_or_close_connection() {
         let (address, peer_rx) = raw_server().await;
         let connection = WsConnection::connect_for_test(
@@ -243,7 +314,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn state_publisher_sends_latest_state_on_connection_without_state_request() {
+    async fn state_publisher_suppresses_exact_pair_and_sends_later_change() {
         let (address, peer_rx) = raw_server().await;
         let connection = WsConnection::connect_for_test(
             address,
@@ -278,6 +349,13 @@ mod tests {
             envelope["payload"],
             json!({ "phase": "paused", "capture": true }),
         );
+        assert!(tokio::time::timeout(Duration::from_millis(30), peer.next())
+            .await
+            .is_err());
+        state_tx.send_replace(StateUpdate {
+            phase: ScriptPhase::Paused,
+            capture: true,
+        });
         assert!(tokio::time::timeout(Duration::from_millis(30), peer.next())
             .await
             .is_err());
