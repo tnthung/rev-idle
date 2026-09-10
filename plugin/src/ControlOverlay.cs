@@ -29,9 +29,9 @@ internal readonly record struct ControlPresentation(
     bool ResumePauseEnabled,
     bool CaptureEnabled)
 {
-    public static ControlPresentation From(ControlState? state, bool connected)
+    public static ControlPresentation From(ControlState? state)
     {
-        if (state is null || !connected || state.Value.Capture)
+        if (state is null || state.Value.Capture)
             return new(ControlIcon.Reload, false, ControlIcon.Resume, false, false);
         return state.Value.Phase switch
         {
@@ -226,9 +226,9 @@ internal sealed class ControlOverlay : IDisposable
         _capture.onClick.AddListener((UnityAction)(() => publish(ControlCommand.Capture)));
     }
 
-    public void Apply(ControlState? state, bool connected)
+    public void Apply(ControlState? state)
     {
-        ControlPresentation presentation = ControlPresentation.From(state, connected);
+        ControlPresentation presentation = ControlPresentation.From(state);
         _reloadStopCommand = state?.Phase == ScriptPhase.Stopped ? ControlCommand.Reload : ControlCommand.Stop;
         _resumePauseCommand = state?.Phase == ScriptPhase.Paused ? ControlCommand.Resume : ControlCommand.Pause;
         _reloadStopIcon.sprite = _icons[(int)presentation.ReloadStopIcon];

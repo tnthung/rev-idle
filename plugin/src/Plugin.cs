@@ -203,7 +203,7 @@ public sealed class ScoreTicker : MonoBehaviour
         if (Plugin.ControlBridge is not ControlBridge bridge)
             return;
         _controlOverlay ??= ControlOverlay.Create(bridge.Send);
-        _controlOverlay?.Apply(bridge.State, bridge.Connected);
+        _controlOverlay?.Apply(bridge.State);
     }
 
     public void OnDestroy()

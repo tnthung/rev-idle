@@ -31,7 +31,7 @@ internal sealed class ControlBridge
     {
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
         _log = log;
-        connection.Handler<StateUpdate>((_, packet) =>
+        connection.Handler<StateUpdate>((context, packet) =>
         {
             ScriptPhase? phase = packet.Phase switch
             {
@@ -44,15 +44,17 @@ internal sealed class ControlBridge
             if (phase is null)
                 return Task.CompletedTask;
 
-            long generation = _connection.ConnectionGeneration;
-            if (generation == 0)
+            if (context.CancellationToken.IsCancellationRequested ||
+                context.Generation == 0 ||
+                _connection.ConnectionGeneration != context.Generation)
                 return Task.CompletedTask;
             lock (_gate)
             {
-                if (_connection.ConnectionGeneration != generation)
+                if (context.CancellationToken.IsCancellationRequested ||
+                    _connection.ConnectionGeneration != context.Generation)
                     return Task.CompletedTask;
                 _state = new ControlState(phase.Value, packet.Capture);
-                _stateGeneration = generation;
+                _stateGeneration = context.Generation;
             }
             return Task.CompletedTask;
         });
@@ -81,6 +83,16 @@ internal sealed class ControlBridge
 
     internal void Send(ControlCommand command)
     {
+        long expectedGeneration;
+        lock (_gate)
+        {
+            if (_state is null)
+            {
+                Report("Control notification ignored because state is unavailable.");
+                return;
+            }
+            expectedGeneration = _stateGeneration;
+        }
         object packet = command switch
         {
             ControlCommand.Reload => new ReloadScript(),
@@ -93,7 +105,7 @@ internal sealed class ControlBridge
         Task send;
         try
         {
-            send = _connection.Send(packet);
+            send = _connection.Send(packet, expectedGeneration);
         }
         catch (Exception exception)
         {

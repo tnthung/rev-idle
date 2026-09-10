@@ -25,11 +25,14 @@ internal sealed class PacketContext
 {
     private readonly Func<object?, Task> _send;
 
-    internal PacketContext(CancellationToken cancellationToken, Func<object?, Task> send)
+    internal PacketContext(long generation, CancellationToken cancellationToken, Func<object?, Task> send)
     {
+        Generation = generation;
         CancellationToken = cancellationToken;
         _send = send;
     }
+
+    public long Generation { get; }
 
     public CancellationToken CancellationToken { get; }
 
@@ -208,6 +211,21 @@ internal sealed class WsConnection : IDisposable
             new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously)));
     }
 
+    public Task Send<TPacket>(TPacket packet, long expectedGeneration)
+    {
+        Session session;
+        lock (_gate)
+        {
+            if (_active is null || _active.Generation != expectedGeneration)
+                throw new WsNotConnectedException();
+            session = _active;
+        }
+        return session.EnqueueAsync(new Outbound(
+            session.Generation,
+            Serialize(Guid.NewGuid(), packet?.GetType().Name ?? typeof(TPacket).Name, packet),
+            new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously)));
+    }
+
     public void Pump()
     {
         while (_inbound.TryDequeue(out InboundWork? work))
@@ -240,7 +258,8 @@ internal sealed class WsConnection : IDisposable
 
     private async Task RunHandler(InboundWork work)
     {
-        PacketContext context = new(work.Entry.Cancellation, packet => SendResponse(work, packet));
+        PacketContext context = new(work.Session.Generation, work.Entry.Cancellation, packet => SendResponse(work, packet));
+        LifecycleSynchronizationForTest?.Invoke("handler-start");
         try
         {
             await work.Handler.Handler(context, work.Payload).ConfigureAwait(false);

@@ -40,6 +40,9 @@ await ControlBridgeNoConnectionIsUnavailableAndSendIsNonFatal();
 await ControlBridgeStateIsGenerationScoped();
 await ControlBridgeSendsFreshActionsWithoutOptimisticState();
 await ControlBridgeIgnoresMalformedPhaseWithoutRemoteError();
+await ControlBridgeIgnoresOldGenerationHandlerAfterReconnect();
+await ControlBridgeDoesNotSendUsingReconnectedGeneration();
+await WsPacketContextCarriesOriginGeneration();
 ControlPresentationProjectsClosedPhases();
 DispatcherSkipsNonClickableRaycasts();
 DispatcherMapsClientCoordinatesToUnityCoordinates();
@@ -79,7 +82,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("93 tests passed.");
+System.Console.WriteLine("96 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -522,43 +525,148 @@ static async Task ControlBridgeIgnoresMalformedPhaseWithoutRemoteError()
     }
 }
 
+static async Task ControlBridgeIgnoresOldGenerationHandlerAfterReconnect()
+{
+    const string testName = nameof(ControlBridgeIgnoresOldGenerationHandlerAfterReconnect);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    ControlBridge bridge = new(server);
+    TaskCompletionSource<bool> queued = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> handlerStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> releaseHandler = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.LifecycleSynchronizationForTest = stage =>
+    {
+        if (stage == "inbound-registered")
+            queued.TrySetResult(true);
+        if (stage == "handler-start")
+        {
+            handlerStarted.TrySetResult(true);
+            releaseHandler.Task.GetAwaiter().GetResult();
+        }
+    };
+    (TcpClient firstClient, WebSocket firstPeer) = await ConnectRawClient(server);
+    await SendText(firstPeer, WsConnection.SerializeForTest(Guid.NewGuid(), new StateUpdate("running", false)));
+    await queued.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    Task pump = Task.Run(server.Pump);
+    await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    firstPeer.Dispose();
+    firstClient.Dispose();
+    DateTime disconnectedDeadline = DateTime.UtcNow.AddSeconds(2);
+    while (server.ConnectionGeneration != 0 && DateTime.UtcNow < disconnectedDeadline)
+        await Task.Delay(1);
+    Equal(0L, server.ConnectionGeneration, testName);
+    (TcpClient secondClient, WebSocket secondPeer) = await ConnectRawClient(server);
+    using (firstClient)
+    using (firstPeer)
+    using (secondClient)
+    using (secondPeer)
+    {
+        releaseHandler.TrySetResult(true);
+        await pump.WaitAsync(TimeSpan.FromSeconds(2));
+        Equal(true, bridge.Connected, testName);
+        Equal<ControlState?>(null, bridge.State, testName);
+    }
+}
+
+static async Task ControlBridgeDoesNotSendUsingReconnectedGeneration()
+{
+    const string testName = nameof(ControlBridgeDoesNotSendUsingReconnectedGeneration);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    List<string> reports = new();
+    ControlBridge bridge = new(server, reports.Add);
+    (TcpClient firstClient, WebSocket firstPeer) = await ConnectRawClient(server);
+    long firstGeneration = server.ConnectionGeneration;
+    await SendText(firstPeer, WsConnection.SerializeForTest(Guid.NewGuid(), new StateUpdate("running", false)));
+    DateTime stateDeadline = DateTime.UtcNow.AddSeconds(2);
+    while (bridge.State is null && DateTime.UtcNow < stateDeadline)
+    {
+        server.Pump();
+        await Task.Delay(1);
+    }
+    Equal(new ControlState(ScriptPhase.Running, false), bridge.State, testName);
+    firstPeer.Dispose();
+    firstClient.Dispose();
+    DateTime disconnectedDeadline = DateTime.UtcNow.AddSeconds(2);
+    while (server.ConnectionGeneration != 0 && DateTime.UtcNow < disconnectedDeadline)
+        await Task.Delay(1);
+    (TcpClient secondClient, WebSocket secondPeer) = await ConnectRawClient(server);
+    using (firstClient)
+    using (firstPeer)
+    using (secondClient)
+    using (secondPeer)
+    {
+        await ThrowsAsync<WsNotConnectedException>(
+            () => server.Send(new PauseScript(), firstGeneration),
+            testName);
+        bridge.Send(ControlCommand.Pause);
+        await ThrowsAsync<OperationCanceledException>(
+            () => ReceiveTextWithTimeout(secondPeer, TimeSpan.FromMilliseconds(50)),
+            testName);
+        Equal(true, reports.Count > 0, testName);
+    }
+}
+
+static async Task WsPacketContextCarriesOriginGeneration()
+{
+    const string testName = nameof(WsPacketContextCarriesOriginGeneration);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    long observedGeneration = 0;
+    server.Handler<TestReq>((context, _) =>
+    {
+        observedGeneration = context.Generation;
+        return Task.CompletedTask;
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        long generation = server.ConnectionGeneration;
+        await SendText(peer, WsConnection.SerializeForTest(Guid.NewGuid(), new TestReq("origin")));
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        while (observedGeneration == 0 && DateTime.UtcNow < deadline)
+        {
+            server.Pump();
+            await Task.Delay(1);
+        }
+        Equal(generation, observedGeneration, testName);
+    }
+}
+
 static void ControlPresentationProjectsClosedPhases()
 {
     const string testName = nameof(ControlPresentationProjectsClosedPhases);
-    ControlPresentation unloaded = ControlPresentation.From(new ControlState(ScriptPhase.Unloaded, false), true);
+    ControlPresentation unloaded = ControlPresentation.From(new ControlState(ScriptPhase.Unloaded, false));
     Equal(false, unloaded.ReloadStopEnabled, testName);
     Equal(false, unloaded.ResumePauseEnabled, testName);
     Equal(false, unloaded.CaptureEnabled, testName);
 
-    ControlPresentation stopped = ControlPresentation.From(new ControlState(ScriptPhase.Stopped, false), true);
+    ControlPresentation stopped = ControlPresentation.From(new ControlState(ScriptPhase.Stopped, false));
     Equal(ControlIcon.Reload, stopped.ReloadStopIcon, testName);
     Equal(true, stopped.ReloadStopEnabled, testName);
     Equal(false, stopped.ResumePauseEnabled, testName);
     Equal(true, stopped.CaptureEnabled, testName);
 
-    ControlPresentation running = ControlPresentation.From(new ControlState(ScriptPhase.Running, false), true);
+    ControlPresentation running = ControlPresentation.From(new ControlState(ScriptPhase.Running, false));
     Equal(ControlIcon.Stop, running.ReloadStopIcon, testName);
     Equal(true, running.ReloadStopEnabled, testName);
     Equal(ControlIcon.Pause, running.ResumePauseIcon, testName);
     Equal(true, running.ResumePauseEnabled, testName);
     Equal(false, running.CaptureEnabled, testName);
 
-    ControlPresentation paused = ControlPresentation.From(new ControlState(ScriptPhase.Paused, false), true);
+    ControlPresentation paused = ControlPresentation.From(new ControlState(ScriptPhase.Paused, false));
     Equal(ControlIcon.Stop, paused.ReloadStopIcon, testName);
     Equal(true, paused.ReloadStopEnabled, testName);
     Equal(ControlIcon.Resume, paused.ResumePauseIcon, testName);
     Equal(true, paused.ResumePauseEnabled, testName);
     Equal(true, paused.CaptureEnabled, testName);
 
-    ControlPresentation capturing = ControlPresentation.From(new ControlState(ScriptPhase.Paused, true), true);
+    ControlPresentation capturing = ControlPresentation.From(new ControlState(ScriptPhase.Paused, true));
     Equal(false, capturing.ReloadStopEnabled, testName);
     Equal(false, capturing.ResumePauseEnabled, testName);
     Equal(false, capturing.CaptureEnabled, testName);
-    ControlPresentation disconnected = ControlPresentation.From(new ControlState(ScriptPhase.Running, false), false);
+    ControlPresentation disconnected = ControlPresentation.From(null);
     Equal(false, disconnected.ReloadStopEnabled, testName);
     Equal(false, disconnected.ResumePauseEnabled, testName);
     Equal(false, disconnected.CaptureEnabled, testName);
-    Equal(false, ControlPresentation.From(null, true).CaptureEnabled, testName);
 }
 
 static async Task WsConnectionGenerationTracksSessions()
