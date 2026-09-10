@@ -141,21 +141,28 @@ async function mergeAndSellZodiac() {
     buckets[key].push(pos);
   }
 
-  for (const [key, bucket] of Object.entries(buckets)) {
+  const keys = Object.keys(buckets).sort((a, b) => {
+    const [eA, rA, pA, sA] = a.split(";");
+    const [eB, rB, pB, sB] = b.split(";");
+    return Number(rA)-Number(rB) || Number(pA)-Number(pB)
+  });
+
+  for (const key of keys) {
+    const bucket = buckets[key];
     if (bucket.length < 3)
       continue;
 
     const [e, r, p, s] = key.split(";");
     const nextKey = r === ZodiacRarity.Immortal
-      ? `${e};${r};${p+1};${s}`
-      : `${e};${r+1};${p};${s}`;
+      ? `${e};${r};${Number(p)+1};${s}`
+      : `${e};${Number(r)+1};${p};${s}`;
 
     const toMerge = bucket.splice(0, 3);
     await Action.mergeZodiac(...toMerge);
     merged++;
 
-    bucket[nextKey] = bucket[nextKey] || [];
-    bucket[nextKey].push(toMerge[0]);
+    buckets[nextKey] = buckets[nextKey] || [];
+    buckets[nextKey].push(toMerge[0]);
   }
 
   console.log(`Zodiacs sold: ${sold}, Zodiacs merged: ${merged}`);
