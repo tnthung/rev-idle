@@ -122,8 +122,6 @@ export default async function main() {
 
 
 async function mergeAndSellZodiac() {
-  await Action.gotoPlanetShop();
-
   let sold = 0;
   let merged = 0;
   const buckets = {};
