@@ -40,6 +40,10 @@ fn is_left_button_down(message: WPARAM) -> bool {
     message.0 as u32 == WM_LBUTTONDOWN
 }
 
+fn claim_capture(enabled: &AtomicBool, message: WPARAM) -> bool {
+    is_left_button_down(message) && enabled.swap(false, Ordering::AcqRel)
+}
+
 fn capture_event(enabled: bool, message: WPARAM, point: POINT) -> Option<POINT> {
     (enabled && is_left_button_down(message)).then_some(point)
 }
@@ -56,7 +60,8 @@ unsafe extern "system" fn mouse_hook(
             return LRESULT(1);
         }
         let hook_data = unsafe { &*(data.0 as *const MSLLHOOKSTRUCT) };
-        if let Some(point) = capture_event(CaptureState.is_enabled(), message, hook_data.pt) {
+        if claim_capture(&CAPTURE_ENABLED, message) {
+            let point = hook_data.pt;
             CAPTURE_LEFT_BUTTON_DOWN.store(true, Ordering::Release);
             let thread_id = CAPTURE_THREAD_ID.load(Ordering::Acquire);
             if thread_id != 0 {
@@ -81,23 +86,23 @@ fn post_quit(thread_id: u32) -> Result<(), String> {
         .map_err(|error| format!("PostThreadMessageW failed: {error}"))
 }
 
-async fn describe_capture(connection: &WsConnection, x: i32, y: i32, width: i32, height: i32, write_clipboard: impl FnOnce(&str) -> Result<(), String>) -> String {
+async fn describe_capture(connection: &WsConnection, x: i32, y: i32, width: i32, height: i32, write_clipboard: impl FnOnce(&str) -> Result<(), String>) -> Vec<String> {
     use crate::bridge::CaptureTarget;
 
     match crate::bridge::request_capture(connection, x, y, width, height).await {
         Ok(CaptureTarget { target_type: Some(target_type), path: Some(path) })
             if target_type == "button" || target_type == "slot" => {
             if let Err(error) = write_clipboard(&path) {
-                return format!("click: {x}, {y}; {target_type}: {path:?}; clipboard write failed: {error}");
+                return vec![format!("click: {x}, {y}; {target_type}: {path:?}; clipboard write failed: {error}")];
             }
-            format!("click: {x}, {y}; {target_type}: {path:?}")
+            vec![format!("click: {x}, {y}; {target_type}: {path:?}"), "Copied to clipboard".to_owned()]
         }
-        Ok(_) => format!("click: {x}, {y}"),
-        Err(error) => format!("click: {x}, {y}; lookup failed: {error}"),
+        Ok(_) => vec![format!("click: {x}, {y}")],
+        Err(error) => vec![format!("click: {x}, {y}; lookup failed: {error}")],
     }
 }
 
-fn run_capture_loop(hook: HHOOK, connection: WsConnection, runtime: tokio::runtime::Handle) -> Result<(), String> {
+fn run_capture_loop(hook: HHOOK, connection: WsConnection, command_tx: tokio::sync::mpsc::Sender<crate::app::ScriptCommand>, runtime: tokio::runtime::Handle) -> Result<(), String> {
     let mut result = Ok(());
     loop {
         let mut message = MSG::default();
@@ -109,9 +114,8 @@ fn run_capture_loop(hook: HHOOK, connection: WsConnection, runtime: tokio::runti
         if !value.as_bool() {
             break;
         }
-        if message.message == CAPTURE_MESSAGE
-            && CaptureState.is_enabled()
-        {
+        if message.message == CAPTURE_MESSAGE {
+            let _ = command_tx.blocking_send(crate::app::ScriptCommand::CaptureConsumed);
             let point = POINT {
                 x: message.wParam.0 as u32 as i32,
                 y: message.lParam.0 as i32,
@@ -122,9 +126,9 @@ fn run_capture_loop(hook: HHOOK, connection: WsConnection, runtime: tokio::runti
             {
                 let connection = connection.clone();
                 runtime.spawn(async move {
-                    println!("{}", describe_capture(&connection, x, y, width, height, |path| {
+                    for line in describe_capture(&connection, x, y, width, height, |path| {
                         window::WindowControl::write_clipboard(&window::Win32WindowControl, path)
-                    }).await);
+                    }).await { println!("{line}"); }
                 });
             }
         }
@@ -155,7 +159,7 @@ pub(crate) struct CaptureWorker {
 }
 
 impl CaptureWorker {
-    pub(crate) fn start(connection: WsConnection) -> Result<Self, String> {
+    pub(crate) fn start(connection: WsConnection, command_tx: tokio::sync::mpsc::Sender<crate::app::ScriptCommand>) -> Result<Self, String> {
         let (startup_tx, startup_rx) = std_mpsc::channel();
         let runtime = tokio::runtime::Handle::current();
         let handle = thread::spawn(move || {
@@ -181,7 +185,7 @@ impl CaptureWorker {
                     return Err(error);
                 }
             };
-            let result = run_capture_loop(hook, connection, runtime);
+            let result = run_capture_loop(hook, connection, command_tx, runtime);
             CAPTURE_THREAD_ID.store(0, Ordering::Release);
             result
         });
@@ -265,10 +269,10 @@ mod tests {
         use tokio_tungstenite::tungstenite::Message;
 
         for (response_type, payload, expected, copied_path) in [
-            ("CaptureRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}), "click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"", Some("scene:1/Canvas[0]/Buy DTP")),
-            ("CaptureRes", json!({"type":"slot","path":"scene:1/Canvas[0]/Slot"}), "click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\"", Some("scene:1/Canvas[0]/Slot")),
-            ("CaptureRes", json!({"type":null,"path":null}), "click: 123, 456", None),
-            ("RemoteError", json!({"message":"no EventSystem"}), "click: 123, 456; lookup failed: Remote(\"no EventSystem\")", None),
+            ("CaptureRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}), vec!["click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Buy DTP")),
+            ("CaptureRes", json!({"type":"slot","path":"scene:1/Canvas[0]/Slot"}), vec!["click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Slot")),
+            ("CaptureRes", json!({"type":null,"path":null}), vec!["click: 123, 456".to_owned()], None),
+            ("RemoteError", json!({"message":"no EventSystem"}), vec!["click: 123, 456; lookup failed: Remote(\"no EventSystem\")".to_owned()], None),
         ] {
             let (address, peer_rx) = raw_server().await;
             let connection = WsConnection::connect_for_test(
@@ -290,7 +294,7 @@ mod tests {
             let message = tokio::time::timeout(Duration::from_secs(1), async {
                 loop {
                     tokio::select! {
-                        result = &mut description => panic!("capture completed before bridge response: {result}"),
+                        result = &mut description => panic!("capture completed before bridge response: {result:?}"),
                         message = peer.next() => break message.unwrap().unwrap(),
                     }
                 }

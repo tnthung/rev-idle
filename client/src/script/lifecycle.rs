@@ -314,6 +314,14 @@ async fn run_with_controls_and_lifecycle(
                         eprintln!("cannot capture while script is running");
                     }
                 },
+                ScriptCommand::EnableCapture => {
+                    if session.is_none() || paused {
+                        if !capture_state.is_enabled() {
+                            capture_state.set_enabled(true);
+                        }
+                    }
+                }
+                ScriptCommand::CaptureConsumed => {}
                 ScriptCommand::Exit => {
                     capture_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);

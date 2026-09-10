@@ -60,7 +60,7 @@ Click, scroll, and drag commands use the same raw packet connection. They dispat
 
 ## Capture, invoke, and transfer UI elements
 
-Run `capture` in the client and click an element. Capture consumes the click and prints client coordinates followed by `button: "<path>"` or `slot: "<path>"`. It checks buttons first, then drop slots, including their parent objects. If neither exists, it prints only coordinates. Use the printed paths in scripts:
+Run `capture` in the client and click an element. Capture consumes one click, then turns itself off. It prints client coordinates followed by `button: "<path>"` or `slot: "<path>"`, copies a valid path to the clipboard, and prints `Copied to clipboard`. It checks buttons first, then drop slots, including their parent objects. If neither exists, it prints only coordinates and leaves the clipboard unchanged. Use the copied paths in scripts:
 
 ```javascript
 await rev.invoke(buttonPath);
@@ -72,6 +72,10 @@ Only exact, case-sensitive paths are accepted; name lookup is not supported. Pat
 Transfer requires two distinct slot objects with one drop handler each and exactly one draggable item in the source. Lookup includes hidden and inactive objects; no screen coordinates or raycasts are used. The plugin calls the item's drag lifecycle and the destination's drop handler directly on Unity's main thread, without activating the panels. The game controls compatibility, validation, and occupied-slot behavior. A resolved promise means handlers were called, not that the game accepted or completed the transfer; check game state before depending on the result. Slots and items must already be instantiated and initialized by the game; hidden-panel transfers remain subject to the handlers' own requirements.
 
 These features require the updated client and plugin and use the loopback WebSocket bridge. Capture returns `{ "type": "button" | "slot" | null, "path": string | null }` without interacting with the target.
+
+## Script controls
+
+The plugin adds three 20-by-20 controls to the bottom-right corner of the game: Reload/Stop (`↻`/`■`), Resume/Pause (`▶`/`Ⅱ`), and one-shot Capture (`⌖`). Hover a button for its tooltip. Controls stay disabled until the client connects, and their enabled state follows the current script and capture state.
 
 ## Read state
 

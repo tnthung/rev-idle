@@ -121,7 +121,7 @@ pub(crate) async fn run() -> io::Result<()> {
         [127, 0, 0, 1],
         19841,
     )));
-    let capture = match crate::capture::CaptureWorker::start(connection.clone()) {
+    let capture = match crate::capture::CaptureWorker::start(connection.clone(), command_tx.clone()) {
         Ok(capture) => capture,
         Err(error) => {
             connection.shutdown().await;
