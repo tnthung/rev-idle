@@ -11,7 +11,7 @@ impl StateUpdate {
     pub(crate) fn new(has_path: bool, script_loaded: bool, paused: bool, capture: bool) -> Self {
         Self {
             phase: if !has_path { ScriptPhase::Unloaded } else if !script_loaded { ScriptPhase::Stopped } else if paused { ScriptPhase::Paused } else { ScriptPhase::Running },
-            capture: capture && has_path && script_loaded && paused,
+            capture: capture && has_path && (!script_loaded || paused),
         }
     }
 }
@@ -26,6 +26,7 @@ mod tests {
         assert_eq!(StateUpdate::new(true, false, false, false).phase, ScriptPhase::Stopped);
         assert_eq!(StateUpdate::new(true, true, false, false).phase, ScriptPhase::Running);
         assert_eq!(StateUpdate::new(true, true, true, true).phase, ScriptPhase::Paused);
+        assert!(StateUpdate::new(true, false, false, true).capture);
         assert!(!StateUpdate::new(false, false, false, true).capture);
         assert!(!StateUpdate::new(true, true, false, true).capture);
     }

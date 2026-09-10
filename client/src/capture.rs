@@ -269,9 +269,9 @@ mod tests {
         use tokio_tungstenite::tungstenite::Message;
 
         for (response_type, payload, expected, copied_path) in [
-            ("CaptureRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}), vec!["click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Buy DTP")),
-            ("CaptureRes", json!({"type":"slot","path":"scene:1/Canvas[0]/Slot"}), vec!["click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Slot")),
-            ("CaptureRes", json!({"type":null,"path":null}), vec!["click: 123, 456".to_owned()], None),
+            ("UiPathRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}), vec!["click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Buy DTP")),
+            ("UiPathRes", json!({"type":"slot","path":"scene:1/Canvas[0]/Slot"}), vec!["click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Slot")),
+            ("UiPathRes", json!({"type":null,"path":null}), vec!["click: 123, 456".to_owned()], None),
             ("RemoteError", json!({"message":"no EventSystem"}), vec!["click: 123, 456; lookup failed: Remote(\"no EventSystem\")".to_owned()], None),
         ] {
             let (address, peer_rx) = raw_server().await;
@@ -302,7 +302,7 @@ mod tests {
             .await
             .unwrap();
             let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
-            assert_eq!(request.get("type"), Some(&json!("CaptureReq")));
+            assert_eq!(request.get("type"), Some(&json!("UiPathReq")));
             assert_eq!(request.get("payload"), Some(&json!({ "x": 123, "y": 456, "width": 1920, "height": 1080 })));
             peer.send(Message::Text(
                 json!({
