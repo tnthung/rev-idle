@@ -86,6 +86,7 @@ enum HostEvent {
     Resize(i32, i32),
     Click(i32, i32, Button),
     Scroll(i32, i32, i32, Axis),
+    Press(String),
     Clipboard(String),
 }
 
@@ -114,6 +115,10 @@ impl MouseInput for RecordingMouse {
 
     fn scroll(&mut self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
         self.events.borrow_mut().push(HostEvent::Scroll(x, y, length, axis)); Ok(())
+    }
+
+    fn press(&mut self, key: String) -> Result<(), String> {
+        self.events.borrow_mut().push(HostEvent::Press(key)); Ok(())
     }
 
 }
@@ -147,6 +152,78 @@ async fn rev_file_io_reads_missing_files_and_overwrites_text() {
         std::fs::remove_file(&path).unwrap();
     }
     result.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rev_delete_file_reports_whether_a_file_was_deleted() {
+    let path = std::env::temp_dir().join(format!("rev_delete_file_{}.txt", std::process::id()));
+    std::fs::write(&path, "delete me").unwrap();
+    let session = ScriptSession::new(&format!(r#"export default (() => {{
+        const path = {};
+        if (rev.delete_file(path) !== true) throw new Error("existing file was not deleted");
+        if (rev.delete_file(path) !== false) throw new Error("missing file must return false");
+    }})"#,
+        serde_json::to_string(&path).unwrap(),
+    )).await.unwrap();
+    let (controls, _) = recording_controls();
+    let result = session.invoke(State::default(), controls).await;
+    if path.exists() {
+        std::fs::remove_file(&path).unwrap();
+    }
+    result.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rev_shell_returns_stdout_and_stderr_for_an_unsuccessful_command() {
+    let session = ScriptSession::new(r#"export default (() => {
+        const result = rev.shell("echo stdout & echo stderr 1>&2 & exit /b 7");
+        if (result.stdout.trim() !== "stdout") throw new Error("stdout was not captured");
+        if (result.stderr.trim() !== "stderr") throw new Error("stderr was not captured");
+    })"#).await.unwrap();
+    let (controls, _) = recording_controls();
+
+    session.invoke(State::default(), controls).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rev_press_forwards_supported_keys_to_the_input_transport() {
+    let session = ScriptSession::new(r#"export default (() => {
+        rev.press("a");
+        rev.press("enter");
+        rev.press("f12");
+    })"#).await.unwrap();
+    let (controls, events) = recording_controls();
+
+    session.invoke(State::default(), controls).await.unwrap();
+
+    assert_eq!(
+        *events.borrow(),
+        vec![
+            HostEvent::Press("a".to_owned()),
+            HostEvent::Press("enter".to_owned()),
+            HostEvent::Press("f12".to_owned()),
+        ],
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rev_press_rejects_unsupported_keys_without_sending_input() {
+    let session = ScriptSession::new(r#"export default (() => rev.press("ctrl+c"))"#).await.unwrap();
+    let (controls, events) = recording_controls();
+
+    assert!(session.invoke(State::default(), controls).await.is_err());
+    assert!(events.borrow().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rev_press_skips_input_while_actions_are_paused() {
+    let session = ScriptSession::new(r#"export default (() => rev.press("enter"))"#).await.unwrap();
+    let (controls, events) = recording_controls();
+    controls.actions_paused.set_paused(true);
+
+    session.invoke(State::default(), controls).await.unwrap();
+
+    assert!(events.borrow().is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]

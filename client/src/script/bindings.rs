@@ -46,6 +46,10 @@ pub(super) trait MouseInput {
     fn drag(&mut self, _x1: i32, _y1: i32, _x2: i32, _y2: i32) -> Result<(), String> {
         Err("mouse dragging is not supported".to_string())
     }
+
+    fn press(&mut self, _key: String) -> Result<(), String> {
+        Err("keyboard input is not supported".to_string())
+    }
 }
 
 pub(super) fn click_at_with<C>(
@@ -78,6 +82,10 @@ impl MouseInput for BridgeMouseInput {
     fn drag(&mut self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), String> {
         let (width, height) = crate::window::client_size()?;
         crate::bridge::drag(&self.connection, x1, y1, x2, y2, width, height)
+    }
+
+    fn press(&mut self, key: String) -> Result<(), String> {
+        crate::bridge::press(&self.connection, key)
     }
 }
 
@@ -222,6 +230,29 @@ pub(super) fn create_rev<'js>(
         "write_file",
         Function::new(ctx.clone(), |path: String, content: String| {
             std::fs::write(path, content).map_err(|error| host_error(error.to_string()))
+        })?,
+    )?;
+    rev.set(
+        "delete_file",
+        Function::new(ctx.clone(), |path: String| {
+            match std::fs::remove_file(path) {
+                Ok(()) => Ok(true),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(host_error(error.to_string())),
+            }
+        })?,
+    )?;
+    rev.set(
+        "shell",
+        Function::new(ctx.clone(), |ctx: Ctx<'js>, command: String| {
+            let output = std::process::Command::new("cmd.exe")
+                .args(["/D", "/S", "/C", &command])
+                .output()
+                .map_err(|error| host_error(error.to_string()))?;
+            let result = Object::new(ctx)?;
+            result.set("stdout", String::from_utf8_lossy(&output.stdout).into_owned())?;
+            result.set("stderr", String::from_utf8_lossy(&output.stderr).into_owned())?;
+            Ok::<Object<'js>, Error>(result)
         })?,
     )?;
     let state_connection = connection.clone();
@@ -420,6 +451,33 @@ pub(super) fn create_rev<'js>(
                 drag_mouse.borrow_mut().drag(x1, y1, x2, y2).map_err(host_error)
             },
         )?,
+    )?;
+
+    let press_mouse = controls.mouse.clone();
+    let press_paused = controls.actions_paused.clone();
+    rev.set(
+        "press",
+        Function::new(ctx.clone(), move |key: String| {
+            let key = key.to_ascii_lowercase();
+            if !(key.len() == 1 && key.as_bytes()[0].is_ascii_alphanumeric()
+                || matches!(
+                    key.as_str(),
+                    "left" | "right" | "up" | "down" | "enter" | "escape" | "space" | "tab"
+                        | "backspace" | "f1" | "f2" | "f3" | "f4" | "f5" | "f6" | "f7" | "f8"
+                        | "f9" | "f10" | "f11" | "f12"
+                ))
+            {
+                return Err(Error::new_from_js_message(
+                    "string",
+                    "supported keyboard key",
+                    format!("unsupported key: {key}"),
+                ));
+            }
+            if press_paused.is_paused() {
+                return Ok(());
+            }
+            press_mouse.borrow_mut().press(key).map_err(host_error)
+        })?,
     )?;
 
     let clipboard_window = controls.window.clone();

@@ -32,6 +32,9 @@ await BridgeStateHandlerReportsMissingData();
 await BridgeStateHandlerReportsInvalidPath();
 await BridgeUiHandlersReportCorrelatedErrorsOnPumpThread();
 await BridgeInputHandlersRunOnPumpThread();
+KeyboardInputPostsKeyDownAndUpToTheGameWindow();
+KeyboardInputMapsEverySupportedKeyFamily();
+KeyboardInputIncludesScanCodesAndExtendedKeyMetadata();
 await BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending();
 DispatcherSkipsNonClickableRaycasts();
 DispatcherMapsClientCoordinatesToUnityCoordinates();
@@ -70,7 +73,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("85 tests passed.");
+System.Console.WriteLine("88 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -101,7 +104,8 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("TransferRes", new TransferRes()),
         ("ClickCommand", new ClickCommand(1200, 80, 1920, 1080)),
         ("ScrollCommand", new ScrollCommand(600, 400, -1, 1, 1920, 1080)),
-        ("DragCommand", new DragCommand(1200, 80, 600, 400, 1920, 1080))
+        ("DragCommand", new DragCommand(1200, 80, 600, 400, 1920, 1080)),
+        ("PressCommand", new PressCommand("enter"))
     };
 
     foreach ((string name, object packet) in packets)
@@ -481,7 +485,7 @@ static async Task BridgeInputHandlersRunOnPumpThread()
     TaskCompletionSource<bool> allRegistered = new(TaskCreationOptions.RunContinuationsAsynchronously);
     server.LifecycleSynchronizationForTest = stage =>
     {
-        if (stage == "inbound-registered" && Interlocked.Increment(ref registered) == 3)
+        if (stage == "inbound-registered" && Interlocked.Increment(ref registered) == 4)
             allRegistered.TrySetResult(true);
     };
     Plugin.RegisterHandlers(
@@ -508,6 +512,12 @@ static async Task BridgeInputHandlersRunOnPumpThread()
             handlerThread = Environment.CurrentManagedThreadId;
             commands.Add(command);
             return (true, "");
+        },
+        (window, command) =>
+        {
+            handlerThread = Environment.CurrentManagedThreadId;
+            commands.Add(command);
+            return (true, "");
         });
     (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
     using (client)
@@ -517,7 +527,8 @@ static async Task BridgeInputHandlersRunOnPumpThread()
         {
             $"{{\"uuid\":\"{Guid.NewGuid()}\",\"type\":\"ClickCommand\",\"payload\":{{\"x\":1200,\"y\":80,\"width\":1920,\"height\":1080}}}}",
             $"{{\"uuid\":\"{Guid.NewGuid()}\",\"type\":\"ScrollCommand\",\"payload\":{{\"x\":600,\"y\":400,\"length\":-1,\"axis\":1,\"width\":1920,\"height\":1080}}}}",
-            $"{{\"uuid\":\"{Guid.NewGuid()}\",\"type\":\"DragCommand\",\"payload\":{{\"startX\":1200,\"startY\":80,\"endX\":600,\"endY\":400,\"width\":1920,\"height\":1080}}}}"
+            $"{{\"uuid\":\"{Guid.NewGuid()}\",\"type\":\"DragCommand\",\"payload\":{{\"startX\":1200,\"startY\":80,\"endX\":600,\"endY\":400,\"width\":1920,\"height\":1080}}}}",
+            $"{{\"uuid\":\"{Guid.NewGuid()}\",\"type\":\"PressCommand\",\"payload\":{{\"key\":\"enter\"}}}}"
         })
         {
             await SendText(peer, envelope);
@@ -531,6 +542,96 @@ static async Task BridgeInputHandlersRunOnPumpThread()
     Equal(new ClickCommand(1200, 80, 1920, 1080), commands[0], nameof(BridgeInputHandlersRunOnPumpThread));
     Equal(new ScrollCommand(600, 400, -1, 1, 1920, 1080), commands[1], nameof(BridgeInputHandlersRunOnPumpThread));
     Equal(new DragCommand(1200, 80, 600, 400, 1920, 1080), commands[2], nameof(BridgeInputHandlersRunOnPumpThread));
+    Equal(new PressCommand("enter"), commands[3], nameof(BridgeInputHandlersRunOnPumpThread));
+}
+
+static void KeyboardInputPostsKeyDownAndUpToTheGameWindow()
+{
+    const string testName = nameof(KeyboardInputPostsKeyDownAndUpToTheGameWindow);
+    var messages = new List<(nint Window, uint Message, nuint Key, nint Details)>();
+
+    Equal(
+        true,
+        KeyboardInput.TryDispatch(
+            new PressCommand("enter"),
+            (nint)42,
+            (window, message, key, details) =>
+            {
+                messages.Add((window, message, key, details));
+                return true;
+            },
+            out _),
+        testName);
+    Equal(2, messages.Count, testName);
+    Equal(((nint)42, 0x0100u, (nuint)0x0D, (nint)0x001C0001), messages[0], testName);
+    Equal(((nint)42, 0x0101u, (nuint)0x0D, unchecked((nint)0xC01C0001u)), messages[1], testName);
+}
+
+static void KeyboardInputMapsEverySupportedKeyFamily()
+{
+    const string testName = nameof(KeyboardInputMapsEverySupportedKeyFamily);
+    foreach ((string key, nuint expected) in new[]
+    {
+        ("a", (nuint)0x41),
+        ("z", (nuint)0x5A),
+        ("0", (nuint)0x30),
+        ("9", (nuint)0x39),
+        ("backspace", (nuint)0x08),
+        ("tab", (nuint)0x09),
+        ("escape", (nuint)0x1B),
+        ("space", (nuint)0x20),
+        ("left", (nuint)0x25),
+        ("up", (nuint)0x26),
+        ("right", (nuint)0x27),
+        ("down", (nuint)0x28),
+        ("f1", (nuint)0x70),
+        ("f12", (nuint)0x7B),
+    })
+    {
+        nuint actual = 0;
+        Equal(
+            true,
+            KeyboardInput.TryDispatch(
+                new PressCommand(key),
+                (nint)42,
+                (_, message, virtualKey, _) =>
+                {
+                    if (message == 0x0100)
+                        actual = virtualKey;
+                    return true;
+                },
+                out _),
+            testName);
+        Equal(expected, actual, testName);
+    }
+}
+
+static void KeyboardInputIncludesScanCodesAndExtendedKeyMetadata()
+{
+    const string testName = nameof(KeyboardInputIncludesScanCodesAndExtendedKeyMetadata);
+    foreach ((string key, nint down, nint up) in new[]
+    {
+        ("left", (nint)0x014B0001, unchecked((nint)0xC14B0001u)),
+        ("f12", (nint)0x00580001, unchecked((nint)0xC0580001u)),
+    })
+    {
+        var details = new List<nint>();
+        Equal(
+            true,
+            KeyboardInput.TryDispatch(
+                new PressCommand(key),
+                (nint)42,
+                (_, _, _, value) =>
+                {
+                    details.Add(value);
+                    return true;
+                },
+                out _),
+            testName);
+        Equal(2, details.Count, testName);
+        Equal(down, details[0], testName);
+        Equal(up, details[1], testName);
+    }
 }
 
 static async Task WsPumpStartsAtMostOneQueuedHandlerPerCall()

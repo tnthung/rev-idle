@@ -36,6 +36,11 @@ export class Action extends Function {
     return this;
   }
 
+  press(key, delayMs=100) {
+    this.steps.push({ type: "press", key, delayMs });
+    return this;
+  }
+
   wait(ms) {
     this.steps.push({ type: "wait", ms });
     return this;
@@ -58,13 +63,16 @@ export class Action extends Function {
 
       switch (step.type) {
         case "click":
-          rev.click(step.x, step.y);
+          await rev.click(step.x, step.y);
           break;
         case "scroll":
-          rev.scroll(step.x, step.y, step.length, step.axis);
+          await rev.scroll(step.x, step.y, step.length, step.axis);
           break;
         case "drag":
-          rev.drag(step.x1, step.y1, step.x2, step.y2);
+          await rev.drag(step.x1, step.y1, step.x2, step.y2);
+          break;
+        case "press":
+          await rev.press(step.key);
           break;
         case "invoke":
           await rev.invoke(step.path);

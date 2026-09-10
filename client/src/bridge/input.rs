@@ -1,4 +1,4 @@
-use super::{ClickCommand, DragCommand, ScrollCommand, WsConnection};
+use super::{ClickCommand, DragCommand, PressCommand, ScrollCommand, WsConnection};
 use crate::window::Axis;
 
 pub(crate) fn click(connection: &WsConnection, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
@@ -52,6 +52,12 @@ pub(crate) fn drag(
         .map_err(|error| error.to_string())
 }
 
+pub(crate) fn press(connection: &WsConnection, key: String) -> Result<(), String> {
+    connection
+        .try_send(PressCommand { key })
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,11 +82,13 @@ mod tests {
         click(&connection, 1200, 80, 1920, 1080).unwrap();
         scroll(&connection, 600, 400, -1, Axis::Horizontal, 1920, 1080).unwrap();
         drag(&connection, 1200, 80, 600, 400, 1920, 1080).unwrap();
+        press(&connection, "enter".to_owned()).unwrap();
 
         for (packet_type, payload) in [
             ("ClickCommand", json!({ "x": 1200, "y": 80, "width": 1920, "height": 1080 })),
             ("ScrollCommand", json!({ "x": 600, "y": 400, "length": -1, "axis": 1, "width": 1920, "height": 1080 })),
             ("DragCommand", json!({ "startX": 1200, "startY": 80, "endX": 600, "endY": 400, "width": 1920, "height": 1080 })),
+            ("PressCommand", json!({ "key": "enter" })),
         ] {
             let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
                 .await

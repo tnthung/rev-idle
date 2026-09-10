@@ -15,6 +15,7 @@
     <Compile Include="..\src\StatePayload.cs" Link="StatePayload.cs" />
     <Compile Include="..\src\ExtraRoots.cs" Link="ExtraRoots.cs" />
     <Compile Include="..\src\Plugin.cs" Link="Plugin.cs" />
+    <Compile Include="..\src\KeyboardInput.cs" Link="KeyboardInput.cs" />
     <Compile Include="..\src\UnityUiClickDispatcher.cs" Link="UnityUiClickDispatcher.cs" />
   </ItemGroup>
 

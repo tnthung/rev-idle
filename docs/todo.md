@@ -9,9 +9,9 @@
 - [x] `rev.write_file(path, content)` for writing contents to a file.
 - [x] Rework transportation layer.
 - [x] Replace windows messaging with new transportation layer.
-- [ ] `rev.delete_file(path)` for deleting a file.
-- [ ] `rev.press(key)` for simulating a key press.
-- [ ] `rev.shell(command)` for executing a shell command.
+- [x] `rev.delete_file(path)` for deleting a file.
+- [x] `rev.press(key)` for simulating a key press.
+- [x] `rev.shell(command)` for executing a shell command.
 - [ ] Remove unused warning.
 - [ ] In-game UI injection.
 - [ ] Make capture button background Red when in capture mode.

@@ -74,6 +74,11 @@ public sealed class Plugin : BasePlugin
             {
                 bool success = UnityUiClickDispatcher.TryDispatchDrag(command, out string error);
                 return (success, error);
+            },
+            (window, command) =>
+            {
+                bool success = KeyboardInput.TryDispatch(command, out string error);
+                return (success, error);
             });
 
     internal static void RegisterHandlers(
@@ -85,7 +90,8 @@ public sealed class Plugin : BasePlugin
         Func<string, string, (bool Success, string Error)> transfer,
         Func<nint, ClickCommand, (bool Success, string Error)> click,
         Func<nint, ScrollCommand, (bool Success, string Error)> scroll,
-        Func<nint, DragCommand, (bool Success, string Error)> drag)
+        Func<nint, DragCommand, (bool Success, string Error)> drag,
+        Func<nint, PressCommand, (bool Success, string Error)>? press = null)
     {
         _connection = connection;
         connection.Handler<StateReq>(async (context, packet) =>
@@ -145,6 +151,14 @@ public sealed class Plugin : BasePlugin
         connection.Handler<DragCommand>((context, packet) =>
         {
             (bool success, string error) = drag(getWindow(), packet);
+            if (!success)
+                throw new InvalidOperationException(error);
+            LogBridgeInfo(error);
+            return Task.CompletedTask;
+        });
+        connection.Handler<PressCommand>((context, packet) =>
+        {
+            (bool success, string error) = (press ?? ((_, _) => (false, "keyboard input is not supported")))(getWindow(), packet);
             if (!success)
                 throw new InvalidOperationException(error);
             LogBridgeInfo(error);

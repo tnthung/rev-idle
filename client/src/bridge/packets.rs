@@ -76,6 +76,11 @@ pub(crate) struct DragCommand {
     pub(crate) height: i32,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct PressCommand {
+    pub(crate) key: String,
+}
+
 impl Packet for StateReq {
     const TYPE: &'static str = "StateReq";
 }
@@ -118,6 +123,10 @@ impl Packet for ScrollCommand {
 
 impl Packet for DragCommand {
     const TYPE: &'static str = "DragCommand";
+}
+
+impl Packet for PressCommand {
+    const TYPE: &'static str = "PressCommand";
 }
 
 impl Requestable for StateReq {
@@ -222,6 +231,10 @@ mod tests {
                     height: 1080,
                 })
                 .unwrap(),
+            ),
+            (
+                PressCommand::TYPE,
+                serde_json::to_value(PressCommand { key: "enter".to_owned() }).unwrap(),
             ),
         ];
 
