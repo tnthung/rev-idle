@@ -4,10 +4,6 @@ import { States, UnityZodiac, ZodiacRarity } from "./lib/states.js";
 import { DilationTree, DT_STAGES, DT_EXTRAS } from "./lib/dilation_tree.js";
 
 
-const UNITY_RUN_THRESHOLD = 200 * 1000;
-const ATTACK_ETA_THRESHOLD = 30;
-
-
 export async function beforePause() {
   rev.global.pauseStart = Date.now();
 }
@@ -99,7 +95,7 @@ export default async function main() {
       const nowHpM       = mantissa(nowHp);
       const damagePerSec = (lastHpM - nowHpM) / timeDiff;
 
-      tooSlow = (nowHpM / damagePerSec) > ATTACK_ETA_THRESHOLD;
+      tooSlow = (nowHpM / damagePerSec) > executionConfig.attack_eta_threshold_s;
     }
 
     if (tooSlow || level.level >= await States.maxAttackLevelReached())
@@ -107,8 +103,8 @@ export default async function main() {
   }
 
   // check unity run duration
-  else if (unityElapsed > UNITY_RUN_THRESHOLD) {
-    console.log("Current unity run exceeds threshold (" + (UNITY_RUN_THRESHOLD / 1000) + "s). Reset unity.");
+  else if (unityElapsed > executionConfig.unity_run_threshold_s * 1000) {
+    console.log("Current unity run exceeds threshold (" + executionConfig.unity_run_threshold_s + "s). Reset unity.");
     await Action.resetUnity();
   }
 
