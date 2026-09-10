@@ -2563,10 +2563,11 @@ async fn failed_load_stays_stopped_and_reload_retries_that_path() {
 
 #[test]
 fn capture_is_allowed_only_when_the_script_is_paused_or_stopped() {
-    assert_eq!(capture_action(false, false, false), CaptureAction::Enable);
-    assert_eq!(capture_action(false, true, true), CaptureAction::Enable);
-    assert_eq!(capture_action(false, true, false), CaptureAction::Reject);
-    assert_eq!(capture_action(true, true, false), CaptureAction::Disable);
+    assert_eq!(capture_action(false, false, false, false), CaptureAction::Reject);
+    assert_eq!(capture_action(false, true, false, false), CaptureAction::Enable);
+    assert_eq!(capture_action(false, true, true, true), CaptureAction::Enable);
+    assert_eq!(capture_action(false, true, true, false), CaptureAction::Reject);
+    assert_eq!(capture_action(true, true, true, false), CaptureAction::Disable);
 
 let capture_state = CaptureState;
     capture_state.set_enabled(true);
@@ -2804,4 +2805,45 @@ async fn lifecycle_publishes_actual_phase_and_one_shot_capture_state() {
     runner.await;
     CaptureState.set_enabled(false);
     fs::remove_file(cleanup_path).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn capture_commands_stay_disarmed_without_a_script_path() {
+    CaptureState.set_enabled(false);
+    let (command_tx, command_rx) = mpsc::channel(8);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (state_tx, _state_rx) = watch::channel(StateUpdate {
+        phase: ScriptPhase::Unloaded,
+        capture: false,
+    });
+    let (controls, _) = recording_controls();
+    let local = tokio::task::LocalSet::new();
+    let runner = local.run_until(async move {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx,
+            state_tx,
+            pause_rx,
+            None,
+            controls,
+            Duration::from_millis(5),
+        ));
+        tokio::task::yield_now().await;
+
+        command_tx.send(ScriptCommand::Capture).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!CaptureState.is_enabled());
+
+        command_tx.send(ScriptCommand::StartCapture).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!CaptureState.is_enabled());
+
+        command_tx.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    });
+    runner.await;
+    CaptureState.set_enabled(false);
 }

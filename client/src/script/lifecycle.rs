@@ -343,6 +343,7 @@ async fn run_with_controls_and_lifecycle(
                 }
                 ScriptCommand::Capture => match capture_action(
                     capture_state.is_enabled(),
+                    current_path.is_some(),
                     session.is_some(),
                     paused,
                 ) {
@@ -359,7 +360,7 @@ async fn run_with_controls_and_lifecycle(
                     }
                 },
                 ScriptCommand::StartCapture => {
-                    if session.is_none() || paused {
+                    if current_path.is_some() && (session.is_none() || paused) {
                         capture_state.set_enabled(true);
                     }
                 }
@@ -493,13 +494,18 @@ pub(super) enum CaptureAction {
     Reject,
 }
 
-pub(super) fn capture_action(enabled: bool, script_loaded: bool, paused: bool) -> CaptureAction {
+pub(super) fn capture_action(
+    enabled: bool,
+    has_path: bool,
+    script_loaded: bool,
+    paused: bool,
+) -> CaptureAction {
     if enabled {
         CaptureAction::Disable
-    } else if script_loaded && !paused {
-        CaptureAction::Reject
-    } else {
+    } else if has_path && (!script_loaded || paused) {
         CaptureAction::Enable
+    } else {
+        CaptureAction::Reject
     }
 }
 
