@@ -116,12 +116,14 @@ internal sealed class ControlOverlay : IDisposable
                 filterMode = FilterMode.Point,
                 wrapMode = TextureWrapMode.Clamp
             };
+            texture.hideFlags = HideFlags.DontUnloadUnusedAsset;
             for (int y = 0; y < 16; y++)
             for (int x = 0; x < 16; x++)
                 texture.SetPixel(x, y, IconPixel(icon, x, y) ? Color.white : Color.clear);
             texture.Apply();
             _iconTextures[(int)icon] = texture;
             _icons[(int)icon] = Sprite.Create(texture, new Rect(0, 0, 16, 16), new Vector2(0.5f, 0.5f), 100f);
+            _icons[(int)icon].hideFlags = HideFlags.DontUnloadUnusedAsset;
         }
 
         _root = new GameObject("RevIdle Script Controls");
@@ -153,6 +155,7 @@ internal sealed class ControlOverlay : IDisposable
             colors.normalColor = new Color(69f / 255f, 74f / 255f, 79f / 255f, 1);
             colors.highlightedColor = new Color(82f / 255f, 88f / 255f, 94f / 255f, 1);
             colors.pressedColor = new Color(55f / 255f, 59f / 255f, 63f / 255f, 1);
+            colors.selectedColor = new Color(69f / 255f, 74f / 255f, 79f / 255f, 1);
             colors.disabledColor = new Color(34f / 255f, 34f / 255f, 34f / 255f, 1);
             colors.colorMultiplier = 1;
             button.colors = colors;

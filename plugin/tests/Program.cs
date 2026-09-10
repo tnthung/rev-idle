@@ -45,6 +45,8 @@ await ControlBridgeDoesNotSendUsingReconnectedGeneration();
 await WsPacketContextCarriesOriginGeneration();
 ControlPresentationProjectsClosedPhases();
 ControlIconsPreserveNegativeSpace();
+ControlOverlayDefinesSelectedButtonColor();
+ControlOverlayRetainsInactiveIconAssets();
 ControlOverlayBindsButtonsToBackgroundGraphic();
 DispatcherSkipsNonClickableRaycasts();
 DispatcherMapsClientCoordinatesToUnityCoordinates();
@@ -85,7 +87,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("96 tests passed.");
+System.Console.WriteLine("98 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -707,6 +709,23 @@ static void ControlOverlayBindsButtonsToBackgroundGraphic()
     string source = File.ReadAllText(Path.GetFullPath(Path.Combine(
         AppContext.BaseDirectory, "..", "..", "..", "..", "src", "ControlOverlay.cs")));
     Equal(1, source.Split("button.targetGraphic = image;", StringSplitOptions.None).Length - 1, testName);
+}
+
+static void ControlOverlayDefinesSelectedButtonColor()
+{
+    const string testName = nameof(ControlOverlayDefinesSelectedButtonColor);
+    string source = File.ReadAllText(Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory, "..", "..", "..", "..", "src", "ControlOverlay.cs")));
+    Equal(1, source.Split("colors.selectedColor = new Color(69f / 255f, 74f / 255f, 79f / 255f, 1);", StringSplitOptions.None).Length - 1, testName);
+}
+
+static void ControlOverlayRetainsInactiveIconAssets()
+{
+    const string testName = nameof(ControlOverlayRetainsInactiveIconAssets);
+    string source = File.ReadAllText(Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory, "..", "..", "..", "..", "src", "ControlOverlay.cs")));
+    Equal(1, source.Split("texture.hideFlags = HideFlags.DontUnloadUnusedAsset;", StringSplitOptions.None).Length - 1, testName);
+    Equal(1, source.Split("_icons[(int)icon].hideFlags = HideFlags.DontUnloadUnusedAsset;", StringSplitOptions.None).Length - 1, testName);
 }
 
 static async Task WsConnectionGenerationTracksSessions()
