@@ -18,6 +18,7 @@ export class States {
   static planetZodiacInventory = () => rev.state("gameData.unity.planetsInventory");
   static gold                  = () => rev.state("gameData.attacks.gold");
   static nextGold              = () => rev.state("gameData.attacks.goldOnUnity");
+  static attackRelics          = () => rev.state("gameData.attacks.relics");
 
   /** @type {function(): Promise<string>} */
   static currentAttackDamage = () => rev.state("gameData.attacks.totalAtkMult");

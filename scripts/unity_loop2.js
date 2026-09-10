@@ -176,11 +176,6 @@ async function bootstrapEternity() {
   await mergeAndSellZodiac().catch(e =>
     console.error("Error happened while merging and selling zodiac:\n", e));
 
-  rev.write_file("__zodiac.json", JSON.stringify({
-    planetInventory: await States.planetZodiacInventory(),
-    unityInventory: await States.unityZodiacInventory()
-  }, null, 2));
-
   console.log("Bootstrapping eternity...");
   rev.global.unityStart = Date.now();
 
