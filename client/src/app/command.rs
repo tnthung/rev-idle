@@ -9,6 +9,9 @@ pub(crate) enum ScriptCommand {
     Resume,
     Stop,
     Capture,
+    StartCapture,
+    StopCapture,
+    CaptureConsumed,
     Exit,
     #[allow(dead_code)]
     SetPaused(bool),

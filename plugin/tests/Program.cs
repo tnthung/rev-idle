@@ -36,14 +36,26 @@ KeyboardInputPostsKeyDownAndUpToTheGameWindow();
 KeyboardInputMapsEverySupportedKeyFamily();
 KeyboardInputIncludesScanCodesAndExtendedKeyMetadata();
 await BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending();
+await ControlBridgeNoConnectionIsUnavailableAndSendIsNonFatal();
+await ControlBridgeStateIsGenerationScoped();
+await ControlBridgeSendsFreshActionsWithoutOptimisticState();
+await ControlBridgeIgnoresMalformedPhaseWithoutRemoteError();
+await ControlBridgeIgnoresOldGenerationHandlerAfterReconnect();
+await ControlBridgeDoesNotSendUsingReconnectedGeneration();
+await WsPacketContextCarriesOriginGeneration();
+ControlPresentationProjectsClosedPhases();
+ControlIconsPreserveNegativeSpace();
+ControlOverlayBindsButtonsToBackgroundGraphic();
 DispatcherSkipsNonClickableRaycasts();
 DispatcherMapsClientCoordinatesToUnityCoordinates();
 DispatcherParsesExactHierarchyPath();
 DispatcherRejectsMalformedHierarchyPath();
 DispatcherMatchesPersistentSceneRoot();
+DispatcherNormalizesOnlySceneHandle();
 DispatcherFindsFirstScrollableRaycast();
 WsEnvelopeMatchesSharedFixture();
 await WsDisconnectedCallsFailImmediately();
+await WsConnectionGenerationTracksSessions();
 await WsRequestCorrelatesResponseByUuidAndType();
 await WsConcurrentSendsShareOneWriter();
 await WsHandlersStartWithoutWaitingForEarlierHandlers();
@@ -73,7 +85,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("88 tests passed.");
+System.Console.WriteLine("96 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -96,8 +108,8 @@ static void BridgePacketPayloadsMatchSharedFixture()
     {
         ("StateReq", (object)new StateReq(new[] { "score", "eternity.dtpSpent" })),
         ("StateRes", new StateRes(JsonSerializer.Deserialize<JsonElement>("{\"score\":\"1e3\",\"enabled\":true,\"nested\":{\"value\":null},\"items\":[1,\"two\",false]}"))),
-        ("CaptureReq", new CaptureReq(123, -45, 1920, 1080)),
-        ("CaptureRes", new CaptureRes("slot", "scene:1/Canvas[0]/Inventory/3")),
+        ("UiPathReq", new UiPathReq(123, -45, 1920, 1080)),
+        ("UiPathRes", new UiPathRes("slot", "scene:1/Canvas[0]/Inventory/3")),
         ("InvokeReq", new InvokeReq("scene:1/Canvas[0]/Buy DTP & More[0]")),
         ("InvokeRes", new InvokeRes()),
         ("TransferReq", new TransferReq("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0")),
@@ -105,7 +117,14 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("ClickCommand", new ClickCommand(1200, 80, 1920, 1080)),
         ("ScrollCommand", new ScrollCommand(600, 400, -1, 1, 1920, 1080)),
         ("DragCommand", new DragCommand(1200, 80, 600, 400, 1920, 1080)),
-        ("PressCommand", new PressCommand("enter"))
+        ("PressCommand", new PressCommand("enter")),
+        ("ReloadScript", new ReloadScript()),
+        ("StopScript", new StopScript()),
+        ("PauseScript", new PauseScript()),
+        ("ResumeScript", new ResumeScript()),
+        ("StartCapture", new StartCapture()),
+        ("StopCapture", new StopCapture()),
+        ("StateUpdate", new StateUpdate("paused", true))
     };
 
     foreach ((string name, object packet) in packets)
@@ -120,7 +139,7 @@ static void BridgePacketPayloadsMatchSharedFixture()
 
     Equal(
         "{\"type\":null,\"path\":null}",
-        JsonSerializer.Serialize(new CaptureRes(null, null), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
+        JsonSerializer.Serialize(new UiPathRes(null, null), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
         nameof(BridgePacketPayloadsMatchSharedFixture));
 }
 
@@ -247,7 +266,7 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
             server,
             peer,
             (nint)0x5678,
-            $"{{\"uuid\":\"{captureUuid}\",\"type\":\"CaptureReq\",\"payload\":{{\"x\":123,\"y\":-45,\"width\":1920,\"height\":1080}}}}",
+            $"{{\"uuid\":\"{captureUuid}\",\"type\":\"UiPathReq\",\"payload\":{{\"x\":123,\"y\":-45,\"width\":1920,\"height\":1080}}}}",
             thread =>
             {
                 if (Volatile.Read(ref captureThread) == 0)
@@ -255,7 +274,7 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
             }))
         {
             Equal(captureUuid, capture.RootElement.GetProperty("uuid").GetGuid(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
-            Equal("CaptureRes", capture.RootElement.GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("UiPathRes", capture.RootElement.GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
             Equal("slot", capture.RootElement.GetProperty("payload").GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
             Equal("captured", capture.RootElement.GetProperty("payload").GetProperty("path").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
         }
@@ -398,6 +417,314 @@ static async Task WsDisconnectedCallsFailImmediately()
     using WsConnection connection = WsConnection.DisconnectedForTest();
     await ThrowsAsync<WsNotConnectedException>(() => connection.Request(new TestReq("request")), nameof(WsDisconnectedCallsFailImmediately));
     await ThrowsAsync<WsNotConnectedException>(() => connection.Send(new TestReq("send")), nameof(WsDisconnectedCallsFailImmediately));
+}
+
+static async Task ControlBridgeNoConnectionIsUnavailableAndSendIsNonFatal()
+{
+    const string testName = nameof(ControlBridgeNoConnectionIsUnavailableAndSendIsNonFatal);
+    using WsConnection connection = WsConnection.DisconnectedForTest();
+    List<string> reports = new();
+    ControlBridge bridge = new(connection, reports.Add);
+
+    Equal(false, bridge.Connected, testName);
+    Equal<ControlState?>(null, bridge.State, testName);
+    bridge.Send(ControlCommand.Pause);
+    await Task.Yield();
+    Equal(true, reports.Count > 0, testName);
+}
+
+static async Task ControlBridgeStateIsGenerationScoped()
+{
+    const string testName = nameof(ControlBridgeStateIsGenerationScoped);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    ControlBridge bridge = new(server);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        long firstGeneration = server.ConnectionGeneration;
+        await SendText(peer, WsConnection.SerializeForTest(Guid.NewGuid(), new StateUpdate("paused", true)));
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        while (bridge.State is null && DateTime.UtcNow < deadline)
+        {
+            server.Pump();
+            await Task.Delay(1);
+        }
+
+        Equal(true, bridge.Connected, testName);
+        Equal(new ControlState(ScriptPhase.Paused, true), bridge.State, testName);
+        Equal(true, firstGeneration > 0, testName);
+    }
+
+    DateTime disconnectedDeadline = DateTime.UtcNow.AddSeconds(2);
+    while (server.ConnectionGeneration != 0 && DateTime.UtcNow < disconnectedDeadline)
+        await Task.Delay(1);
+    Equal(false, bridge.Connected, testName);
+    Equal<ControlState?>(null, bridge.State, testName);
+
+    (TcpClient secondClient, WebSocket secondPeer) = await ConnectRawClient(server);
+    using (secondClient)
+    using (secondPeer)
+    {
+        Equal(true, bridge.Connected, testName);
+        Equal<ControlState?>(null, bridge.State, testName);
+    }
+}
+
+static async Task ControlBridgeSendsFreshActionsWithoutOptimisticState()
+{
+    const string testName = nameof(ControlBridgeSendsFreshActionsWithoutOptimisticState);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    ControlBridge bridge = new(server);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        await SendText(peer, WsConnection.SerializeForTest(Guid.NewGuid(), new StateUpdate("running", false)));
+        DateTime stateDeadline = DateTime.UtcNow.AddSeconds(2);
+        while (bridge.State is null && DateTime.UtcNow < stateDeadline)
+        {
+            server.Pump();
+            await Task.Delay(1);
+        }
+
+        bridge.Send(ControlCommand.Pause);
+        using JsonDocument first = JsonDocument.Parse(await ReceiveText(peer));
+        bridge.Send(ControlCommand.Pause);
+        using JsonDocument second = JsonDocument.Parse(await ReceiveText(peer));
+        Equal("PauseScript", first.RootElement.GetProperty("type").GetString(), testName);
+        Equal("PauseScript", second.RootElement.GetProperty("type").GetString(), testName);
+        Equal(false, first.RootElement.GetProperty("uuid").GetGuid() == second.RootElement.GetProperty("uuid").GetGuid(), testName);
+        Equal(new ControlState(ScriptPhase.Running, false), bridge.State, testName);
+    }
+}
+
+static async Task ControlBridgeIgnoresMalformedPhaseWithoutRemoteError()
+{
+    const string testName = nameof(ControlBridgeIgnoresMalformedPhaseWithoutRemoteError);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    ControlBridge bridge = new(server);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        TaskCompletionSource<bool> queued = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        server.LifecycleSynchronizationForTest = stage =>
+        {
+            if (stage == "inbound-registered")
+                queued.TrySetResult(true);
+        };
+        await SendText(peer, $"{{\"uuid\":\"{uuid}\",\"type\":\"StateUpdate\",\"payload\":{{\"phase\":\"unknown\",\"capture\":false}}}}");
+        await queued.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        server.Pump();
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        while (server.HandlerTaskCountForTest != 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(1);
+        Equal<ControlState?>(null, bridge.State, testName);
+        await ThrowsAsync<OperationCanceledException>(
+            () => ReceiveTextWithTimeout(peer, TimeSpan.FromMilliseconds(50)),
+            testName);
+    }
+}
+
+static async Task ControlBridgeIgnoresOldGenerationHandlerAfterReconnect()
+{
+    const string testName = nameof(ControlBridgeIgnoresOldGenerationHandlerAfterReconnect);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    ControlBridge bridge = new(server);
+    TaskCompletionSource<bool> queued = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> handlerStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    TaskCompletionSource<bool> releaseHandler = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    server.LifecycleSynchronizationForTest = stage =>
+    {
+        if (stage == "inbound-registered")
+            queued.TrySetResult(true);
+        if (stage == "handler-start")
+        {
+            handlerStarted.TrySetResult(true);
+            releaseHandler.Task.GetAwaiter().GetResult();
+        }
+    };
+    (TcpClient firstClient, WebSocket firstPeer) = await ConnectRawClient(server);
+    await SendText(firstPeer, WsConnection.SerializeForTest(Guid.NewGuid(), new StateUpdate("running", false)));
+    await queued.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    Task pump = Task.Run(server.Pump);
+    await handlerStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+    firstPeer.Dispose();
+    firstClient.Dispose();
+    DateTime disconnectedDeadline = DateTime.UtcNow.AddSeconds(2);
+    while (server.ConnectionGeneration != 0 && DateTime.UtcNow < disconnectedDeadline)
+        await Task.Delay(1);
+    Equal(0L, server.ConnectionGeneration, testName);
+    (TcpClient secondClient, WebSocket secondPeer) = await ConnectRawClient(server);
+    using (firstClient)
+    using (firstPeer)
+    using (secondClient)
+    using (secondPeer)
+    {
+        releaseHandler.TrySetResult(true);
+        await pump.WaitAsync(TimeSpan.FromSeconds(2));
+        Equal(true, bridge.Connected, testName);
+        Equal<ControlState?>(null, bridge.State, testName);
+    }
+}
+
+static async Task ControlBridgeDoesNotSendUsingReconnectedGeneration()
+{
+    const string testName = nameof(ControlBridgeDoesNotSendUsingReconnectedGeneration);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    List<string> reports = new();
+    ControlBridge bridge = new(server, reports.Add);
+    (TcpClient firstClient, WebSocket firstPeer) = await ConnectRawClient(server);
+    long firstGeneration = server.ConnectionGeneration;
+    await SendText(firstPeer, WsConnection.SerializeForTest(Guid.NewGuid(), new StateUpdate("running", false)));
+    DateTime stateDeadline = DateTime.UtcNow.AddSeconds(2);
+    while (bridge.State is null && DateTime.UtcNow < stateDeadline)
+    {
+        server.Pump();
+        await Task.Delay(1);
+    }
+    Equal(new ControlState(ScriptPhase.Running, false), bridge.State, testName);
+    firstPeer.Dispose();
+    firstClient.Dispose();
+    DateTime disconnectedDeadline = DateTime.UtcNow.AddSeconds(2);
+    while (server.ConnectionGeneration != 0 && DateTime.UtcNow < disconnectedDeadline)
+        await Task.Delay(1);
+    (TcpClient secondClient, WebSocket secondPeer) = await ConnectRawClient(server);
+    using (firstClient)
+    using (firstPeer)
+    using (secondClient)
+    using (secondPeer)
+    {
+        await ThrowsAsync<WsNotConnectedException>(
+            () => server.Send(new PauseScript(), firstGeneration),
+            testName);
+        bridge.Send(ControlCommand.Pause);
+        await ThrowsAsync<OperationCanceledException>(
+            () => ReceiveTextWithTimeout(secondPeer, TimeSpan.FromMilliseconds(50)),
+            testName);
+        Equal(true, reports.Count > 0, testName);
+    }
+}
+
+static async Task WsPacketContextCarriesOriginGeneration()
+{
+    const string testName = nameof(WsPacketContextCarriesOriginGeneration);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    long observedGeneration = 0;
+    server.Handler<TestReq>((context, _) =>
+    {
+        observedGeneration = context.Generation;
+        return Task.CompletedTask;
+    });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        long generation = server.ConnectionGeneration;
+        await SendText(peer, WsConnection.SerializeForTest(Guid.NewGuid(), new TestReq("origin")));
+        DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+        while (observedGeneration == 0 && DateTime.UtcNow < deadline)
+        {
+            server.Pump();
+            await Task.Delay(1);
+        }
+        Equal(generation, observedGeneration, testName);
+    }
+}
+
+static void ControlPresentationProjectsClosedPhases()
+{
+    const string testName = nameof(ControlPresentationProjectsClosedPhases);
+    ControlPresentation unloaded = ControlPresentation.From(new ControlState(ScriptPhase.Unloaded, false));
+    Equal(false, unloaded.ReloadStopEnabled, testName);
+    Equal(false, unloaded.ResumePauseEnabled, testName);
+    Equal(false, unloaded.CaptureEnabled, testName);
+
+    ControlPresentation stopped = ControlPresentation.From(new ControlState(ScriptPhase.Stopped, false));
+    Equal(ControlIcon.Reload, stopped.ReloadStopIcon, testName);
+    Equal(true, stopped.ReloadStopEnabled, testName);
+    Equal(false, stopped.ResumePauseEnabled, testName);
+    Equal(true, stopped.CaptureEnabled, testName);
+
+    ControlPresentation running = ControlPresentation.From(new ControlState(ScriptPhase.Running, false));
+    Equal(ControlIcon.Stop, running.ReloadStopIcon, testName);
+    Equal(true, running.ReloadStopEnabled, testName);
+    Equal(ControlIcon.Pause, running.ResumePauseIcon, testName);
+    Equal(true, running.ResumePauseEnabled, testName);
+    Equal(false, running.CaptureEnabled, testName);
+
+    ControlPresentation paused = ControlPresentation.From(new ControlState(ScriptPhase.Paused, false));
+    Equal(ControlIcon.Stop, paused.ReloadStopIcon, testName);
+    Equal(true, paused.ReloadStopEnabled, testName);
+    Equal(ControlIcon.Resume, paused.ResumePauseIcon, testName);
+    Equal(true, paused.ResumePauseEnabled, testName);
+    Equal(true, paused.CaptureEnabled, testName);
+
+    ControlPresentation capturing = ControlPresentation.From(new ControlState(ScriptPhase.Paused, true));
+    Equal(false, capturing.ReloadStopEnabled, testName);
+    Equal(false, capturing.ResumePauseEnabled, testName);
+    Equal(false, capturing.CaptureEnabled, testName);
+    ControlPresentation disconnected = ControlPresentation.From(null);
+    Equal(false, disconnected.ReloadStopEnabled, testName);
+    Equal(false, disconnected.ResumePauseEnabled, testName);
+    Equal(false, disconnected.CaptureEnabled, testName);
+}
+
+static void ControlIconsPreserveNegativeSpace()
+{
+    const string testName = nameof(ControlIconsPreserveNegativeSpace);
+    Equal(ControlPixel.Transparent, ControlOverlay.ButtonPixel(0, 0), testName);
+    Equal(ControlPixel.Border, ControlOverlay.ButtonPixel(5, 0), testName);
+    Equal(ControlPixel.Fill, ControlOverlay.ButtonPixel(5, 5), testName);
+
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Stop, 4, 4), testName);
+    Equal(false, ControlOverlay.IconPixel(ControlIcon.Stop, 7, 7), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Stop, 11, 11), testName);
+
+    for (int y = 4; y <= 11; y++)
+    {
+        Equal(true, ControlOverlay.IconPixel(ControlIcon.Pause, 4, y), testName);
+        Equal(true, ControlOverlay.IconPixel(ControlIcon.Pause, 5, y), testName);
+        Equal(false, ControlOverlay.IconPixel(ControlIcon.Pause, 6, y), testName);
+        Equal(false, ControlOverlay.IconPixel(ControlIcon.Pause, 7, y), testName);
+        Equal(false, ControlOverlay.IconPixel(ControlIcon.Pause, 8, y), testName);
+        Equal(false, ControlOverlay.IconPixel(ControlIcon.Pause, 9, y), testName);
+        Equal(true, ControlOverlay.IconPixel(ControlIcon.Pause, 10, y), testName);
+        Equal(true, ControlOverlay.IconPixel(ControlIcon.Pause, 11, y), testName);
+    }
+
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 4, 4), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 11, 7), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 11, 8), testName);
+    Equal(false, ControlOverlay.IconPixel(ControlIcon.Resume, 7, 7), testName);
+}
+
+static void ControlOverlayBindsButtonsToBackgroundGraphic()
+{
+    const string testName = nameof(ControlOverlayBindsButtonsToBackgroundGraphic);
+    string source = File.ReadAllText(Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory, "..", "..", "..", "..", "src", "ControlOverlay.cs")));
+    Equal(1, source.Split("button.targetGraphic = image;", StringSplitOptions.None).Length - 1, testName);
+}
+
+static async Task WsConnectionGenerationTracksSessions()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    Equal(0L, server.ConnectionGeneration, nameof(WsConnectionGenerationTracksSessions));
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Equal(true, server.ConnectionGeneration > 0, nameof(WsConnectionGenerationTracksSessions));
+        peer.Dispose();
+        client.Dispose();
+    }
+    DateTime deadline = DateTime.UtcNow.AddSeconds(2);
+    while (server.ConnectionGeneration != 0 && DateTime.UtcNow < deadline)
+        await Task.Delay(1);
+    Equal(0L, server.ConnectionGeneration, nameof(WsConnectionGenerationTracksSessions));
 }
 
 static async Task WsRequestCorrelatesResponseByUuidAndType()
@@ -1914,6 +2241,17 @@ static void DispatcherMatchesPersistentSceneRoot()
         -12, "VIEWMANAGER", 0, true, -12, ("VIEWMANAGER", 0)), testName);
     Equal(false, UnityUiClickDispatcher.IsRootMatch(
         -12, "viewmanager", 0, false, -12, ("VIEWMANAGER", 0)), testName);
+}
+
+static void DispatcherNormalizesOnlySceneHandle()
+{
+    const string testName = nameof(DispatcherNormalizesOnlySceneHandle);
+    Equal(true, UnityUiClickDispatcher.IsRootMatch(
+        -280, "CANVAS", 0, false, -148, ("CANVAS", 0)), testName);
+    Equal(false, UnityUiClickDispatcher.IsRootMatch(
+        -280, "CANVAS/escaped", 0, false, -148, ("CANVAS", 0)), testName);
+    Equal(false, UnityUiClickDispatcher.IsRootMatch(
+        -280, "CANVAS", 1, false, -148, ("CANVAS", 0)), testName);
 }
 
 static void DispatcherFindsFirstScrollableRaycast()

@@ -58,9 +58,25 @@ Port = 19841
 
 Click, scroll, and drag commands use the same raw packet connection. They dispatch to Unity uGUI handlers without focusing the game window or moving the cursor.
 
+## Injected script controls
+
+The bottom-right overlay has three 30 by 30 pixel buttons: Reload/Stop, Resume/Pause, and Capture. The first two switch their icon and action with the script phase. The disabled-state projection is:
+
+| Script phase | Reload/Stop | Resume/Pause | Capture |
+| --- | --- | --- | --- |
+| Unloaded | disabled | disabled | disabled |
+| Stopped | Reload | disabled | enabled |
+| Running | Stop | Pause | disabled |
+| Paused | Stop | Resume | enabled |
+| Any phase while capturing | disabled | disabled | disabled |
+
+The buttons use the current client-published state. Before a state for the current WebSocket connection generation is available, all three are disabled. Unity sends six independent best-effort action notifications (`ReloadScript`, `StopScript`, `PauseScript`, `ResumeScript`, `StartCapture`, and `StopCapture`); a failed notification is non-fatal and is not replayed after reconnect. The client sends one complete `StateUpdate { phase, capture }` after a lifecycle or capture transition and when a new connection generation becomes available. Unity does not request or poll for control state, and it does not optimistically change the projection.
+
+Capture is one-shot: the first captured left-button down consumes its matching up, disarms capture, and causes the client to publish `capture: false`. The captured coordinate is resolved through the correlated `UiPathReq -> UiPathRes` exchange only for path lookup; action notifications and `StateUpdate` are not correlated request/response operations.
+
 ## Capture, invoke, and transfer UI elements
 
-Run `capture` in the client and click an element. Capture consumes the click and prints client coordinates followed by `button: "<path>"` or `slot: "<path>"`. It checks buttons first, then drop slots, including their parent objects. If neither exists, it prints only coordinates. Use the printed paths in scripts:
+Run `capture` in the client and click an element. Capture consumes one click, then turns itself off. It prints client coordinates followed by `button: "<path>"` or `slot: "<path>"`, copies a valid path to the clipboard, and prints `Copied to clipboard`. It checks buttons first, then drop slots, including their parent objects. If neither exists, it prints only coordinates and leaves the clipboard unchanged. Use the copied paths in scripts:
 
 ```javascript
 await rev.invoke(buttonPath);
