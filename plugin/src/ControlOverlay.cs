@@ -148,6 +148,7 @@ internal sealed class ControlOverlay : IDisposable
             image.sprite = _sprite;
             image.type = Image.Type.Sliced;
             Button button = buttonObject.AddComponent<Button>();
+            button.targetGraphic = image;
             ColorBlock colors = button.colors;
             colors.normalColor = new Color(69f / 255f, 74f / 255f, 79f / 255f, 1);
             colors.highlightedColor = new Color(82f / 255f, 88f / 255f, 94f / 255f, 1);
@@ -273,9 +274,11 @@ internal sealed class ControlOverlay : IDisposable
         {
             ControlIcon.Reload => distance is >= 64 and <= 121 && !(x >= 10 && y >= 10) ||
                 x is >= 10 and <= 13 && y is >= 8 and <= 11 && y - 8 <= 13 - x,
-            ControlIcon.Stop => x is >= 4 and <= 11 && y is >= 4 and <= 11,
-            ControlIcon.Resume => x is >= 4 and <= 11 && Math.Abs(centerY) <= x - 3,
-            ControlIcon.Pause => (x is >= 4 and <= 6 || x is >= 9 and <= 11) && y is >= 3 and <= 12,
+            ControlIcon.Stop => x is >= 4 and <= 11 && y is >= 4 and <= 11 &&
+                (x is 4 or 11 || y is 4 or 11),
+            ControlIcon.Resume => x is >= 4 and <= 11 &&
+                (x == 4 ? y is >= 4 and <= 11 : y == 4 + (x - 4) / 2 || y == 11 - (x - 4) / 2),
+            ControlIcon.Pause => (x is 4 or 5 or 10 or 11) && y is >= 4 and <= 11,
             _ => distance is >= 64 and <= 100 ||
                 (x is 7 or 8) && (y <= 3 || y >= 12) ||
                 (y is 7 or 8) && (x <= 3 || x >= 12)

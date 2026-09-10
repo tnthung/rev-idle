@@ -44,11 +44,13 @@ await ControlBridgeIgnoresOldGenerationHandlerAfterReconnect();
 await ControlBridgeDoesNotSendUsingReconnectedGeneration();
 await WsPacketContextCarriesOriginGeneration();
 ControlPresentationProjectsClosedPhases();
+ControlIconsPreserveNegativeSpace();
 DispatcherSkipsNonClickableRaycasts();
 DispatcherMapsClientCoordinatesToUnityCoordinates();
 DispatcherParsesExactHierarchyPath();
 DispatcherRejectsMalformedHierarchyPath();
 DispatcherMatchesPersistentSceneRoot();
+DispatcherNormalizesOnlySceneHandle();
 DispatcherFindsFirstScrollableRaycast();
 WsEnvelopeMatchesSharedFixture();
 await WsDisconnectedCallsFailImmediately();
@@ -667,6 +669,35 @@ static void ControlPresentationProjectsClosedPhases()
     Equal(false, disconnected.ReloadStopEnabled, testName);
     Equal(false, disconnected.ResumePauseEnabled, testName);
     Equal(false, disconnected.CaptureEnabled, testName);
+}
+
+static void ControlIconsPreserveNegativeSpace()
+{
+    const string testName = nameof(ControlIconsPreserveNegativeSpace);
+    Equal(ControlPixel.Transparent, ControlOverlay.ButtonPixel(0, 0), testName);
+    Equal(ControlPixel.Border, ControlOverlay.ButtonPixel(5, 0), testName);
+    Equal(ControlPixel.Fill, ControlOverlay.ButtonPixel(5, 5), testName);
+
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Stop, 4, 4), testName);
+    Equal(false, ControlOverlay.IconPixel(ControlIcon.Stop, 7, 7), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Stop, 11, 11), testName);
+
+    for (int y = 4; y <= 11; y++)
+    {
+        Equal(true, ControlOverlay.IconPixel(ControlIcon.Pause, 4, y), testName);
+        Equal(true, ControlOverlay.IconPixel(ControlIcon.Pause, 5, y), testName);
+        Equal(false, ControlOverlay.IconPixel(ControlIcon.Pause, 6, y), testName);
+        Equal(false, ControlOverlay.IconPixel(ControlIcon.Pause, 7, y), testName);
+        Equal(false, ControlOverlay.IconPixel(ControlIcon.Pause, 8, y), testName);
+        Equal(false, ControlOverlay.IconPixel(ControlIcon.Pause, 9, y), testName);
+        Equal(true, ControlOverlay.IconPixel(ControlIcon.Pause, 10, y), testName);
+        Equal(true, ControlOverlay.IconPixel(ControlIcon.Pause, 11, y), testName);
+    }
+
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 4, 4), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 11, 7), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 11, 8), testName);
+    Equal(false, ControlOverlay.IconPixel(ControlIcon.Resume, 7, 7), testName);
 }
 
 static async Task WsConnectionGenerationTracksSessions()
@@ -2201,6 +2232,17 @@ static void DispatcherMatchesPersistentSceneRoot()
         -12, "VIEWMANAGER", 0, true, -12, ("VIEWMANAGER", 0)), testName);
     Equal(false, UnityUiClickDispatcher.IsRootMatch(
         -12, "viewmanager", 0, false, -12, ("VIEWMANAGER", 0)), testName);
+}
+
+static void DispatcherNormalizesOnlySceneHandle()
+{
+    const string testName = nameof(DispatcherNormalizesOnlySceneHandle);
+    Equal(true, UnityUiClickDispatcher.IsRootMatch(
+        -280, "CANVAS", 0, false, -148, ("CANVAS", 0)), testName);
+    Equal(false, UnityUiClickDispatcher.IsRootMatch(
+        -280, "CANVAS/escaped", 0, false, -148, ("CANVAS", 0)), testName);
+    Equal(false, UnityUiClickDispatcher.IsRootMatch(
+        -280, "CANVAS", 1, false, -148, ("CANVAS", 0)), testName);
 }
 
 static void DispatcherFindsFirstScrollableRaycast()
