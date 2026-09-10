@@ -15,6 +15,8 @@
     <Compile Include="..\src\StatePayload.cs" Link="StatePayload.cs" />
     <Compile Include="..\src\ExtraRoots.cs" Link="ExtraRoots.cs" />
     <Compile Include="..\src\Plugin.cs" Link="Plugin.cs" />
+    <Compile Include="..\src\ControlBridge.cs" Link="ControlBridge.cs" />
+    <Compile Include="..\src\ControlOverlay.cs" Link="ControlOverlay.cs" />
     <Compile Include="..\src\KeyboardInput.cs" Link="KeyboardInput.cs" />
     <Compile Include="..\src\UnityUiClickDispatcher.cs" Link="UnityUiClickDispatcher.cs" />
   </ItemGroup>
@@ -48,6 +50,15 @@
       <Private>true</Private>
     </Reference>
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.UI.dll">
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.InputModule.dll">
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.TextRenderingModule.dll">
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.UIModule.dll">
       <Private>true</Private>
     </Reference>
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.dll">

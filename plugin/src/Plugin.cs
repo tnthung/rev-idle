@@ -15,6 +15,7 @@ public sealed class Plugin : BasePlugin
     public const string PluginVersion = "0.1.0";
 
     private static WsConnection? _connection;
+    private static ControlBridge? _controlBridge;
     private static ManualLogSource? _logger;
 
     public override void Load()
@@ -29,7 +30,10 @@ public sealed class Plugin : BasePlugin
 
         _connection = WsConnection.Create(configuredPort, message => _logger?.LogError($"[WebSocket] {message}"));
         if (_connection is not null)
+        {
             RegisterHandlers(_connection, () => GameController.data, () => 0);
+            _controlBridge = new ControlBridge(_connection, LogBridgeError);
+        }
         AddComponent<ScoreTicker>();
     }
 
@@ -180,10 +184,15 @@ public sealed class Plugin : BasePlugin
     }
 
     internal static void StopServer() => _connection?.Dispose();
+
+    internal static ControlBridge? ControlBridge
+        => _controlBridge;
 }
 
 public sealed class ScoreTicker : MonoBehaviour
 {
+    private ControlOverlay? _controlOverlay;
+
     public ScoreTicker(IntPtr pointer) : base(pointer)
     {
     }
@@ -191,10 +200,16 @@ public sealed class ScoreTicker : MonoBehaviour
     public void Update()
     {
         Plugin.PumpPackets(0);
+        if (Plugin.ControlBridge is not ControlBridge bridge)
+            return;
+        _controlOverlay ??= ControlOverlay.Create(bridge.Send);
+        _controlOverlay?.Apply(bridge.State, bridge.Connected);
     }
 
     public void OnDestroy()
     {
+        _controlOverlay?.Dispose();
+        _controlOverlay = null;
         Plugin.StopServer();
     }
 

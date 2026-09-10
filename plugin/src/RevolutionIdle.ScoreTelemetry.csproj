@@ -34,6 +34,15 @@
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.UI.dll">
       <Private>false</Private>
     </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.InputModule.dll">
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.TextRenderingModule.dll">
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.UIModule.dll">
+      <Private>false</Private>
+    </Reference>
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.dll">
       <Private>false</Private>
     </Reference>
