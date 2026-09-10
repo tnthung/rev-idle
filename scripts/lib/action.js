@@ -246,11 +246,14 @@ export class Action extends Function {
     await rev.transfer(this.ZODIAC_MERGE_RESULT_SLOT, this.ZODIAC_INV_SLOT(a));
   }
 
-  static async equipZodiac(n, to) {
+  static async equipZodiac(src, dest) {
     await this.gotoPlanet();
     await rev.sleep(100);
-    if (!this[`ZODIAC_PLANET_SLOT_${to}`]) throw new Error("Invalid equip target");
-    await rev.transfer(this.ZODIAC_INV_SLOT(n), this[`ZODIAC_PLANET_SLOT_${to}`]);
+    if (!this[`ZODIAC_PLANET_SLOT_${dest}`]) throw new Error("Invalid equip target");
+
+    await rev.transfer(
+      this[`ZODIAC_PLANET_SLOT_${src}`] || this.ZODIAC_INV_SLOT(src),
+      this[`ZODIAC_PLANET_SLOT_${dest}`]);
   }
 
   static async takeOffZodiac(from) {
