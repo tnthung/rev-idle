@@ -18,4 +18,8 @@
 - [x] Change resume icon to point to the right.
 - [x] Add lock mode to prevent mis-clicks.
 - [ ] Add a script list UI for quick access.
+- [ ] `onDisconnect` hook: called when a disconnection occurs.
+- [ ] `onConnect` hook: called when a new connection is established.
+- [ ] `afterLoad` hook: called after the script load/reload, before execution starts.
+- [ ] `beforeStop` hook: called before the script stops.
 - [ ] Port changing and Auto-port detection.
