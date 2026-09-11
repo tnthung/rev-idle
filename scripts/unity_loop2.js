@@ -93,8 +93,10 @@ export default async function main() {
       const hpDiff       = lastHP.subtract(nowHp);
       const damagePerSec = hpDiff.divide(timeDiff);
 
-      if (damagePerSec.isZero || nowHp.divide(damagePerSec).compareTo(executionConfig.attack_eta_threshold_s) > 0)
+      if (damagePerSec.isZero || nowHp.divide(damagePerSec).compareTo(executionConfig.attack_eta_threshold_s) > 0) {
         await Action.unitWith(await executionConfig.zodiacToGetOnNextUnit());
+        return;
+      }
     }
   }
 
