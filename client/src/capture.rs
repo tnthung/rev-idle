@@ -40,12 +40,47 @@ fn is_left_button_down(message: WPARAM) -> bool {
     message.0 as u32 == WM_LBUTTONDOWN
 }
 
-fn claim_capture(enabled: &AtomicBool, message: WPARAM) -> bool {
-    is_left_button_down(message) && enabled.swap(false, Ordering::AcqRel)
-}
-
 fn capture_event(enabled: bool, message: WPARAM, point: POINT) -> Option<POINT> {
     (enabled && is_left_button_down(message)).then_some(point)
+}
+
+/// `in_bounds` is a closure (not a plain bool) so the expensive game-window
+/// lookup it wraps is only ever evaluated for a left-button-down while
+/// capture is armed, never for every mouse message.
+fn claim_capture(enabled: &AtomicBool, message: WPARAM, in_bounds: impl FnOnce() -> bool) -> bool {
+    is_left_button_down(message)
+        && enabled.load(Ordering::Acquire)
+        && in_bounds()
+        && enabled.swap(false, Ordering::AcqRel)
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum MouseAction {
+    PassThrough,
+    Consume,
+    ConsumeAndNotify(POINT),
+}
+
+fn decide_mouse_action(
+    message: WPARAM,
+    point: POINT,
+    in_bounds: impl FnOnce() -> bool,
+) -> MouseAction {
+    if message.0 as u32 == WM_LBUTTONUP && CAPTURE_LEFT_BUTTON_DOWN.swap(false, Ordering::AcqRel) {
+        return MouseAction::Consume;
+    }
+    if claim_capture(&CAPTURE_ENABLED, message, in_bounds) {
+        CAPTURE_LEFT_BUTTON_DOWN.store(true, Ordering::Release);
+        return MouseAction::ConsumeAndNotify(point);
+    }
+    MouseAction::PassThrough
+}
+
+fn point_within_game_window(point: POINT) -> bool {
+    matches!(
+        window::screen_to_client_position(point.x, point.y),
+        Ok(Some(_))
+    )
 }
 
 unsafe extern "system" fn mouse_hook(
@@ -54,27 +89,25 @@ unsafe extern "system" fn mouse_hook(
     data: LPARAM,
 ) -> LRESULT {
     if code >= 0 && data.0 != 0 {
-        if message.0 as u32 == WM_LBUTTONUP
-            && CAPTURE_LEFT_BUTTON_DOWN.swap(false, Ordering::AcqRel)
-        {
-            return LRESULT(1);
-        }
         let hook_data = unsafe { &*(data.0 as *const MSLLHOOKSTRUCT) };
-        if claim_capture(&CAPTURE_ENABLED, message) {
-            let point = hook_data.pt;
-            CAPTURE_LEFT_BUTTON_DOWN.store(true, Ordering::Release);
-            let thread_id = CAPTURE_THREAD_ID.load(Ordering::Acquire);
-            if thread_id != 0 {
-                let _ = unsafe {
-                    PostThreadMessageW(
-                        thread_id,
-                        CAPTURE_MESSAGE,
-                        WPARAM(point.x as u32 as usize),
-                        LPARAM(point.y as isize),
-                    )
-                };
+        let point = hook_data.pt;
+        match decide_mouse_action(message, point, || point_within_game_window(point)) {
+            MouseAction::PassThrough => {}
+            MouseAction::Consume => return LRESULT(1),
+            MouseAction::ConsumeAndNotify(point) => {
+                let thread_id = CAPTURE_THREAD_ID.load(Ordering::Acquire);
+                if thread_id != 0 {
+                    let _ = unsafe {
+                        PostThreadMessageW(
+                            thread_id,
+                            CAPTURE_MESSAGE,
+                            WPARAM(point.x as u32 as usize),
+                            LPARAM(point.y as isize),
+                        )
+                    };
+                }
+                return LRESULT(1);
             }
-            return LRESULT(1);
         }
     }
 
@@ -246,18 +279,23 @@ mod tests {
 
     #[test]
     fn captured_click_is_consumed_including_release_after_capture_stops() {
-        let hook_data = MSLLHOOKSTRUCT::default();
+        let point = POINT { x: 10, y: 20 };
         CaptureState.set_enabled(true);
-        let press = unsafe {
-            mouse_hook(0, WPARAM(WM_LBUTTONDOWN as usize), LPARAM(&hook_data as *const _ as isize))
-        };
+        let press = decide_mouse_action(WPARAM(WM_LBUTTONDOWN as usize), point, || true);
         CaptureState.set_enabled(false);
-        let release = unsafe {
-            mouse_hook(0, WPARAM(WM_LBUTTONUP as usize),
-                LPARAM(&hook_data as *const _ as isize))
-        };
-        assert_eq!(press, LRESULT(1));
-        assert_eq!(release, LRESULT(1));
+        let release = decide_mouse_action(WPARAM(WM_LBUTTONUP as usize), point, || true);
+        assert_eq!(press, MouseAction::ConsumeAndNotify(point));
+        assert_eq!(release, MouseAction::Consume);
+    }
+
+    #[test]
+    fn click_outside_the_game_window_passes_through_and_leaves_capture_armed() {
+        let point = POINT { x: 10, y: 20 };
+        CaptureState.set_enabled(true);
+        let action = decide_mouse_action(WPARAM(WM_LBUTTONDOWN as usize), point, || false);
+        assert_eq!(action, MouseAction::PassThrough);
+        assert!(CaptureState.is_enabled());
+        CaptureState.set_enabled(false);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -340,8 +378,15 @@ mod tests {
     #[test]
     fn capture_claim_disarms_before_coordinate_lookup() {
         let enabled = AtomicBool::new(true);
-        assert!(claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize)));
+        assert!(claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), || true));
         assert!(!enabled.load(Ordering::Acquire));
-        assert!(!claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize)));
+        assert!(!claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), || true));
+    }
+
+    #[test]
+    fn claim_capture_ignores_clicks_outside_the_game_window_and_stays_armed() {
+        let enabled = AtomicBool::new(true);
+        assert!(!claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), || false));
+        assert!(enabled.load(Ordering::Acquire));
     }
 }
