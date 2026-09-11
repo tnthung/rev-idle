@@ -276,6 +276,26 @@ export class Action extends Function {
   static gotoUnityTrial = this.gotoUnity.clone().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/tab_menu[1]/tab_trials[1]");
   static resetUnity     = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/trials[1]/content[0]/ctn_right[1]/ctn_trial_topbar[1]/btn_clear[3]");
 
+  static async upgradeAttackRings() {
+    for (let i=0; i<5; i++) {
+      await rev
+        .invoke(`scene:-284/CANVAS[0]/safe_area[0]/views[1]/attacks[4]/content[0]/panel[0]/buyables[2]/buy_attacks_item_${i}[${i}]/content[0]/btn_buy[1]`)
+        .catch(_ => {});
+      await rev.sleep(100);
+      await rev
+        .invoke(`scene:-284/CANVAS[0]/safe_area[0]/views[1]/attacks[4]/content[0]/panel[0]/buyables[2]/buy_attacks_item_${i}[${i}]/content[0]/btn_ascend[0]`)
+        .catch(_ => {});
+    }
+  }
+
+  static async buyRelic(n) {
+    n = Number(n);
+    if (n < 0 || n > 70) throw new Error("Invalid relic button index");
+    await rev
+      .invoke(`scene:-284/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/relics[2]/content[0]/scroll_view[1]/viewport[1]/content[0]/attack_relic_item_${n}[${n}]/content[0]/ctn_bottom[2]/ctn_info[0]/btn_buy[1]`)
+      .catch(_ => {});
+  }
+
 
   static gotoAutomation = new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_automation[6]");
 

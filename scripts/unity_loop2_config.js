@@ -132,6 +132,9 @@ export default {
   ECWaitTime: 3000,
   attackMode: true,
 
+  relicsToBuy: [14, 17, 9, 13, 16, 12, 10, 11, 3, 1, 6, 7],
+  waitBetweenRelicBuys: 1000,
+
   async zodiacToGetOnNextUnit() {
     const POSITION = [
       "Left",

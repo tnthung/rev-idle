@@ -224,6 +224,14 @@ async function bootstrapEternity() {
   await mergeAndSellZodiac().catch(e =>
     console.error("Error happened while merging and selling zodiac:\n", e));
 
+  (async () => {
+    await Action.upgradeAttackRings();
+    for (const relic of executionConfig.relicsToBuy) {
+      await Action.buyRelic(relic);
+      await rev.sleep(executionConfig.waitBetweenRelicBuys);
+    }
+  })();
+
   console.log("Bootstrapping eternity...");
   rev.global.unityStart = Date.now();
 
