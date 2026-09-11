@@ -3,8 +3,8 @@ use windows::{
         Foundation::{POINT, RECT},
         Graphics::Gdi::ClientToScreen,
         UI::WindowsAndMessaging::{
-            GetClientRect, GetWindowRect, SetWindowPos, ShowWindow,
-            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_RESTORE,
+            GetAncestor, GetClientRect, GetWindowRect, SetWindowPos, ShowWindow, WindowFromPoint,
+            GA_ROOT, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_RESTORE,
         },
     },
 };
@@ -57,6 +57,22 @@ pub(crate) fn screen_to_client_position(
     screen_y: i32,
 ) -> Result<Option<(i32, i32, i32, i32)>, String> {
     let hwnd = find_game_window()?;
+    // A click's screen coordinates can still fall within a minimized (or
+    // simply not-focused, or partially covered by another window) game
+    // window's last-known geometry, since the OS doesn't clear
+    // GetClientRect/ClientToScreen just because a window isn't what's
+    // actually visible there. WindowFromPoint answers the question real
+    // mouse hit-testing would: which window is actually on top at this
+    // exact screen pixel. That covers minimized (never topmost anywhere),
+    // fully/partially covered by another window (that window is returned
+    // instead), and "visible but not yet focused" (correctly resolves to
+    // the game, since clicking it would activate and hit it) all in one
+    // check — a foreground-window check alone gets the last two wrong.
+    let point = POINT { x: screen_x, y: screen_y };
+    let hit = unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) };
+    if hit != hwnd {
+        return Ok(None);
+    }
     let mut client_rect = RECT::default();
     unsafe { GetClientRect(hwnd, &mut client_rect) }
         .map_err(|error| format!("GetClientRect failed: {error}"))?;
