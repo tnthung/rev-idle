@@ -17,5 +17,6 @@
   ,"ResumeScript": {}
   ,"StartCapture": {}
   ,"StopCapture": {}
-  ,"StateUpdate": { "phase": "paused", "capture": true }
+  ,"LockScript": {}
+  ,"StateUpdate": { "phase": "paused", "capture": true, "locked": false }
 }

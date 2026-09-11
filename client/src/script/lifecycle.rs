@@ -7,7 +7,7 @@ use super::State;
 use crate::{
     app::{ActionGate, PauseUpdate, ScriptCommand, StateUpdate},
     bridge::WsConnection,
-    capture::CaptureState,
+    capture::{CaptureState, LockState},
     window::Win32WindowControl,
 };
 use std::{
@@ -43,6 +43,7 @@ pub(crate) async fn run(
     script_running: Arc<AtomicBool>,
     console_locked: Arc<AtomicBool>,
     capture_state: CaptureState,
+    lock_state: LockState,
     state_updates: watch::Sender<StateUpdate>,
 ) -> Result<(), String> {
     let mouse: SharedMouse = Rc::new(RefCell::new(BridgeMouseInput {
@@ -60,6 +61,7 @@ pub(crate) async fn run(
         script_running,
         console_locked,
         capture_state,
+        lock_state,
         state_updates,
     )
     .await
@@ -78,7 +80,8 @@ pub(super) async fn run_with_controls(
     let script_running = Arc::new(AtomicBool::new(false));
     let console_locked = Arc::new(AtomicBool::new(false));
     let capture_state = CaptureState::default();
-    let (state_updates, _) = watch::channel(StateUpdate::new(false, false, false, false));
+    let lock_state = LockState::default();
+    let (state_updates, _) = watch::channel(StateUpdate::new(false, false, false, false, false));
     run_with_controls_and_lifecycle(
         commands,
         WsConnection::disconnected_for_test(),
@@ -90,6 +93,7 @@ pub(super) async fn run_with_controls(
         script_running,
         console_locked,
         capture_state,
+        lock_state,
         state_updates,
     )
     .await
@@ -108,6 +112,7 @@ pub(super) async fn run_with_controls_and_state(
     let script_running = Arc::new(AtomicBool::new(false));
     let console_locked = Arc::new(AtomicBool::new(false));
     let capture_state = CaptureState::default();
+    let lock_state = LockState::default();
     run_with_controls_and_lifecycle(
         commands,
         WsConnection::disconnected_for_test(),
@@ -119,6 +124,7 @@ pub(super) async fn run_with_controls_and_state(
         script_running,
         console_locked,
         capture_state,
+        lock_state,
         state_updates,
     )
     .await
@@ -136,6 +142,7 @@ async fn run_with_controls_and_lifecycle(
     script_running: Arc<AtomicBool>,
     console_locked: Arc<AtomicBool>,
     capture_state: CaptureState,
+    lock_state: LockState,
     state_updates: watch::Sender<StateUpdate>,
 ) -> Result<(), String> {
     let mut current_path = initial_path;
@@ -178,6 +185,7 @@ async fn run_with_controls_and_lifecycle(
             session.is_some(),
             paused,
             capture_state.is_enabled(),
+            lock_state.is_enabled(),
         );
         if *state_updates.borrow() != state {
             state_updates.send_replace(state);
@@ -259,6 +267,7 @@ async fn run_with_controls_and_lifecycle(
             match command {
                 ScriptCommand::Load(path) => {
                     capture_state.set_enabled(false);
+                    lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
                     session = None;
                     script_running.store(false, Ordering::Release);
@@ -277,6 +286,7 @@ async fn run_with_controls_and_lifecycle(
                 }
                 ScriptCommand::Reload => {
                     capture_state.set_enabled(false);
+                    lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
                     session = None;
                     script_running.store(false, Ordering::Release);
@@ -295,6 +305,7 @@ async fn run_with_controls_and_lifecycle(
                     }
                 }
                 ScriptCommand::Pause => {
+                    lock_state.set_enabled(false);
                     if session.is_none() {
                         controls.actions_paused.set_paused(false);
                         println!("no script is running");
@@ -332,6 +343,7 @@ async fn run_with_controls_and_lifecycle(
                     }
                 }
                 ScriptCommand::Stop => {
+                    lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
                     if session.take().is_some() {
                         script_running.store(false, Ordering::Release);
@@ -367,8 +379,12 @@ async fn run_with_controls_and_lifecycle(
                 ScriptCommand::StopCapture | ScriptCommand::CaptureConsumed => {
                     capture_state.set_enabled(false);
                 }
+                ScriptCommand::Lock => {
+                    lock_state.set_enabled(true);
+                }
                 ScriptCommand::Exit => {
                     capture_state.set_enabled(false);
+                    lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
                     script_running.store(false, Ordering::Release);
                     return Ok(());

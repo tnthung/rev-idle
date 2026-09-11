@@ -20,8 +20,17 @@ use crate::{bridge::WsConnection, window};
 static CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
 static CAPTURE_LEFT_BUTTON_DOWN: AtomicBool = AtomicBool::new(false);
 static CAPTURE_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
 
 const CAPTURE_MESSAGE: u32 = WM_APP + 1;
+
+/// Width/height (in client pixels) of the overlay's button row, bottom-right
+/// anchored, that `ControlOverlay.cs` renders in the game window. Clicks
+/// inside this rect are exempt from the lock-mode block below so the
+/// Reload/Stop and Resume/Pause buttons stay usable while locked. Must be
+/// kept in sync with the overlay's actual layout.
+const OVERLAY_CONTROLS_WIDTH: i32 = 130;
+const OVERLAY_CONTROLS_HEIGHT: i32 = 50;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CaptureState;
@@ -36,22 +45,39 @@ impl CaptureState {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LockState;
+
+impl LockState {
+    pub(crate) fn is_enabled(self) -> bool {
+        LOCK_ENABLED.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_enabled(self, enabled: bool) {
+        LOCK_ENABLED.store(enabled, Ordering::Release);
+    }
+}
+
 fn is_left_button_down(message: WPARAM) -> bool {
     message.0 as u32 == WM_LBUTTONDOWN
+}
+
+fn is_left_button_up(message: WPARAM) -> bool {
+    message.0 as u32 == WM_LBUTTONUP
 }
 
 fn capture_event(enabled: bool, message: WPARAM, point: POINT) -> Option<POINT> {
     (enabled && is_left_button_down(message)).then_some(point)
 }
 
-/// `in_bounds` is a closure (not a plain bool) so the expensive game-window
-/// lookup it wraps is only ever evaluated for a left-button-down while
-/// capture is armed, never for every mouse message.
-fn claim_capture(enabled: &AtomicBool, message: WPARAM, in_bounds: impl FnOnce() -> bool) -> bool {
-    is_left_button_down(message)
-        && enabled.load(Ordering::Acquire)
-        && in_bounds()
-        && enabled.swap(false, Ordering::AcqRel)
+fn claim_capture(enabled: &AtomicBool, message: WPARAM, in_bounds: bool) -> bool {
+    is_left_button_down(message) && in_bounds && enabled.swap(false, Ordering::AcqRel)
+}
+
+/// Whether (x, y) within a client area of (width, height) falls inside the
+/// overlay's own button row, which lock mode always lets through.
+fn within_overlay_controls(x: i32, y: i32, width: i32, height: i32) -> bool {
+    x >= width - OVERLAY_CONTROLS_WIDTH && y >= height - OVERLAY_CONTROLS_HEIGHT
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -61,26 +87,37 @@ enum MouseAction {
     ConsumeAndNotify(POINT),
 }
 
+/// `location`, when present, is the click's (x, y, width, height) in the
+/// game's client area, resolved by the caller only when a lookup is
+/// actually warranted (see `mouse_hook`) so this stays cheap to call for
+/// every mouse message. `lock_enabled` is likewise resolved by the caller
+/// (rather than read from `LOCK_ENABLED` here) so unit tests never have to
+/// touch the real global, which is also written by the lifecycle command
+/// loop and would otherwise be a cross-test race.
 fn decide_mouse_action(
     message: WPARAM,
     point: POINT,
-    in_bounds: impl FnOnce() -> bool,
+    location: Option<(i32, i32, i32, i32)>,
+    lock_enabled: bool,
 ) -> MouseAction {
-    if message.0 as u32 == WM_LBUTTONUP && CAPTURE_LEFT_BUTTON_DOWN.swap(false, Ordering::AcqRel) {
+    if is_left_button_up(message) && CAPTURE_LEFT_BUTTON_DOWN.swap(false, Ordering::AcqRel) {
         return MouseAction::Consume;
     }
-    if claim_capture(&CAPTURE_ENABLED, message, in_bounds) {
+
+    if (is_left_button_down(message) || is_left_button_up(message)) && lock_enabled {
+        match location {
+            Some((x, y, width, height)) if !within_overlay_controls(x, y, width, height) => {
+                return MouseAction::Consume;
+            }
+            _ => {}
+        }
+    }
+
+    if claim_capture(&CAPTURE_ENABLED, message, location.is_some()) {
         CAPTURE_LEFT_BUTTON_DOWN.store(true, Ordering::Release);
         return MouseAction::ConsumeAndNotify(point);
     }
     MouseAction::PassThrough
-}
-
-fn point_within_game_window(point: POINT) -> bool {
-    matches!(
-        window::screen_to_client_position(point.x, point.y),
-        Ok(Some(_))
-    )
 }
 
 unsafe extern "system" fn mouse_hook(
@@ -91,7 +128,13 @@ unsafe extern "system" fn mouse_hook(
     if code >= 0 && data.0 != 0 {
         let hook_data = unsafe { &*(data.0 as *const MSLLHOOKSTRUCT) };
         let point = hook_data.pt;
-        match decide_mouse_action(message, point, || point_within_game_window(point)) {
+        let lock_enabled = LOCK_ENABLED.load(Ordering::Acquire);
+        let needs_location = (is_left_button_down(message) || is_left_button_up(message))
+            && (CAPTURE_ENABLED.load(Ordering::Acquire) || lock_enabled);
+        let location = needs_location
+            .then(|| window::screen_to_client_position(point.x, point.y).ok().flatten())
+            .flatten();
+        match decide_mouse_action(message, point, location, lock_enabled) {
             MouseAction::PassThrough => {}
             MouseAction::Consume => return LRESULT(1),
             MouseAction::ConsumeAndNotify(point) => {
@@ -277,13 +320,15 @@ impl Drop for CaptureWorker {
 mod tests {
     use super::*;
 
+    const IN_GAME: Option<(i32, i32, i32, i32)> = Some((10, 20, 1920, 1080));
+
     #[test]
     fn captured_click_is_consumed_including_release_after_capture_stops() {
         let point = POINT { x: 10, y: 20 };
         CaptureState.set_enabled(true);
-        let press = decide_mouse_action(WPARAM(WM_LBUTTONDOWN as usize), point, || true);
+        let press = decide_mouse_action(WPARAM(WM_LBUTTONDOWN as usize), point, IN_GAME, false);
         CaptureState.set_enabled(false);
-        let release = decide_mouse_action(WPARAM(WM_LBUTTONUP as usize), point, || true);
+        let release = decide_mouse_action(WPARAM(WM_LBUTTONUP as usize), point, IN_GAME, false);
         assert_eq!(press, MouseAction::ConsumeAndNotify(point));
         assert_eq!(release, MouseAction::Consume);
     }
@@ -292,10 +337,48 @@ mod tests {
     fn click_outside_the_game_window_passes_through_and_leaves_capture_armed() {
         let point = POINT { x: 10, y: 20 };
         CaptureState.set_enabled(true);
-        let action = decide_mouse_action(WPARAM(WM_LBUTTONDOWN as usize), point, || false);
+        let action = decide_mouse_action(WPARAM(WM_LBUTTONDOWN as usize), point, None, false);
         assert_eq!(action, MouseAction::PassThrough);
         assert!(CaptureState.is_enabled());
         CaptureState.set_enabled(false);
+    }
+
+    // These lock-mode tests pass `lock_enabled` directly rather than going
+    // through `LockState`/`LOCK_ENABLED` (the real global also written by
+    // the lifecycle command loop) so they can't race against tests that
+    // exercise the real lock command end-to-end.
+
+    #[test]
+    fn locked_click_outside_overlay_controls_is_consumed_and_stays_locked() {
+        let point = POINT { x: 10, y: 20 };
+        let down = decide_mouse_action(WPARAM(WM_LBUTTONDOWN as usize), point, Some((100, 100, 1920, 1080)), true);
+        let up = decide_mouse_action(WPARAM(WM_LBUTTONUP as usize), point, Some((100, 100, 1920, 1080)), true);
+        assert_eq!(down, MouseAction::Consume);
+        assert_eq!(up, MouseAction::Consume);
+    }
+
+    #[test]
+    fn locked_click_inside_overlay_controls_passes_through() {
+        let point = POINT { x: 1850, y: 1060 };
+        // 1920x1080 client area; (1850, 1060) falls inside the bottom-right
+        // 130x50 overlay button rect.
+        let down = decide_mouse_action(WPARAM(WM_LBUTTONDOWN as usize), point, Some((1850, 1060, 1920, 1080)), true);
+        assert_eq!(down, MouseAction::PassThrough);
+    }
+
+    #[test]
+    fn locked_click_outside_the_game_window_entirely_passes_through() {
+        let point = POINT { x: 10, y: 20 };
+        let action = decide_mouse_action(WPARAM(WM_LBUTTONDOWN as usize), point, None, true);
+        assert_eq!(action, MouseAction::PassThrough);
+    }
+
+    #[test]
+    fn overlay_controls_rect_matches_the_bottom_right_corner() {
+        assert!(within_overlay_controls(1850, 1060, 1920, 1080));
+        assert!(within_overlay_controls(1790, 1030, 1920, 1080));
+        assert!(!within_overlay_controls(1789, 1060, 1920, 1080));
+        assert!(!within_overlay_controls(1850, 1029, 1920, 1080));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -378,15 +461,15 @@ mod tests {
     #[test]
     fn capture_claim_disarms_before_coordinate_lookup() {
         let enabled = AtomicBool::new(true);
-        assert!(claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), || true));
+        assert!(claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), true));
         assert!(!enabled.load(Ordering::Acquire));
-        assert!(!claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), || true));
+        assert!(!claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), true));
     }
 
     #[test]
     fn claim_capture_ignores_clicks_outside_the_game_window_and_stays_armed() {
         let enabled = AtomicBool::new(true);
-        assert!(!claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), || false));
+        assert!(!claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), false));
         assert!(enabled.load(Ordering::Acquire));
     }
 }

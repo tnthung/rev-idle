@@ -6,7 +6,8 @@ internal enum ControlCommand
     Stop,
     Resume,
     Pause,
-    Capture
+    Capture,
+    Lock
 }
 
 internal enum ScriptPhase
@@ -17,7 +18,7 @@ internal enum ScriptPhase
     Paused
 }
 
-internal readonly record struct ControlState(ScriptPhase Phase, bool Capture);
+internal readonly record struct ControlState(ScriptPhase Phase, bool Capture, bool Locked = false);
 
 internal sealed class ControlBridge
 {
@@ -53,7 +54,7 @@ internal sealed class ControlBridge
                 if (context.CancellationToken.IsCancellationRequested ||
                     _connection.ConnectionGeneration != context.Generation)
                     return Task.CompletedTask;
-                _state = new ControlState(phase.Value, packet.Capture);
+                _state = new ControlState(phase.Value, packet.Capture, packet.Locked);
                 _stateGeneration = context.Generation;
             }
             return Task.CompletedTask;
@@ -100,6 +101,7 @@ internal sealed class ControlBridge
             ControlCommand.Resume => new ResumeScript(),
             ControlCommand.Pause => new PauseScript(),
             ControlCommand.Capture => new StartCapture(),
+            ControlCommand.Lock => new LockScript(),
             _ => throw new ArgumentOutOfRangeException(nameof(command))
         };
         Task send;

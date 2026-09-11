@@ -16,5 +16,6 @@
 - [x] In-game UI injection.
 - [x] Make capture button background Red when in capture mode.
 - [x] Change resume icon to point to the right.
+- [x] Add lock mode to prevent mis-clicks.
 - [ ] Add a script list UI for quick access.
 - [ ] Port changing and Auto-port detection.

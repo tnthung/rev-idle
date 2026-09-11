@@ -44,11 +44,13 @@ await ControlBridgeIgnoresOldGenerationHandlerAfterReconnect();
 await ControlBridgeDoesNotSendUsingReconnectedGeneration();
 await WsPacketContextCarriesOriginGeneration();
 ControlPresentationProjectsClosedPhases();
+ControlPresentationAppliesLockOverrides();
 ControlIconsPreserveNegativeSpace();
 ControlOverlayUsesRedCaptureBackground();
 ControlOverlayDefinesSelectedButtonColor();
 ControlOverlayRetainsInactiveIconAssets();
 ControlOverlayBindsButtonsToBackgroundGraphic();
+ControlOverlayNeverHoldsLockLocally();
 DispatcherSkipsNonClickableRaycasts();
 DispatcherMapsClientCoordinatesToUnityCoordinates();
 DispatcherParsesExactHierarchyPath();
@@ -127,6 +129,7 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("ResumeScript", new ResumeScript()),
         ("StartCapture", new StartCapture()),
         ("StopCapture", new StopCapture()),
+        ("LockScript", new LockScript()),
         ("StateUpdate", new StateUpdate("paused", true))
     };
 
@@ -675,6 +678,39 @@ static void ControlPresentationProjectsClosedPhases()
     Equal(false, disconnected.CaptureEnabled, testName);
 }
 
+static void ControlPresentationAppliesLockOverrides()
+{
+    const string testName = nameof(ControlPresentationAppliesLockOverrides);
+
+    ControlPresentation runningLocked = ControlPresentation.From(new ControlState(ScriptPhase.Running, false), locked: true);
+    Equal(ControlIcon.Lock, runningLocked.ResumePauseIcon, testName);
+    Equal(false, runningLocked.CaptureEnabled, testName);
+    Equal(true, runningLocked.ReloadStopEnabled, testName);
+    Equal(true, runningLocked.ResumePauseEnabled, testName);
+    Equal(ControlIcon.Stop, runningLocked.ReloadStopIcon, testName);
+
+    ControlPresentation pausedLocked = ControlPresentation.From(new ControlState(ScriptPhase.Paused, false), locked: true);
+    Equal(ControlIcon.Lock, pausedLocked.ResumePauseIcon, testName);
+    Equal(false, pausedLocked.CaptureEnabled, testName);
+
+    ControlPresentation pausedUnlocked = ControlPresentation.From(new ControlState(ScriptPhase.Paused, false), locked: false);
+    Equal(ControlIcon.Resume, pausedUnlocked.ResumePauseIcon, testName);
+    Equal(true, pausedUnlocked.CaptureEnabled, testName);
+
+    ControlPresentation capturingLocked = ControlPresentation.From(new ControlState(ScriptPhase.Paused, true), locked: true);
+    Equal(false, capturingLocked.ReloadStopEnabled, testName);
+    Equal(false, capturingLocked.ResumePauseEnabled, testName);
+    Equal(false, capturingLocked.CaptureEnabled, testName);
+
+    ControlPresentation disconnectedLocked = ControlPresentation.From(null, locked: true);
+    Equal(false, disconnectedLocked.ReloadStopEnabled, testName);
+    Equal(false, disconnectedLocked.ResumePauseEnabled, testName);
+    Equal(false, disconnectedLocked.CaptureEnabled, testName);
+
+    ControlPresentation unspecified = ControlPresentation.From(new ControlState(ScriptPhase.Running, false));
+    Equal(ControlIcon.Pause, unspecified.ResumePauseIcon, testName);
+}
+
 static void ControlIconsPreserveNegativeSpace()
 {
     const string testName = nameof(ControlIconsPreserveNegativeSpace);
@@ -685,6 +721,16 @@ static void ControlIconsPreserveNegativeSpace()
     Equal(true, ControlOverlay.IconPixel(ControlIcon.Stop, 4, 4), testName);
     Equal(false, ControlOverlay.IconPixel(ControlIcon.Stop, 7, 7), testName);
     Equal(true, ControlOverlay.IconPixel(ControlIcon.Stop, 11, 11), testName);
+
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Lock, 3, 1), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Lock, 12, 7), testName);
+    Equal(false, ControlOverlay.IconPixel(ControlIcon.Lock, 2, 1), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Lock, 5, 9), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Lock, 10, 9), testName);
+    Equal(false, ControlOverlay.IconPixel(ControlIcon.Lock, 7, 9), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Lock, 7, 12), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Lock, 7, 11), testName);
+    Equal(false, ControlOverlay.IconPixel(ControlIcon.Lock, 7, 10), testName);
 
     for (int y = 4; y <= 11; y++)
     {
@@ -748,6 +794,24 @@ static void ControlOverlayRetainsInactiveIconAssets()
         AppContext.BaseDirectory, "..", "..", "..", "..", "src", "ControlOverlay.cs")));
     Equal(1, source.Split("texture.hideFlags = HideFlags.DontUnloadUnusedAsset;", StringSplitOptions.None).Length - 1, testName);
     Equal(1, source.Split("_icons[(int)icon].hideFlags = HideFlags.DontUnloadUnusedAsset;", StringSplitOptions.None).Length - 1, testName);
+}
+
+static void ControlOverlayNeverHoldsLockLocally()
+{
+    const string testName = nameof(ControlOverlayNeverHoldsLockLocally);
+    string source = File.ReadAllText(Path.GetFullPath(Path.Combine(
+        AppContext.BaseDirectory, "..", "..", "..", "..", "src", "ControlOverlay.cs")));
+    // Blocking clicks is the client (Rust) process's job now, via its own
+    // OS-level mouse hook — the overlay must not try to do it itself with a
+    // full-screen raycast blocker.
+    Equal(0, source.Split("Lock Blocker", StringSplitOptions.None).Length - 1, testName);
+    Equal(0, source.Split("_lockBlocker", StringSplitOptions.None).Length - 1, testName);
+    // `_locked` must only ever be assigned from the state the client
+    // reports, never toggled locally by a click handler.
+    Equal(1, source.Split("_locked = state?.Locked == true;", StringSplitOptions.None).Length - 1, testName);
+    Equal(0, source.Split("_locked = true", StringSplitOptions.None).Length - 1, testName);
+    Equal(0, source.Split("_locked = false", StringSplitOptions.None).Length - 1, testName);
+    Equal(1, source.Split("publish(ControlCommand.Lock);", StringSplitOptions.None).Length - 1, testName);
 }
 
 static async Task WsConnectionGenerationTracksSessions()

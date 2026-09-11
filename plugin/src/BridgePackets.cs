@@ -20,4 +20,5 @@ internal sealed record PauseScript;
 internal sealed record ResumeScript;
 internal sealed record StartCapture;
 internal sealed record StopCapture;
-internal sealed record StateUpdate(string Phase, bool Capture);
+internal sealed record LockScript;
+internal sealed record StateUpdate(string Phase, bool Capture, bool Locked = false);

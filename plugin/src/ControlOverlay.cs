@@ -12,7 +12,8 @@ internal enum ControlIcon
     Stop,
     Resume,
     Pause,
-    Capture
+    Capture,
+    Lock
 }
 
 internal enum ControlPixel
@@ -29,17 +30,20 @@ internal readonly record struct ControlPresentation(
     bool ResumePauseEnabled,
     bool CaptureEnabled)
 {
-    public static ControlPresentation From(ControlState? state)
+    public static ControlPresentation From(ControlState? state) => From(state, locked: false);
+
+    public static ControlPresentation From(ControlState? state, bool locked)
     {
         if (state is null || state.Value.Capture)
             return new(ControlIcon.Reload, false, ControlIcon.Resume, false, false);
-        return state.Value.Phase switch
+        ControlPresentation presentation = state.Value.Phase switch
         {
             ScriptPhase.Stopped => new(ControlIcon.Reload, true, ControlIcon.Resume, false, true),
             ScriptPhase.Running => new(ControlIcon.Stop, true, ControlIcon.Pause, true, false),
             ScriptPhase.Paused => new(ControlIcon.Stop, true, ControlIcon.Resume, true, true),
             _ => new(ControlIcon.Reload, false, ControlIcon.Resume, false, false)
         };
+        return locked ? presentation with { ResumePauseIcon = ControlIcon.Lock, CaptureEnabled = false } : presentation;
     }
 }
 
@@ -67,6 +71,15 @@ internal sealed class ControlOverlay : IDisposable
     private readonly Font _font;
     private ControlCommand _reloadStopCommand;
     private ControlCommand _resumePauseCommand;
+
+    // Lock is owned by the client (Rust) process, which is the only thing
+    // that actually blocks input; this just mirrors the last StateUpdate so
+    // click handlers know whether a double-click should enter or exit lock.
+    // It is never set independently of Apply(ControlState?).
+    private bool _locked;
+    private DateTime _resumePauseLastClickUtc;
+    private DateTime _reloadStopLastClickUtc;
+    private static readonly TimeSpan DoubleClickWindow = TimeSpan.FromMilliseconds(400);
 
     public static ControlOverlay? Create(Action<ControlCommand> publish)
     {
@@ -107,8 +120,9 @@ internal sealed class ControlOverlay : IDisposable
         }
         _texture.Apply();
         _sprite = Sprite.Create(_texture, new Rect(0, 0, 12, 12), new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect, new Vector4(4, 4, 4, 4));
-        _iconTextures = new Texture2D[5];
-        _icons = new Sprite[5];
+        int iconCount = Enum.GetValues<ControlIcon>().Length;
+        _iconTextures = new Texture2D[iconCount];
+        _icons = new Sprite[iconCount];
         foreach (ControlIcon icon in Enum.GetValues<ControlIcon>())
         {
             Texture2D texture = new(16, 16, TextureFormat.RGBA32, false)
@@ -198,6 +212,51 @@ internal sealed class ControlOverlay : IDisposable
             return (button, label, image);
         }
 
+        // Double-click detection uses a plain wall-clock timestamp rather
+        // than Unity's PointerEventData.clickCount: the latter requires
+        // routing clicks through a custom EventTrigger PointerClick entry
+        // instead of Button.onClick, which did not fire reliably under
+        // IL2CppInterop and silently broke every click (single or double).
+        void HandleResumePauseClick()
+        {
+            DateTime now = DateTime.UtcNow;
+            bool isDoubleClick = now - _resumePauseLastClickUtc <= DoubleClickWindow;
+            _resumePauseLastClickUtc = isDoubleClick ? DateTime.MinValue : now;
+            if (_locked)
+            {
+                // Only double-click acts while locked; the client (Rust)
+                // clears lock itself once it processes the Pause we send.
+                if (isDoubleClick)
+                    publish(ControlCommand.Pause);
+                return;
+            }
+            if (isDoubleClick)
+            {
+                publish(ControlCommand.Resume);
+                publish(ControlCommand.Lock);
+            }
+            else
+            {
+                publish(_resumePauseCommand);
+            }
+        }
+
+        void HandleReloadStopClick()
+        {
+            DateTime now = DateTime.UtcNow;
+            bool isDoubleClick = now - _reloadStopLastClickUtc <= DoubleClickWindow;
+            _reloadStopLastClickUtc = isDoubleClick ? DateTime.MinValue : now;
+            if (_locked)
+            {
+                // Same as above: Stop is what actually clears lock, on the
+                // client side.
+                if (isDoubleClick)
+                    publish(ControlCommand.Stop);
+                return;
+            }
+            publish(_reloadStopCommand);
+        }
+
         GameObject tooltipObject = new("Tooltip", Il2CppType.Of<RectTransform>());
         tooltipObject.transform.SetParent(group.transform, false);
         _tooltipRoot = tooltipObject;
@@ -230,14 +289,15 @@ internal sealed class ControlOverlay : IDisposable
         (_reloadStop, _reloadStopIcon, _reloadStopImage) = CreateButton("Reload Stop", ControlIcon.Reload, 10, "Reload / Stop");
         (_resumePause, _resumePauseIcon, _resumePauseImage) = CreateButton("Resume Pause", ControlIcon.Resume, 50, "Resume / Pause");
         (_capture, _, _captureImage) = CreateButton("Capture", ControlIcon.Capture, 90, "Capture UI path");
-        _reloadStop.onClick.AddListener((UnityAction)(() => publish(_reloadStopCommand)));
-        _resumePause.onClick.AddListener((UnityAction)(() => publish(_resumePauseCommand)));
+        _reloadStop.onClick.AddListener((UnityAction)HandleReloadStopClick);
+        _resumePause.onClick.AddListener((UnityAction)HandleResumePauseClick);
         _capture.onClick.AddListener((UnityAction)(() => publish(ControlCommand.Capture)));
     }
 
     public void Apply(ControlState? state)
     {
-        ControlPresentation presentation = ControlPresentation.From(state);
+        _locked = state?.Locked == true;
+        ControlPresentation presentation = ControlPresentation.From(state, _locked);
         _reloadStopCommand = state?.Phase == ScriptPhase.Stopped ? ControlCommand.Reload : ControlCommand.Stop;
         _resumePauseCommand = state?.Phase == ScriptPhase.Paused ? ControlCommand.Resume : ControlCommand.Pause;
         _reloadStopIcon.sprite = _icons[(int)presentation.ReloadStopIcon];
@@ -256,7 +316,7 @@ internal sealed class ControlOverlay : IDisposable
         _reloadStopImage.raycastTarget = state?.Capture != true;
         _resumePauseImage.raycastTarget = state?.Capture != true;
         _captureImage.raycastTarget = state?.Capture != true;
-        if (state?.Capture == true)
+        if (state?.Capture == true || _locked)
             _tooltipRoot.SetActive(false);
     }
 
@@ -300,6 +360,9 @@ internal sealed class ControlOverlay : IDisposable
             ControlIcon.Resume => x is >= 4 and <= 11 &&
                 (x == 4 ? y is >= 4 and <= 11 : y == 4 + (x - 4) / 2 || y == 11 - (x - 4) / 2),
             ControlIcon.Pause => (x is 4 or 5 or 10 or 11) && y is >= 4 and <= 11,
+            ControlIcon.Lock => x is >= 3 and <= 12 && y is >= 1 and <= 7 ||
+                (x is 5 or 10) && y is >= 7 and <= 12 ||
+                x is >= 5 and <= 10 && y is >= 11 and <= 12,
             _ => distance is >= 64 and <= 100 ||
                 (x is 7 or 8) && (y <= 3 || y >= 12) ||
                 (y is 7 or 8) && (x <= 3 || x >= 12)

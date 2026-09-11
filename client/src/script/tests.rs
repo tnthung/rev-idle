@@ -2630,6 +2630,7 @@ async fn lifecycle_publishes_actual_phase_and_one_shot_capture_state() {
     let (state_tx, mut state_rx) = watch::channel(StateUpdate {
         phase: ScriptPhase::Unloaded,
         capture: false,
+        locked: false,
     });
     let (controls, _) = recording_controls();
     let pause_gate = controls.actions_paused.clone();
@@ -2650,6 +2651,7 @@ async fn lifecycle_publishes_actual_phase_and_one_shot_capture_state() {
                 if *state_rx.borrow() == (StateUpdate {
                     phase: ScriptPhase::Running,
                     capture: false,
+                    locked: false,
                 }) {
                     break;
                 }
@@ -2807,6 +2809,94 @@ async fn lifecycle_publishes_actual_phase_and_one_shot_capture_state() {
     fs::remove_file(cleanup_path).unwrap();
 }
 
+// This only exercises the forward-progress "command X eventually produces
+// state Y" transitions, same as the other lifecycle tests in this file.
+// It deliberately does NOT assert that `locked` stays true/false across an
+// intervening step: `lock_state`, like `capture_state`, is backed by a
+// process-wide static, and Load/Reload/Pause/Stop/Exit (which every other
+// lifecycle test in this suite also sends as part of its own unrelated
+// flow) all clear it as a side effect — so under `cargo test`'s default
+// concurrency, some other test's Stop can legitimately flip it between two
+// of this test's own await points. Only "eventually reaches" checks are
+// race-safe here; "stays put" checks are not.
+#[tokio::test(flavor = "current_thread")]
+async fn lock_command_round_trip_sets_and_clears_reported_state() {
+    use std::fs;
+
+    let path = std::env::temp_dir().join(format!(
+        "rev-idle-lock-test-{}.js",
+        std::process::id(),
+    ));
+    let cleanup_path = path.clone();
+    fs::write(&path, r#"export default (() => {})"#).unwrap();
+    CaptureState.set_enabled(false);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (state_tx, mut state_rx) = watch::channel(StateUpdate {
+        phase: ScriptPhase::Unloaded,
+        capture: false,
+        locked: false,
+    });
+    let (controls, _) = recording_controls();
+    let local = tokio::task::LocalSet::new();
+    let runner = local.run_until(async move {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx,
+            state_tx,
+            pause_rx,
+            None,
+            controls,
+            Duration::from_millis(5),
+        ));
+
+        command_tx.send(ScriptCommand::Load(path.clone())).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().phase == ScriptPhase::Running {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+
+        command_tx.send(ScriptCommand::Lock).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().locked {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+
+        command_tx.send(ScriptCommand::Pause).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if !state_rx.borrow().locked {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+
+        command_tx.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    });
+    runner.await;
+    CaptureState.set_enabled(false);
+    fs::remove_file(cleanup_path).unwrap();
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn capture_commands_stay_disarmed_without_a_script_path() {
     CaptureState.set_enabled(false);
@@ -2815,6 +2905,7 @@ async fn capture_commands_stay_disarmed_without_a_script_path() {
     let (state_tx, _state_rx) = watch::channel(StateUpdate {
         phase: ScriptPhase::Unloaded,
         capture: false,
+        locked: false,
     });
     let (controls, _) = recording_controls();
     let local = tokio::task::LocalSet::new();

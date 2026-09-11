@@ -116,6 +116,7 @@ pub(crate) async fn run() -> io::Result<()> {
     let script_running = Arc::new(AtomicBool::new(false));
     let console_locked = Arc::new(AtomicBool::new(false));
     let capture_state = crate::capture::CaptureState::default();
+    let lock_state = crate::capture::LockState::default();
     let console_commands = command_tx.clone();
     let hotkey = crate::hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx)
         .map_err(io::Error::other)?;
@@ -132,6 +133,7 @@ pub(crate) async fn run() -> io::Result<()> {
         false,
         false,
         capture_state.is_enabled(),
+        lock_state.is_enabled(),
     ));
     let capture = match crate::capture::CaptureWorker::start(connection.clone(), command_tx.clone()) {
         Ok(capture) => capture,
@@ -178,6 +180,7 @@ pub(crate) async fn run() -> io::Result<()> {
                     script_running_for_task,
                     console_locked,
                     capture_state,
+                    lock_state,
                     state_tx,
                 )
                 .await

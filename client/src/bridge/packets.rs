@@ -94,6 +94,8 @@ pub(crate) struct ResumeScript {}
 pub(crate) struct StartCapture {}
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct StopCapture {}
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct LockScript {}
 
 impl Packet for StateReq {
     const TYPE: &'static str = "StateReq";
@@ -117,6 +119,7 @@ impl Packet for PauseScript { const TYPE: &'static str = "PauseScript"; }
 impl Packet for ResumeScript { const TYPE: &'static str = "ResumeScript"; }
 impl Packet for StartCapture { const TYPE: &'static str = "StartCapture"; }
 impl Packet for StopCapture { const TYPE: &'static str = "StopCapture"; }
+impl Packet for LockScript { const TYPE: &'static str = "LockScript"; }
 impl Packet for StateUpdate { const TYPE: &'static str = "StateUpdate"; }
 
 impl Packet for InvokeReq {
@@ -264,7 +267,8 @@ mod tests {
             (ResumeScript::TYPE, serde_json::to_value(ResumeScript {}).unwrap()),
             (StartCapture::TYPE, serde_json::to_value(StartCapture {}).unwrap()),
             (StopCapture::TYPE, serde_json::to_value(StopCapture {}).unwrap()),
-            (StateUpdate::TYPE, serde_json::to_value(StateUpdate { phase: ScriptPhase::Paused, capture: true }).unwrap()),
+            (LockScript::TYPE, serde_json::to_value(LockScript {}).unwrap()),
+            (StateUpdate::TYPE, serde_json::to_value(StateUpdate { phase: ScriptPhase::Paused, capture: true, locked: false }).unwrap()),
         ];
 
         for (packet_type, packet) in packets {

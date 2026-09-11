@@ -1,6 +1,6 @@
 use super::{
     connection::{PacketContext, WsError},
-    packets::{PauseScript, ReloadScript, ResumeScript, StartCapture, StopCapture, StopScript},
+    packets::{LockScript, PauseScript, ReloadScript, ResumeScript, StartCapture, StopCapture, StopScript},
     WsConnection,
 };
 use crate::app::{ScriptCommand, StateUpdate};
@@ -50,11 +50,19 @@ pub(crate) fn register_control_handlers(
             Ok(())
         }
     })?;
-    let command_sender = command_tx;
+    let command_sender = command_tx.clone();
     connection.handler::<StopCapture, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
             command_tx.send(ScriptCommand::StopCapture).await.ok();
+            Ok(())
+        }
+    })?;
+    let command_sender = command_tx;
+    connection.handler::<LockScript, _, _>(move |_context: PacketContext, _packet| {
+        let command_tx = command_sender.clone();
+        async move {
+            command_tx.send(ScriptCommand::Lock).await.ok();
             Ok(())
         }
     })?;
@@ -156,8 +164,8 @@ pub(crate) async fn publish_state(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        test_support::raw_server, ReloadScript, ResumeScript, StartCapture, StopCapture,
-        StopScript, PauseScript, WsConnection,
+        test_support::raw_server, LockScript, ReloadScript, ResumeScript, StartCapture,
+        StopCapture, StopScript, PauseScript, WsConnection,
     };
     use crate::app::{ScriptCommand, ScriptPhase, StateUpdate};
     use crate::bridge::connection::Packet;
@@ -190,6 +198,7 @@ mod tests {
             (ResumeScript::TYPE, ScriptCommand::Resume),
             (StartCapture::TYPE, ScriptCommand::StartCapture),
             (StopCapture::TYPE, ScriptCommand::StopCapture),
+            (LockScript::TYPE, ScriptCommand::Lock),
         ];
         for (packet_type, expected) in packets {
             peer.send(Message::Text(
@@ -239,6 +248,7 @@ mod tests {
             (ResumeScript::TYPE, ScriptCommand::Resume),
             (StartCapture::TYPE, ScriptCommand::StartCapture),
             (StopCapture::TYPE, ScriptCommand::StopCapture),
+            (LockScript::TYPE, ScriptCommand::Lock),
         ];
         for (packet_type, expected) in packets {
             command_tx.send(ScriptCommand::Reload).await.unwrap();
@@ -324,6 +334,7 @@ mod tests {
         let (state_tx, state_rx) = watch::channel(StateUpdate {
             phase: ScriptPhase::Paused,
             capture: true,
+            locked: false,
         });
         let generation = connection.connection_generation();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -347,7 +358,7 @@ mod tests {
         assert_eq!(envelope["type"], StateUpdate::TYPE);
         assert_eq!(
             envelope["payload"],
-            json!({ "phase": "paused", "capture": true }),
+            json!({ "phase": "paused", "capture": true, "locked": false }),
         );
         assert!(tokio::time::timeout(Duration::from_millis(30), peer.next())
             .await
@@ -355,6 +366,7 @@ mod tests {
         state_tx.send_replace(StateUpdate {
             phase: ScriptPhase::Paused,
             capture: true,
+            locked: false,
         });
         assert!(tokio::time::timeout(Duration::from_millis(30), peer.next())
             .await
@@ -362,6 +374,7 @@ mod tests {
         state_tx.send_replace(StateUpdate {
             phase: ScriptPhase::Running,
             capture: false,
+            locked: false,
         });
         let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
             .await
@@ -373,7 +386,7 @@ mod tests {
         assert_eq!(envelope["type"], StateUpdate::TYPE);
         assert_eq!(
             envelope["payload"],
-            json!({ "phase": "running", "capture": false }),
+            json!({ "phase": "running", "capture": false, "locked": false }),
         );
         shutdown_tx.send_replace(true);
         tokio::time::timeout(Duration::from_secs(1), publisher)
@@ -389,6 +402,7 @@ mod tests {
         let (state_tx, state_rx) = watch::channel(StateUpdate {
             phase: ScriptPhase::Stopped,
             capture: false,
+            locked: false,
         });
         let generation = connection.connection_generation();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -401,6 +415,7 @@ mod tests {
         state_tx.send_replace(StateUpdate {
             phase: ScriptPhase::Running,
             capture: false,
+            locked: false,
         });
         tokio::task::yield_now().await;
         assert!(!publisher.is_finished());
@@ -445,6 +460,7 @@ mod tests {
         let (state_tx, state_rx) = watch::channel(StateUpdate {
             phase: ScriptPhase::Running,
             capture: false,
+            locked: false,
         });
         let mut generation = connection.connection_generation();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -477,10 +493,12 @@ mod tests {
         state_tx.send_replace(StateUpdate {
             phase: ScriptPhase::Stopped,
             capture: false,
+            locked: false,
         });
         state_tx.send_replace(StateUpdate {
             phase: ScriptPhase::Paused,
             capture: true,
+            locked: false,
         });
         let mut second_peer = tokio::time::timeout(Duration::from_secs(1), second_rx)
             .await
@@ -493,7 +511,7 @@ mod tests {
             .unwrap();
         let envelope: serde_json::Value = serde_json::from_str(message.into_text().unwrap().as_ref())
             .unwrap();
-        assert_eq!(envelope["payload"], json!({ "phase": "paused", "capture": true }));
+        assert_eq!(envelope["payload"], json!({ "phase": "paused", "capture": true, "locked": false }));
         assert!(tokio::time::timeout(Duration::from_millis(30), second_peer.next())
             .await
             .is_err());
