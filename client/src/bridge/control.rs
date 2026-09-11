@@ -1,6 +1,6 @@
 use super::{
     connection::{PacketContext, WsError},
-    packets::{LockScript, PauseScript, ReloadScript, ResumeScript, StartCapture, StopCapture, StopScript},
+    packets::{LockScript, PauseScript, ReloadLockedScript, ReloadScript, ResumeLockedScript, ResumeScript, StartCapture, StopCapture, StopScript},
     WsConnection,
 };
 use crate::app::{ScriptCommand, StateUpdate};
@@ -15,6 +15,14 @@ pub(crate) fn register_control_handlers(
         let command_tx = command_sender.clone();
         async move {
             command_tx.send(ScriptCommand::Reload).await.ok();
+            Ok(())
+        }
+    })?;
+    let command_sender = command_tx.clone();
+    connection.handler::<ReloadLockedScript, _, _>(move |_context: PacketContext, _packet| {
+        let command_tx = command_sender.clone();
+        async move {
+            command_tx.send(ScriptCommand::ReloadLocked).await.ok();
             Ok(())
         }
     })?;
@@ -39,6 +47,14 @@ pub(crate) fn register_control_handlers(
         let command_tx = command_sender.clone();
         async move {
             command_tx.send(ScriptCommand::Resume).await.ok();
+            Ok(())
+        }
+    })?;
+    let command_sender = command_tx.clone();
+    connection.handler::<ResumeLockedScript, _, _>(move |_context: PacketContext, _packet| {
+        let command_tx = command_sender.clone();
+        async move {
+            command_tx.send(ScriptCommand::ResumeLocked).await.ok();
             Ok(())
         }
     })?;
@@ -164,7 +180,7 @@ pub(crate) async fn publish_state(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        test_support::raw_server, LockScript, ReloadScript, ResumeScript, StartCapture,
+        test_support::raw_server, LockScript, ReloadLockedScript, ReloadScript, ResumeLockedScript, ResumeScript, StartCapture,
         StopCapture, StopScript, PauseScript, WsConnection,
     };
     use crate::app::{ScriptCommand, ScriptPhase, StateUpdate};
@@ -193,9 +209,11 @@ mod tests {
             .unwrap();
         let packets = [
             (ReloadScript::TYPE, ScriptCommand::Reload),
+            (ReloadLockedScript::TYPE, ScriptCommand::ReloadLocked),
             (StopScript::TYPE, ScriptCommand::Stop),
             (PauseScript::TYPE, ScriptCommand::Pause),
             (ResumeScript::TYPE, ScriptCommand::Resume),
+            (ResumeLockedScript::TYPE, ScriptCommand::ResumeLocked),
             (StartCapture::TYPE, ScriptCommand::StartCapture),
             (StopCapture::TYPE, ScriptCommand::StopCapture),
             (LockScript::TYPE, ScriptCommand::Lock),
@@ -243,9 +261,11 @@ mod tests {
             .unwrap();
         let packets = [
             (ReloadScript::TYPE, ScriptCommand::Reload),
+            (ReloadLockedScript::TYPE, ScriptCommand::ReloadLocked),
             (StopScript::TYPE, ScriptCommand::Stop),
             (PauseScript::TYPE, ScriptCommand::Pause),
             (ResumeScript::TYPE, ScriptCommand::Resume),
+            (ResumeLockedScript::TYPE, ScriptCommand::ResumeLocked),
             (StartCapture::TYPE, ScriptCommand::StartCapture),
             (StopCapture::TYPE, ScriptCommand::StopCapture),
             (LockScript::TYPE, ScriptCommand::Lock),

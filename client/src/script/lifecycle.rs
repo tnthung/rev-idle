@@ -286,7 +286,8 @@ async fn run_with_controls_and_lifecycle(
                         }
                     }
                 }
-                ScriptCommand::Reload => {
+                ScriptCommand::Reload | ScriptCommand::ReloadLocked => {
+                    let lock_after_load = matches!(command, ScriptCommand::ReloadLocked);
                     capture_state.set_enabled(false);
                     lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
@@ -298,6 +299,9 @@ async fn run_with_controls_and_lifecycle(
                             Ok(loaded) => {
                                 session = Some(loaded);
                                 script_running.store(true, Ordering::Release);
+                                if lock_after_load {
+                                    lock_state.set_enabled(true);
+                                }
                                 println!("reloaded {}", path.display());
                             }
                             Err(error) => eprintln!("{error}"),
@@ -325,12 +329,17 @@ async fn run_with_controls_and_lifecycle(
                         println!("script paused");
                     }
                 }
-                ScriptCommand::Resume => {
+                ScriptCommand::Resume | ScriptCommand::ResumeLocked => {
+                    let lock_after_resume = matches!(command, ScriptCommand::ResumeLocked);
                     if session.is_none() {
+                        lock_state.set_enabled(false);
                         controls.actions_paused.set_paused(false);
                         println!("script is stopped; use reload or load");
                     } else if paused {
                         capture_state.set_enabled(false);
+                        if lock_after_resume {
+                            lock_state.set_enabled(true);
+                        }
                         controls.actions_paused.set_paused(false);
                         paused = false;
                         println!("script resumed");
@@ -341,6 +350,9 @@ async fn run_with_controls_and_lifecycle(
                         }
                     } else {
                         controls.actions_paused.set_paused(false);
+                        if lock_after_resume {
+                            lock_state.set_enabled(true);
+                        }
                         println!("script is already running");
                     }
                 }

@@ -47,6 +47,54 @@ internal readonly record struct ControlPresentation(
     }
 }
 
+internal sealed class ControlDebounce
+{
+    private static readonly TimeSpan Window = TimeSpan.FromMilliseconds(200);
+    private readonly Action<ControlCommand> _publish;
+    private DateTime? _pendingAt;
+    private ControlCommand? _pendingSingle;
+
+    internal ControlDebounce(Action<ControlCommand> publish)
+    {
+        _publish = publish;
+    }
+
+    internal void Click(DateTime now, ControlCommand? single, ControlCommand doubleClick)
+    {
+        if (_pendingAt is DateTime pendingAt)
+        {
+            TimeSpan elapsed = now - pendingAt;
+            if (elapsed >= TimeSpan.Zero && elapsed <= Window)
+            {
+                _pendingAt = null;
+                _pendingSingle = null;
+                _publish(doubleClick);
+                return;
+            }
+            Flush(now);
+        }
+        _pendingAt = now;
+        _pendingSingle = single;
+    }
+
+    internal void Flush(DateTime now)
+    {
+        if (_pendingAt is not DateTime pendingAt || now - pendingAt < Window)
+            return;
+        ControlCommand? single = _pendingSingle;
+        _pendingAt = null;
+        _pendingSingle = null;
+        if (single is ControlCommand command)
+            _publish(command);
+    }
+
+    internal void Reset()
+    {
+        _pendingAt = null;
+        _pendingSingle = null;
+    }
+}
+
 internal sealed class ControlOverlay : IDisposable
 {
     internal const int TooltipFontSize = 16;
@@ -77,9 +125,8 @@ internal sealed class ControlOverlay : IDisposable
     // click handlers know whether a double-click should enter or exit lock.
     // It is never set independently of Apply(ControlState?).
     private bool _locked;
-    private DateTime _resumePauseLastClickUtc;
-    private DateTime _reloadStopLastClickUtc;
-    private static readonly TimeSpan DoubleClickWindow = TimeSpan.FromMilliseconds(400);
+    private readonly ControlDebounce _reloadStopDebounce;
+    private readonly ControlDebounce _resumePauseDebounce;
 
     public static ControlOverlay? Create(Action<ControlCommand> publish)
     {
@@ -103,6 +150,8 @@ internal sealed class ControlOverlay : IDisposable
     private ControlOverlay(Action<ControlCommand> publish, Font font)
     {
         _font = font;
+        _reloadStopDebounce = new ControlDebounce(publish);
+        _resumePauseDebounce = new ControlDebounce(publish);
         _texture = new Texture2D(12, 12, TextureFormat.RGBA32, false)
         {
             filterMode = FilterMode.Point,
@@ -212,49 +261,36 @@ internal sealed class ControlOverlay : IDisposable
             return (button, label, image);
         }
 
-        // Double-click detection uses a plain wall-clock timestamp rather
-        // than Unity's PointerEventData.clickCount: the latter requires
-        // routing clicks through a custom EventTrigger PointerClick entry
-        // instead of Button.onClick, which did not fire reliably under
-        // IL2CppInterop and silently broke every click (single or double).
         void HandleResumePauseClick()
         {
             DateTime now = DateTime.UtcNow;
-            bool isDoubleClick = now - _resumePauseLastClickUtc <= DoubleClickWindow;
-            _resumePauseLastClickUtc = isDoubleClick ? DateTime.MinValue : now;
             if (_locked)
             {
-                // Only double-click acts while locked; the client (Rust)
-                // clears lock itself once it processes the Pause we send.
-                if (isDoubleClick)
-                    publish(ControlCommand.Pause);
+                _resumePauseDebounce.Click(now, null, ControlCommand.Pause);
                 return;
             }
-            if (isDoubleClick)
-            {
-                publish(ControlCommand.Resume);
-                publish(ControlCommand.Lock);
-            }
-            else
-            {
-                publish(_resumePauseCommand);
-            }
+            _resumePauseDebounce.Click(
+                now,
+                _resumePauseCommand,
+                _resumePauseCommand == ControlCommand.Pause ? ControlCommand.Lock : ControlCommand.ResumeLocked);
         }
 
         void HandleReloadStopClick()
         {
-            DateTime now = DateTime.UtcNow;
-            bool isDoubleClick = now - _reloadStopLastClickUtc <= DoubleClickWindow;
-            _reloadStopLastClickUtc = isDoubleClick ? DateTime.MinValue : now;
             if (_locked)
             {
-                // Same as above: Stop is what actually clears lock, on the
-                // client side.
-                if (isDoubleClick)
-                    publish(ControlCommand.Stop);
+                _reloadStopDebounce.Click(DateTime.UtcNow, null, ControlCommand.Stop);
                 return;
             }
-            publish(_reloadStopCommand);
+            if (_reloadStopCommand == ControlCommand.Stop)
+            {
+                publish(ControlCommand.Stop);
+                return;
+            }
+            _reloadStopDebounce.Click(
+                DateTime.UtcNow,
+                ControlCommand.Reload,
+                ControlCommand.ReloadLocked);
         }
 
         GameObject tooltipObject = new("Tooltip", Il2CppType.Of<RectTransform>());
@@ -296,10 +332,22 @@ internal sealed class ControlOverlay : IDisposable
 
     public void Apply(ControlState? state)
     {
+        DateTime now = DateTime.UtcNow;
+        bool lockedChanged = _locked != (state?.Locked == true);
+        ControlCommand reloadStopCommand = state?.Phase == ScriptPhase.Stopped ? ControlCommand.Reload : ControlCommand.Stop;
+        ControlCommand resumePauseCommand = state?.Phase == ScriptPhase.Paused ? ControlCommand.Resume : ControlCommand.Pause;
+        if (lockedChanged || _reloadStopCommand != reloadStopCommand)
+            _reloadStopDebounce.Reset();
+        else
+            _reloadStopDebounce.Flush(now);
+        if (lockedChanged || _resumePauseCommand != resumePauseCommand)
+            _resumePauseDebounce.Reset();
+        else
+            _resumePauseDebounce.Flush(now);
         _locked = state?.Locked == true;
         ControlPresentation presentation = ControlPresentation.From(state, _locked);
-        _reloadStopCommand = state?.Phase == ScriptPhase.Stopped ? ControlCommand.Reload : ControlCommand.Stop;
-        _resumePauseCommand = state?.Phase == ScriptPhase.Paused ? ControlCommand.Resume : ControlCommand.Pause;
+        _reloadStopCommand = reloadStopCommand;
+        _resumePauseCommand = resumePauseCommand;
         _reloadStopIcon.sprite = _icons[(int)presentation.ReloadStopIcon];
         _reloadStop.interactable = presentation.ReloadStopEnabled;
         _resumePauseIcon.sprite = _icons[(int)presentation.ResumePauseIcon];

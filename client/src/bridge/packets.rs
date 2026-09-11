@@ -85,11 +85,15 @@ pub(crate) struct PressCommand {
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct ReloadScript {}
 #[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct ReloadLockedScript {}
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct StopScript {}
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct PauseScript {}
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct ResumeScript {}
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct ResumeLockedScript {}
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct StartCapture {}
 #[derive(Debug, Deserialize, Serialize)]
@@ -114,9 +118,11 @@ impl Packet for UiPathRes {
 }
 
 impl Packet for ReloadScript { const TYPE: &'static str = "ReloadScript"; }
+impl Packet for ReloadLockedScript { const TYPE: &'static str = "ReloadLockedScript"; }
 impl Packet for StopScript { const TYPE: &'static str = "StopScript"; }
 impl Packet for PauseScript { const TYPE: &'static str = "PauseScript"; }
 impl Packet for ResumeScript { const TYPE: &'static str = "ResumeScript"; }
+impl Packet for ResumeLockedScript { const TYPE: &'static str = "ResumeLockedScript"; }
 impl Packet for StartCapture { const TYPE: &'static str = "StartCapture"; }
 impl Packet for StopCapture { const TYPE: &'static str = "StopCapture"; }
 impl Packet for LockScript { const TYPE: &'static str = "LockScript"; }
@@ -262,9 +268,11 @@ mod tests {
                 serde_json::to_value(PressCommand { key: "enter".to_owned() }).unwrap(),
             ),
             (ReloadScript::TYPE, serde_json::to_value(ReloadScript {}).unwrap()),
+            (ReloadLockedScript::TYPE, serde_json::to_value(ReloadLockedScript {}).unwrap()),
             (StopScript::TYPE, serde_json::to_value(StopScript {}).unwrap()),
             (PauseScript::TYPE, serde_json::to_value(PauseScript {}).unwrap()),
             (ResumeScript::TYPE, serde_json::to_value(ResumeScript {}).unwrap()),
+            (ResumeLockedScript::TYPE, serde_json::to_value(ResumeLockedScript {}).unwrap()),
             (StartCapture::TYPE, serde_json::to_value(StartCapture {}).unwrap()),
             (StopCapture::TYPE, serde_json::to_value(StopCapture {}).unwrap()),
             (LockScript::TYPE, serde_json::to_value(LockScript {}).unwrap()),

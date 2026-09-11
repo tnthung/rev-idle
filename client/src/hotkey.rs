@@ -1,23 +1,24 @@
 use std::sync::mpsc as std_mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use crate::app::PauseUpdate;
 use crate::app::ActionGate;
 use windows::Win32::{
     Foundation::{LPARAM, WPARAM},
     System::Threading::GetCurrentThreadId,
-    UI::{Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_F8}, WindowsAndMessaging::{
+    UI::{Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_F8, VK_F9}, WindowsAndMessaging::{
         GetForegroundWindow, GetMessageW, PeekMessageW, PostThreadMessageW, MSG, PM_NOREMOVE,
         WM_HOTKEY, WM_QUIT,
     }},
 };
 
 const HOTKEY_ID: i32 = 1;
+const F9_HOTKEY_ID: i32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HotkeyEvent {
-    Pressed,
+    Pressed(i32),
     Continue,
     Quit,
 }
@@ -34,23 +35,28 @@ fn run_hotkey_loop<P: HotkeyPlatform>(
     mut platform: P,
     gate: ActionGate,
     pause_tx: watch::Sender<PauseUpdate>,
+    command_tx: mpsc::Sender<crate::app::ScriptCommand>,
 ) -> Result<(), String> {
     platform.register()?;
-    run_registered_hotkey_loop(platform, gate, pause_tx)
+    run_registered_hotkey_loop(platform, gate, pause_tx, command_tx)
 }
 
 fn run_registered_hotkey_loop<P: HotkeyPlatform>(
     mut platform: P,
     gate: ActionGate,
     pause_tx: watch::Sender<PauseUpdate>,
+    command_tx: mpsc::Sender<crate::app::ScriptCommand>,
 ) -> Result<(), String> {
     let mut result = Ok(());
     loop {
         match platform.next_event() {
-            Ok(HotkeyEvent::Pressed) if platform.game_focused() => {
+            Ok(HotkeyEvent::Pressed(HOTKEY_ID)) if platform.game_focused() => {
                 pause_tx.send_replace(gate.toggle());
             }
-            Ok(HotkeyEvent::Pressed | HotkeyEvent::Continue) => {}
+            Ok(HotkeyEvent::Pressed(F9_HOTKEY_ID)) if platform.game_focused() && gate.is_paused() => {
+                let _ = command_tx.blocking_send(crate::app::ScriptCommand::ResumeLocked);
+            }
+            Ok(HotkeyEvent::Pressed(_) | HotkeyEvent::Continue) => {}
             Ok(HotkeyEvent::Quit) => break,
             Err(error) => {
                 result = Err(error);
@@ -122,7 +128,12 @@ struct Win32HotkeyPlatform;
 impl HotkeyPlatform for Win32HotkeyPlatform {
     fn register(&mut self) -> Result<(), String> {
         unsafe { RegisterHotKey(None, HOTKEY_ID, MOD_NOREPEAT, VK_F8.0 as u32) }
-            .map_err(|error| format!("RegisterHotKey failed: {error}"))
+            .map_err(|error| format!("RegisterHotKey failed: {error}"))?;
+        if let Err(error) = unsafe { RegisterHotKey(None, F9_HOTKEY_ID, MOD_NOREPEAT, VK_F9.0 as u32) } {
+            let _ = unsafe { UnregisterHotKey(None, HOTKEY_ID) };
+            return Err(format!("RegisterHotKey failed: {error}"));
+        }
+        Ok(())
     }
 
     fn next_event(&mut self) -> Result<HotkeyEvent, String> {
@@ -131,8 +142,8 @@ impl HotkeyPlatform for Win32HotkeyPlatform {
         if value.0 == -1 {
             Err("GetMessageW failed".to_string())
         } else if value.as_bool() {
-                if message.message == WM_HOTKEY && message.wParam == WPARAM(HOTKEY_ID as usize) {
-                    Ok(HotkeyEvent::Pressed)
+                if message.message == WM_HOTKEY && (message.wParam == WPARAM(HOTKEY_ID as usize) || message.wParam == WPARAM(F9_HOTKEY_ID as usize)) {
+                    Ok(HotkeyEvent::Pressed(message.wParam.0 as i32))
                 } else {
                     Ok(HotkeyEvent::Continue)
                 }
@@ -147,8 +158,15 @@ impl HotkeyPlatform for Win32HotkeyPlatform {
     }
 
     fn unregister(&mut self) -> Result<(), String> {
-        unsafe { UnregisterHotKey(None, HOTKEY_ID) }
-            .map_err(|error| format!("UnregisterHotKey failed: {error}"))
+        let f8 = unsafe { UnregisterHotKey(None, HOTKEY_ID) }
+            .map_err(|error| format!("F8 UnregisterHotKey failed: {error}"));
+        let f9 = unsafe { UnregisterHotKey(None, F9_HOTKEY_ID) }
+            .map_err(|error| format!("F9 UnregisterHotKey failed: {error}"));
+        match (f8, f9) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(f8_error), Err(f9_error)) => Err(format!("{f8_error}; {f9_error}")),
+        }
     }
 }
 
@@ -161,6 +179,7 @@ impl HotkeyWorker {
     pub fn start(
         gate: ActionGate,
         pause_tx: watch::Sender<PauseUpdate>,
+        command_tx: mpsc::Sender<crate::app::ScriptCommand>,
     ) -> Result<Self, String> {
         let (startup_tx, startup_rx) = std_mpsc::channel();
         let handle = thread::spawn(move || {
@@ -171,7 +190,7 @@ impl HotkeyWorker {
             let registration = platform.register();
             startup_tx.send((thread_id, registration.clone())).ok();
             registration?;
-            run_registered_hotkey_loop(platform, gate, pause_tx)
+            run_registered_hotkey_loop(platform, gate, pause_tx, command_tx)
         });
         let (thread_id, registration) = startup_rx
             .recv()
@@ -258,8 +277,9 @@ mod tests {
     fn f8_closes_the_gate_before_delivering_paused_state() {
         let gate = ActionGate::default();
         let (pause_tx, mut pause_rx) = watch::channel(PauseUpdate::initial());
-        let platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed]);
-        run_hotkey_loop(platform, gate.clone(), pause_tx).unwrap();
+        let platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed(HOTKEY_ID)]);
+        let (command_tx, _) = mpsc::channel(8);
+        run_hotkey_loop(platform, gate.clone(), pause_tx, command_tx).unwrap();
         assert!(gate.is_paused());
         assert!(pause_rx.borrow_and_update().paused());
     }
@@ -268,13 +288,56 @@ mod tests {
     fn f8_does_not_change_pause_state_while_the_game_is_unfocused() {
         let gate = ActionGate::default();
         let (pause_tx, mut pause_rx) = watch::channel(PauseUpdate::initial());
-        let mut platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed]);
+        let mut platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed(HOTKEY_ID)]);
         platform.game_focused = false;
 
-        run_hotkey_loop(platform, gate.clone(), pause_tx).unwrap();
+        let (command_tx, _) = mpsc::channel(8);
+        run_hotkey_loop(platform, gate.clone(), pause_tx, command_tx).unwrap();
 
         assert!(!gate.is_paused());
         assert!(!pause_rx.borrow_and_update().paused());
+    }
+
+    #[test]
+    fn focused_f9_while_paused_enqueues_one_locked_resume() {
+        let gate = ActionGate::default();
+        let (pause_tx, _) = watch::channel(PauseUpdate::initial());
+        let (command_tx, mut command_rx) = mpsc::channel(8);
+        let platform = FakeHotkeyPlatform::events([
+            HotkeyEvent::Quit,
+            HotkeyEvent::Pressed(F9_HOTKEY_ID),
+            HotkeyEvent::Pressed(HOTKEY_ID),
+        ]);
+
+        run_hotkey_loop(platform, gate.clone(), pause_tx, command_tx).unwrap();
+
+        assert_eq!(command_rx.try_recv(), Ok(crate::app::ScriptCommand::ResumeLocked));
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn f9_is_ignored_while_the_game_is_unfocused() {
+        let gate = ActionGate::default();
+        gate.set_paused(true);
+        let (pause_tx, _) = watch::channel(PauseUpdate::initial());
+        let (command_tx, mut command_rx) = mpsc::channel(8);
+        let mut platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed(F9_HOTKEY_ID)]);
+        platform.game_focused = false;
+
+        run_hotkey_loop(platform, gate, pause_tx, command_tx).unwrap();
+
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn f9_is_ignored_while_the_gate_is_open() {
+        let (pause_tx, _) = watch::channel(PauseUpdate::initial());
+        let (command_tx, mut command_rx) = mpsc::channel(8);
+        let platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed(F9_HOTKEY_ID)]);
+
+        run_hotkey_loop(platform, ActionGate::default(), pause_tx, command_tx).unwrap();
+
+        assert!(command_rx.try_recv().is_err());
     }
 
     #[test]
@@ -282,10 +345,11 @@ mod tests {
         let gate = ActionGate::default();
         let (pause_tx, mut pause_rx) = watch::channel(PauseUpdate::initial());
         let mut events = vec![HotkeyEvent::Quit];
-        events.extend(std::iter::repeat_n(HotkeyEvent::Pressed, 10_001));
+        events.extend(std::iter::repeat_n(HotkeyEvent::Pressed(HOTKEY_ID), 10_001));
         let platform = FakeHotkeyPlatform::events(events);
 
-        run_hotkey_loop(platform, gate.clone(), pause_tx).unwrap();
+        let (command_tx, _) = mpsc::channel(8);
+        run_hotkey_loop(platform, gate.clone(), pause_tx, command_tx).unwrap();
 
         assert!(gate.is_paused());
         assert!(pause_rx.borrow_and_update().paused());
@@ -296,10 +360,11 @@ mod tests {
         let gate = ActionGate::default();
         let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
         drop(pause_rx);
-        let platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed]);
+        let platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed(HOTKEY_ID)]);
         let unregister_count = platform.unregister_count.clone();
 
-        assert_eq!(run_hotkey_loop(platform, gate.clone(), pause_tx), Ok(()));
+        let (command_tx, _) = mpsc::channel(8);
+        assert_eq!(run_hotkey_loop(platform, gate.clone(), pause_tx, command_tx), Ok(()));
         assert!(gate.is_paused());
         assert_eq!(unregister_count.load(Ordering::Relaxed), 1);
     }
@@ -309,7 +374,8 @@ mod tests {
         let mut platform = FakeHotkeyPlatform::events([]);
         platform.fail_register = true;
         let (pause_tx, _) = watch::channel(PauseUpdate::initial());
-        assert_eq!(run_hotkey_loop(platform, ActionGate::default(), pause_tx), Err("registration failed".to_string()));
+        let (command_tx, _) = mpsc::channel(8);
+        assert_eq!(run_hotkey_loop(platform, ActionGate::default(), pause_tx, command_tx), Err("registration failed".to_string()));
     }
 
     #[test]
@@ -317,7 +383,8 @@ mod tests {
         let platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Continue]);
         let unregister_count = platform.unregister_count.clone();
         let (pause_tx, _) = watch::channel(PauseUpdate::initial());
-        let result = run_hotkey_loop(platform, ActionGate::default(), pause_tx);
+        let (command_tx, _) = mpsc::channel(8);
+        let result = run_hotkey_loop(platform, ActionGate::default(), pause_tx, command_tx);
         assert_eq!(result, Ok(()));
         assert_eq!(unregister_count.load(Ordering::Relaxed), 1);
     }

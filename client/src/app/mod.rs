@@ -118,7 +118,7 @@ pub(crate) async fn run() -> io::Result<()> {
     let capture_state = crate::capture::CaptureState::default();
     let lock_state = crate::capture::LockState::default();
     let console_commands = command_tx.clone();
-    let hotkey = crate::hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx)
+    let hotkey = crate::hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx, command_tx.clone())
         .map_err(io::Error::other)?;
     let connection = crate::bridge::WsConnection::connect(SocketAddr::from((
         [127, 0, 0, 1],

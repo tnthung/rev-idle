@@ -51,6 +51,7 @@ ControlOverlayDefinesSelectedButtonColor();
 ControlOverlayRetainsInactiveIconAssets();
 ControlOverlayBindsButtonsToBackgroundGraphic();
 ControlOverlayNeverHoldsLockLocally();
+ControlOverlayDebouncesReloadAndResumePauseClicks();
 DispatcherSkipsNonClickableRaycasts();
 DispatcherMapsClientCoordinatesToUnityCoordinates();
 DispatcherParsesExactHierarchyPath();
@@ -124,9 +125,11 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("DragCommand", new DragCommand(1200, 80, 600, 400, 1920, 1080)),
         ("PressCommand", new PressCommand("enter")),
         ("ReloadScript", new ReloadScript()),
+        ("ReloadLockedScript", new ReloadLockedScript()),
         ("StopScript", new StopScript()),
         ("PauseScript", new PauseScript()),
         ("ResumeScript", new ResumeScript()),
+        ("ResumeLockedScript", new ResumeLockedScript()),
         ("StartCapture", new StartCapture()),
         ("StopCapture", new StopCapture()),
         ("LockScript", new LockScript()),
@@ -502,6 +505,13 @@ static async Task ControlBridgeSendsFreshActionsWithoutOptimisticState()
         Equal("PauseScript", second.RootElement.GetProperty("type").GetString(), testName);
         Equal(false, first.RootElement.GetProperty("uuid").GetGuid() == second.RootElement.GetProperty("uuid").GetGuid(), testName);
         Equal(new ControlState(ScriptPhase.Running, false), bridge.State, testName);
+
+        bridge.Send(ControlCommand.ReloadLocked);
+        using JsonDocument reloadLocked = JsonDocument.Parse(await ReceiveText(peer));
+        Equal("ReloadLockedScript", reloadLocked.RootElement.GetProperty("type").GetString(), testName);
+        bridge.Send(ControlCommand.ResumeLocked);
+        using JsonDocument resumeLocked = JsonDocument.Parse(await ReceiveText(peer));
+        Equal("ResumeLockedScript", resumeLocked.RootElement.GetProperty("type").GetString(), testName);
     }
 }
 
@@ -811,7 +821,60 @@ static void ControlOverlayNeverHoldsLockLocally()
     Equal(1, source.Split("_locked = state?.Locked == true;", StringSplitOptions.None).Length - 1, testName);
     Equal(0, source.Split("_locked = true", StringSplitOptions.None).Length - 1, testName);
     Equal(0, source.Split("_locked = false", StringSplitOptions.None).Length - 1, testName);
-    Equal(1, source.Split("publish(ControlCommand.Lock);", StringSplitOptions.None).Length - 1, testName);
+    Equal(1, source.Split("ControlCommand.Lock", StringSplitOptions.None).Length - 1, testName);
+}
+
+static void ControlOverlayDebouncesReloadAndResumePauseClicks()
+{
+    const string testName = nameof(ControlOverlayDebouncesReloadAndResumePauseClicks);
+    DateTime start = DateTime.UtcNow;
+    List<ControlCommand> published = new();
+    ControlDebounce debounce = new(published.Add);
+
+    debounce.Click(start, ControlCommand.Reload, ControlCommand.ReloadLocked);
+    Equal(0, published.Count, testName);
+    debounce.Flush(start.AddMilliseconds(199));
+    Equal(0, published.Count, testName);
+    debounce.Flush(start.AddMilliseconds(200));
+    Equal(1, published.Count, testName);
+    Equal(ControlCommand.Reload, published[0], testName);
+
+    published.Clear();
+    debounce.Click(start.AddMilliseconds(500), ControlCommand.Reload, ControlCommand.ReloadLocked);
+    debounce.Click(start.AddMilliseconds(700), ControlCommand.Reload, ControlCommand.ReloadLocked);
+    Equal(1, published.Count, testName);
+    Equal(ControlCommand.ReloadLocked, published[0], testName);
+
+    published.Clear();
+    debounce.Click(start.AddSeconds(1), ControlCommand.Resume, ControlCommand.ResumeLocked);
+    debounce.Click(start.AddSeconds(1).AddMilliseconds(200), ControlCommand.Resume, ControlCommand.ResumeLocked);
+    Equal(1, published.Count, testName);
+    Equal(ControlCommand.ResumeLocked, published[0], testName);
+
+    published.Clear();
+    debounce.Click(start.AddSeconds(2), ControlCommand.Pause, ControlCommand.Lock);
+    debounce.Click(start.AddSeconds(2).AddMilliseconds(200), ControlCommand.Pause, ControlCommand.Lock);
+    Equal(1, published.Count, testName);
+    Equal(ControlCommand.Lock, published[0], testName);
+
+    published.Clear();
+    debounce.Click(start.AddSeconds(3), null, ControlCommand.Stop);
+    Equal(0, published.Count, testName);
+    debounce.Flush(start.AddSeconds(3).AddMilliseconds(200));
+    Equal(0, published.Count, testName);
+    debounce.Click(start.AddSeconds(4), null, ControlCommand.Pause);
+    debounce.Click(start.AddSeconds(4).AddMilliseconds(200), null, ControlCommand.Pause);
+    Equal(1, published.Count, testName);
+    Equal(ControlCommand.Pause, published[0], testName);
+
+    published.Clear();
+    debounce.Click(start.AddSeconds(5), ControlCommand.Resume, ControlCommand.ResumeLocked);
+    debounce.Reset();
+    debounce.Click(start.AddSeconds(5).AddMilliseconds(200), ControlCommand.Pause, ControlCommand.Lock);
+    Equal(0, published.Count, testName);
+    debounce.Flush(start.AddSeconds(5).AddMilliseconds(600));
+    Equal(1, published.Count, testName);
+    Equal(ControlCommand.Pause, published[0], testName);
 }
 
 static async Task WsConnectionGenerationTracksSessions()

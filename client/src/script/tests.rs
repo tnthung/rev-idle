@@ -2894,6 +2894,114 @@ async fn lock_command_round_trip_sets_and_clears_reported_state() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn reload_locked_load_success_starts_running_and_locked() {
+    static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+    let lock_state = LockState { enabled: &LOCK_ENABLED };
+    lock_state.set_enabled(false);
+    let path = std::env::temp_dir().join(format!("rev-idle-reload-locked-{}.js", std::process::id()));
+    std::fs::write(&path, r#"export default (() => {})"#).unwrap();
+    let (command_tx, command_rx) = mpsc::channel(8);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (state_tx, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    let (controls, _) = recording_controls();
+    let local = tokio::task::LocalSet::new();
+    local.run_until(async move {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx, state_tx, pause_rx, Some(path.clone()), controls, lock_state, Duration::from_millis(5),
+        ));
+        command_tx.send(ScriptCommand::ReloadLocked).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if *state_rx.borrow() == StateUpdate::new(true, true, false, false, true) { break; }
+                state_rx.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        command_tx.send(ScriptCommand::Exit).await.unwrap();
+        runner.await.unwrap().unwrap();
+        std::fs::remove_file(path).unwrap();
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reload_locked_load_failure_stays_stopped_and_unlocked() {
+    static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+    let lock_state = LockState { enabled: &LOCK_ENABLED };
+    lock_state.set_enabled(false);
+    let path = std::env::temp_dir().join(format!("rev-idle-reload-locked-failure-{}.js", std::process::id()));
+    std::fs::write(&path, r#"export default (() => {})"#).unwrap();
+    let (command_tx, command_rx) = mpsc::channel(8);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (state_tx, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    let (controls, _) = recording_controls();
+    let local = tokio::task::LocalSet::new();
+    local.run_until(async move {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx, state_tx, pause_rx, Some(path.clone()), controls, lock_state, Duration::from_millis(5),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if *state_rx.borrow() == StateUpdate::new(true, true, false, false, false) { break; }
+                state_rx.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        command_tx.send(ScriptCommand::Lock).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().locked { break; }
+                state_rx.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        std::fs::write(&path, r#"export default (() => {"#).unwrap();
+        command_tx.send(ScriptCommand::ReloadLocked).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if *state_rx.borrow() == StateUpdate::new(true, false, false, false, false) { break; }
+                state_rx.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        command_tx.send(ScriptCommand::Exit).await.unwrap();
+        runner.await.unwrap().unwrap();
+        std::fs::remove_file(path).unwrap();
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn resume_locked_from_paused_starts_running_and_locked() {
+    static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+    let lock_state = LockState { enabled: &LOCK_ENABLED };
+    lock_state.set_enabled(false);
+    let path = std::env::temp_dir().join(format!("rev-idle-resume-locked-{}.js", std::process::id()));
+    std::fs::write(&path, r#"export default (() => {})"#).unwrap();
+    let (command_tx, command_rx) = mpsc::channel(8);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (state_tx, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    let (controls, _) = recording_controls();
+    let local = tokio::task::LocalSet::new();
+    local.run_until(async move {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx, state_tx, pause_rx, Some(path.clone()), controls, lock_state, Duration::from_millis(5),
+        ));
+        command_tx.send(ScriptCommand::Pause).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if *state_rx.borrow() == StateUpdate::new(true, true, true, false, false) { break; }
+                state_rx.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        command_tx.send(ScriptCommand::ResumeLocked).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if *state_rx.borrow() == StateUpdate::new(true, true, false, false, true) { break; }
+                state_rx.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        command_tx.send(ScriptCommand::Exit).await.unwrap();
+        runner.await.unwrap().unwrap();
+        std::fs::remove_file(path).unwrap();
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn hotkey_pause_clears_reported_lock_state() {
     use std::fs;
 

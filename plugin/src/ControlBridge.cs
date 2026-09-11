@@ -3,8 +3,10 @@ namespace RevIdle.ScoreTelemetry;
 internal enum ControlCommand
 {
     Reload,
+    ReloadLocked,
     Stop,
     Resume,
+    ResumeLocked,
     Pause,
     Capture,
     Lock
@@ -97,8 +99,10 @@ internal sealed class ControlBridge
         object packet = command switch
         {
             ControlCommand.Reload => new ReloadScript(),
+            ControlCommand.ReloadLocked => new ReloadLockedScript(),
             ControlCommand.Stop => new StopScript(),
             ControlCommand.Resume => new ResumeScript(),
+            ControlCommand.ResumeLocked => new ResumeLockedScript(),
             ControlCommand.Pause => new PauseScript(),
             ControlCommand.Capture => new StartCapture(),
             ControlCommand.Lock => new LockScript(),

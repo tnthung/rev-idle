@@ -15,9 +15,11 @@ internal sealed record ScrollCommand(int X, int Y, int Length, uint Axis, int Wi
 internal sealed record DragCommand(int StartX, int StartY, int EndX, int EndY, int Width, int Height);
 internal sealed record PressCommand(string Key);
 internal sealed record ReloadScript;
+internal sealed record ReloadLockedScript;
 internal sealed record StopScript;
 internal sealed record PauseScript;
 internal sealed record ResumeScript;
+internal sealed record ResumeLockedScript;
 internal sealed record StartCapture;
 internal sealed record StopCapture;
 internal sealed record LockScript;
