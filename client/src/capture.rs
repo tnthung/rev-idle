@@ -45,16 +45,24 @@ impl CaptureState {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct LockState;
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LockState {
+    pub(crate) enabled: &'static AtomicBool,
+}
+
+impl Default for LockState {
+    fn default() -> Self {
+        Self { enabled: &LOCK_ENABLED }
+    }
+}
 
 impl LockState {
     pub(crate) fn is_enabled(self) -> bool {
-        LOCK_ENABLED.load(Ordering::Acquire)
+        self.enabled.load(Ordering::Acquire)
     }
 
     pub(crate) fn set_enabled(self, enabled: bool) {
-        LOCK_ENABLED.store(enabled, Ordering::Release);
+        self.enabled.store(enabled, Ordering::Release);
     }
 }
 

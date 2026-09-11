@@ -11,13 +11,14 @@ use super::lifecycle::{
 };
 use super::session::ScriptSession;
 use super::session::format_console_message;
-use crate::{app::{PauseUpdate, ScriptCommand, ScriptPhase, StateUpdate}, capture::CaptureState};
+use crate::{app::{PauseUpdate, ScriptCommand, ScriptPhase, StateUpdate}, capture::{CaptureState, LockState}};
 use rquickjs::{function::Rest, AsyncContext, AsyncRuntime, Value};
 use tokio::sync::{mpsc, watch};
 use crate::app::ActionGate;
 use std::{
     cell::RefCell,
     rc::Rc,
+    sync::atomic::AtomicBool,
     time::{Duration, Instant},
 };
 
@@ -2642,6 +2643,7 @@ async fn lifecycle_publishes_actual_phase_and_one_shot_capture_state() {
             pause_rx,
             None,
             controls,
+            LockState::default(),
             Duration::from_millis(5),
         ));
 
@@ -2809,20 +2811,13 @@ async fn lifecycle_publishes_actual_phase_and_one_shot_capture_state() {
     fs::remove_file(cleanup_path).unwrap();
 }
 
-// This only exercises the forward-progress "command X eventually produces
-// state Y" transitions, same as the other lifecycle tests in this file.
-// It deliberately does NOT assert that `locked` stays true/false across an
-// intervening step: `lock_state`, like `capture_state`, is backed by a
-// process-wide static, and Load/Reload/Pause/Stop/Exit (which every other
-// lifecycle test in this suite also sends as part of its own unrelated
-// flow) all clear it as a side effect — so under `cargo test`'s default
-// concurrency, some other test's Stop can legitimately flip it between two
-// of this test's own await points. Only "eventually reaches" checks are
-// race-safe here; "stays put" checks are not.
 #[tokio::test(flavor = "current_thread")]
 async fn lock_command_round_trip_sets_and_clears_reported_state() {
     use std::fs;
 
+    static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+    let lock_state = LockState { enabled: &LOCK_ENABLED };
+    lock_state.set_enabled(false);
     let path = std::env::temp_dir().join(format!(
         "rev-idle-lock-test-{}.js",
         std::process::id(),
@@ -2846,6 +2841,7 @@ async fn lock_command_round_trip_sets_and_clears_reported_state() {
             pause_rx,
             None,
             controls,
+            lock_state,
             Duration::from_millis(5),
         ));
 
@@ -2898,6 +2894,181 @@ async fn lock_command_round_trip_sets_and_clears_reported_state() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn hotkey_pause_clears_reported_lock_state() {
+    use std::fs;
+
+    static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+    let lock_state = LockState { enabled: &LOCK_ENABLED };
+    lock_state.set_enabled(false);
+    let path = std::env::temp_dir().join(format!(
+        "rev-idle-hotkey-unlock-test-{}.js",
+        std::process::id(),
+    ));
+    let cleanup_path = path.clone();
+    fs::write(&path, r#"export default (() => {})"#).unwrap();
+    CaptureState.set_enabled(false);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (state_tx, mut state_rx) = watch::channel(StateUpdate {
+        phase: ScriptPhase::Unloaded,
+        capture: false,
+        locked: false,
+    });
+    let (controls, _) = recording_controls();
+    let pause_gate = controls.actions_paused.clone();
+    let local = tokio::task::LocalSet::new();
+    let unlocked = local.run_until(async move {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx,
+            state_tx,
+            pause_rx,
+            None,
+            controls,
+            lock_state,
+            Duration::from_millis(5),
+        ));
+
+        command_tx.send(ScriptCommand::Load(path)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().phase == ScriptPhase::Running {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        command_tx.send(ScriptCommand::Lock).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().locked {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+
+        pause_tx.send_replace(pause_gate.set_paused(true));
+        let unlocked = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().phase == ScriptPhase::Paused && !state_rx.borrow().locked {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .is_ok();
+
+        command_tx.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        unlocked
+    }).await;
+    fs::remove_file(cleanup_path).unwrap();
+    assert!(unlocked, "hotkey pause must unlock the game window");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stop_command_during_an_invocation_clears_lock_state() {
+    use std::fs;
+
+    static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+    let lock_state = LockState { enabled: &LOCK_ENABLED };
+    lock_state.set_enabled(false);
+    let path = std::env::temp_dir().join(format!(
+        "rev-idle-stop-unlock-test-{}.js",
+        std::process::id(),
+    ));
+    let cleanup_path = path.clone();
+    fs::write(&path, r#"export default (async () => { rev.click(1, 1); await rev.sleep(5000); })"#).unwrap();
+    CaptureState.set_enabled(false);
+    let (command_tx, command_rx) = mpsc::channel(16);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (state_tx, mut state_rx) = watch::channel(StateUpdate {
+        phase: ScriptPhase::Unloaded,
+        capture: false,
+        locked: false,
+    });
+    let (controls, events) = recording_controls();
+    let local = tokio::task::LocalSet::new();
+    let unlocked = local.run_until(async move {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx,
+            state_tx,
+            pause_rx,
+            None,
+            controls,
+            lock_state,
+            Duration::from_millis(5),
+        ));
+
+        command_tx.send(ScriptCommand::Load(path)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().phase == ScriptPhase::Running {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        events.borrow_mut().clear();
+        command_tx.send(ScriptCommand::Lock).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().locked {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if !events.borrow().is_empty() {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        command_tx.send(ScriptCommand::Stop).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().phase == ScriptPhase::Stopped {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap();
+        let unlocked = !lock_state.is_enabled();
+
+        command_tx.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        unlocked
+    }).await;
+    fs::remove_file(cleanup_path).unwrap();
+    assert!(unlocked, "client-side stop must unlock the game window");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn capture_commands_stay_disarmed_without_a_script_path() {
     CaptureState.set_enabled(false);
     let (command_tx, command_rx) = mpsc::channel(8);
@@ -2916,6 +3087,7 @@ async fn capture_commands_stay_disarmed_without_a_script_path() {
             pause_rx,
             None,
             controls,
+            LockState::default(),
             Duration::from_millis(5),
         ));
         tokio::task::yield_now().await;

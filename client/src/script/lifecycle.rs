@@ -106,13 +106,13 @@ pub(super) async fn run_with_controls_and_state(
     hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
     controls: HostControls,
+    lock_state: LockState,
     loop_delay: Duration,
 ) -> Result<(), String> {
     let (_shutdown_tx, shutdown) = watch::channel(false);
     let script_running = Arc::new(AtomicBool::new(false));
     let console_locked = Arc::new(AtomicBool::new(false));
     let capture_state = CaptureState::default();
-    let lock_state = LockState::default();
     run_with_controls_and_lifecycle(
         commands,
         WsConnection::disconnected_for_test(),
@@ -203,6 +203,7 @@ async fn run_with_controls_and_lifecycle(
                     apply_hotkey_update_and_report(
                         update,
                         &controls.actions_paused,
+                        &lock_state,
                         session.as_ref(),
                         &mut paused,
                     )
@@ -236,6 +237,7 @@ async fn run_with_controls_and_lifecycle(
                             apply_hotkey_update_and_report(
                                 update,
                                 &controls.actions_paused,
+                                &lock_state,
                                 session.as_ref(),
                                 &mut paused,
                             )
@@ -395,6 +397,7 @@ async fn run_with_controls_and_lifecycle(
                         apply_hotkey_update_and_report(
                             update,
                             &controls.actions_paused,
+                            &lock_state,
                             session.as_ref(),
                             &mut paused,
                         )
@@ -451,6 +454,7 @@ async fn run_with_controls_and_lifecycle(
                         apply_hotkey_update_and_report(
                             update,
                             &controls.actions_paused,
+                            &lock_state,
                             Some(active),
                             &mut paused,
                         )
@@ -491,6 +495,7 @@ async fn run_with_controls_and_lifecycle(
         };
 
         if stop_requested {
+            lock_state.set_enabled(false);
             controls.actions_paused.set_paused(false);
             session = None;
             script_running.store(false, Ordering::Release);
@@ -563,6 +568,7 @@ pub(super) fn apply_hotkey_update(
 async fn apply_hotkey_update_and_report(
     update: PauseUpdate,
     gate: &ActionGate,
+    lock_state: &LockState,
     session: Option<&ScriptSession>,
     lifecycle_paused: &mut bool,
 ) {
@@ -574,6 +580,9 @@ async fn apply_hotkey_update_and_report(
         lifecycle_paused,
     ) {
         return;
+    }
+    if *lifecycle_paused {
+        lock_state.set_enabled(false);
     }
 
     if session.is_none() {
