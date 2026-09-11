@@ -22,4 +22,5 @@
 - [ ] `onConnect` hook: called when a new connection is established.
 - [ ] `afterLoad` hook: called after the script load/reload, before execution starts.
 - [ ] `beforeStop` hook: called before the script stops.
+- [ ] Click on mask should bring the game to foreground.
 - [ ] Port changing and Auto-port detection.
