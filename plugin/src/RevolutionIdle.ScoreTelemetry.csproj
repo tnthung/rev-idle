@@ -37,6 +37,9 @@
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.InputModule.dll">
       <Private>false</Private>
     </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.InputLegacyModule.dll">
+      <Private>false</Private>
+    </Reference>
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.TextRenderingModule.dll">
       <Private>false</Private>
     </Reference>

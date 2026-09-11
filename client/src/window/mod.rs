@@ -14,7 +14,7 @@ mod clipboard;
 mod geometry;
 
 use clipboard::{read_unicode_clipboard, write_unicode_clipboard};
-use discovery::find_game_window;
+pub(crate) use discovery::find_game_window;
 use geometry::{outer_size_for_client, ClientGeometry};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

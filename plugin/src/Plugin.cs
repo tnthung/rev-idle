@@ -1,6 +1,7 @@
 using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using UnityEngine;
 
@@ -13,6 +14,12 @@ public sealed class Plugin : BasePlugin
     public const string PluginGuid = "dev.tnthung.revolutionidle.scoretelemetry";
     public const string PluginName = "Revolution Idle Score Telemetry";
     public const string PluginVersion = "0.1.0";
+
+    [DllImport("kernel32.dll")]
+    internal static extern nint GetConsoleWindow();
+
+    [DllImport("user32.dll")]
+    internal static extern bool ShowWindow(nint window, int command);
 
     private static WsConnection? _connection;
     private static ControlBridge? _controlBridge;
@@ -35,6 +42,9 @@ public sealed class Plugin : BasePlugin
             _controlBridge = new ControlBridge(_connection, LogBridgeError);
         }
         AddComponent<ScoreTicker>();
+        nint consoleWindow = GetConsoleWindow();
+        if (consoleWindow != 0)
+            ShowWindow(consoleWindow, 0);
     }
 
     internal static void LogBridgeInfo(string message) => _logger?.LogInfo($"[InputBridge] {message}");
@@ -191,6 +201,9 @@ public sealed class Plugin : BasePlugin
 
 public sealed class ScoreTicker : MonoBehaviour
 {
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(nint window);
+
     private ControlOverlay? _controlOverlay;
 
     public ScoreTicker(IntPtr pointer) : base(pointer)
@@ -199,6 +212,12 @@ public sealed class ScoreTicker : MonoBehaviour
 
     public void Update()
     {
+        if (Application.isFocused && Input.GetKeyDown(KeyCode.F7))
+        {
+            nint consoleWindow = Plugin.GetConsoleWindow();
+            if (consoleWindow != 0)
+                Plugin.ShowWindow(consoleWindow, IsWindowVisible(consoleWindow) ? 0 : 4);
+        }
         Plugin.PumpPackets(0);
         if (Plugin.ControlBridge is not ControlBridge bridge)
             return;

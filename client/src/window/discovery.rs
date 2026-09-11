@@ -82,7 +82,7 @@ fn window_class_name(hwnd: HWND) -> Result<String, String> {
     Ok(String::from_utf16_lossy(&buffer[..length as usize]))
 }
 
-pub(super) fn find_game_window() -> Result<HWND, String> {
+pub(crate) fn find_game_window() -> Result<HWND, String> {
     let mut visible_windows = Vec::new();
     let lparam = LPARAM((&mut visible_windows as *mut Vec<HWND>) as isize);
     unsafe { EnumWindows(Some(collect_visible_windows), lparam) }

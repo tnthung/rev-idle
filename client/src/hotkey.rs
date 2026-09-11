@@ -8,7 +8,8 @@ use windows::Win32::{
     Foundation::{LPARAM, WPARAM},
     System::Threading::GetCurrentThreadId,
     UI::{Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_F8}, WindowsAndMessaging::{
-        GetMessageW, PeekMessageW, PostThreadMessageW, MSG, PM_NOREMOVE, WM_HOTKEY, WM_QUIT,
+        GetForegroundWindow, GetMessageW, PeekMessageW, PostThreadMessageW, MSG, PM_NOREMOVE,
+        WM_HOTKEY, WM_QUIT,
     }},
 };
 
@@ -24,6 +25,7 @@ enum HotkeyEvent {
 trait HotkeyPlatform {
     fn register(&mut self) -> Result<(), String>;
     fn next_event(&mut self) -> Result<HotkeyEvent, String>;
+    fn game_focused(&self) -> bool;
     fn unregister(&mut self) -> Result<(), String>;
 }
 
@@ -45,10 +47,10 @@ fn run_registered_hotkey_loop<P: HotkeyPlatform>(
     let mut result = Ok(());
     loop {
         match platform.next_event() {
-            Ok(HotkeyEvent::Pressed) => {
+            Ok(HotkeyEvent::Pressed) if platform.game_focused() => {
                 pause_tx.send_replace(gate.toggle());
             }
-            Ok(HotkeyEvent::Continue) => {}
+            Ok(HotkeyEvent::Pressed | HotkeyEvent::Continue) => {}
             Ok(HotkeyEvent::Quit) => break,
             Err(error) => {
                 result = Err(error);
@@ -139,6 +141,11 @@ impl HotkeyPlatform for Win32HotkeyPlatform {
         }
     }
 
+    fn game_focused(&self) -> bool {
+        crate::window::find_game_window()
+            .is_ok_and(|window| unsafe { GetForegroundWindow() } == window)
+    }
+
     fn unregister(&mut self) -> Result<(), String> {
         unsafe { UnregisterHotKey(None, HOTKEY_ID) }
             .map_err(|error| format!("UnregisterHotKey failed: {error}"))
@@ -218,13 +225,14 @@ mod tests {
     struct FakeHotkeyPlatform {
         events: Vec<HotkeyEvent>,
         registered: bool,
+        game_focused: bool,
         unregister_count: Arc<std::sync::atomic::AtomicUsize>,
         fail_register: bool,
     }
 
     impl FakeHotkeyPlatform {
         fn events(events: impl IntoIterator<Item = HotkeyEvent>) -> Self {
-            Self { events: events.into_iter().collect(), registered: false, unregister_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)), fail_register: false }
+            Self { events: events.into_iter().collect(), registered: false, game_focused: true, unregister_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)), fail_register: false }
         }
     }
 
@@ -236,6 +244,9 @@ mod tests {
         }
         fn next_event(&mut self) -> Result<HotkeyEvent, String> {
             self.events.pop().ok_or_else(|| "event source exhausted".to_string())
+        }
+        fn game_focused(&self) -> bool {
+            self.game_focused
         }
         fn unregister(&mut self) -> Result<(), String> {
             self.unregister_count.fetch_add(1, Ordering::Relaxed);
@@ -251,6 +262,19 @@ mod tests {
         run_hotkey_loop(platform, gate.clone(), pause_tx).unwrap();
         assert!(gate.is_paused());
         assert!(pause_rx.borrow_and_update().paused());
+    }
+
+    #[test]
+    fn f8_does_not_change_pause_state_while_the_game_is_unfocused() {
+        let gate = ActionGate::default();
+        let (pause_tx, mut pause_rx) = watch::channel(PauseUpdate::initial());
+        let mut platform = FakeHotkeyPlatform::events([HotkeyEvent::Quit, HotkeyEvent::Pressed]);
+        platform.game_focused = false;
+
+        run_hotkey_loop(platform, gate.clone(), pause_tx).unwrap();
+
+        assert!(!gate.is_paused());
+        assert!(!pause_rx.borrow_and_update().paused());
     }
 
     #[test]
