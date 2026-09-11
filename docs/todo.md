@@ -12,7 +12,7 @@
 - [x] `rev.delete_file(path)` for deleting a file.
 - [x] `rev.press(key)` for simulating a key press.
 - [x] `rev.shell(command)` for executing a shell command.
-- [ ] Remove unused warning.
+- [x] Rework states module for correct type modeling.
 - [ ] In-game UI injection.
 - [ ] Make capture button background Red when in capture mode.
 - [ ] Change resume icon to point to the right.

@@ -1,5 +1,5 @@
 import { Action } from "./lib/action.js";
-import { exponent, mantissa, wait_for, wait_for_exponent } from "./lib/utils.js";
+import { BigNum, wait_for, wait_for_exponent } from "./lib/utils.js";
 import { States, UnityZodiac, ZodiacRarity } from "./lib/states.js";
 import { DilationTree, DT_STAGES, DT_EXTRAS } from "./lib/dilation_tree.js";
 
@@ -21,6 +21,8 @@ let eternityBootstrapped = false;
 let first9ECCompleted = false;
 let allECCompleted = false;
 let finish40DTP = false;
+
+/** @type {[number, BigNum, number] | null} */
 let lastAttackCheck = null;
 
 export default async function main() {
@@ -57,7 +59,7 @@ export default async function main() {
   let unityElapsed = rev.global.unityStart ? (Date.now() - rev.global.unityStart - (rev.global.pauseDuration ?? 0)) : 0;
 
   // Zero out durations and starting times
-  if (Number(await States.currentEP()) === 0) {
+  if ((await States.currentEP()).isZero) {
     if (unityElapsed)
       console.log("Last unity elapsed: " + (unityElapsed / 1000) + "s");
 
@@ -75,8 +77,6 @@ export default async function main() {
   if (executionConfig.attackMode) {
     const level = await States.attackLevel();
 
-    let tooSlow = false;
-
     speedCheck: if (!lastAttackCheck)
       lastAttackCheck = [Date.now(), level.currentHP, level.level];
 
@@ -89,17 +89,13 @@ export default async function main() {
       if (lastLevel !== level.level)
         break speedCheck;
 
-      const timeDiff     = (Date.now() - lastTime) / 1000;
-      const hpEDiff      = Number(exponent(lastHP) - exponent(nowHp));
-      const lastHpM      = mantissa(lastHP) * 10 ** hpEDiff;
-      const nowHpM       = mantissa(nowHp);
-      const damagePerSec = (lastHpM - nowHpM) / timeDiff;
+      const timeDiff     = new BigNum((Date.now() - lastTime) / 1000);
+      const hpDiff       = lastHP.subtract(nowHp);
+      const damagePerSec = hpDiff.divide(timeDiff);
 
-      tooSlow = (nowHpM / damagePerSec) > executionConfig.attack_eta_threshold_s;
+      if (damagePerSec.isZero || nowHp.divide(damagePerSec).compareTo(executionConfig.attack_eta_threshold_s) > 0)
+        await Action.unitWith(await executionConfig.zodiacToGetOnNextUnit());
     }
-
-    if (tooSlow)
-      await Action.unitWith(await executionConfig.zodiacToGetOnNextUnit());
   }
 
   // check unity run duration
@@ -129,22 +125,19 @@ async function mergeAndSellZodiac() {
   const buckets = {};
 
   for (const [pos, zodiac] of Object.entries(await States.unityZodiacInventory())) {
-    /** @type {UnityZodiac} */
-    const z = new UnityZodiac(zodiac);
-
-    if (executionConfig.shouldSellZodiac(z)) {
+    if (executionConfig.shouldSellZodiac(zodiac)) {
       await Action.sellZodiac(pos);
       sold++;
       continue;
     }
 
-    if (executionConfig.shouldSacrificeZodiac(z)) {
+    if (executionConfig.shouldSacrificeZodiac(zodiac)) {
       await Action.sacrificeZodiac(pos);
       sacrificed++;
       continue;
     }
 
-    const key = `${z.mergeKey};${executionConfig.mergeKeySuffix(z)}`;
+    const key = `${zodiac.mergeKey};${executionConfig.mergeKeySuffix(zodiac)}`;
     buckets[key] = buckets[key] || [];
     buckets[key].push(pos);
   }
@@ -217,7 +210,7 @@ async function mergeAndSellZodiac() {
 
 async function bootstrapEternity() {
   // Already fulfilled when EP is larger than 10e150
-  if (exponent(await States.currentEP()) > 150) {
+  if ((await States.currentEP()).exponent > 150n) {
     if (!eternityBootstrapped) {
       console.log("Eternity bootstrapped.");
       eternityBootstrapped = true;
