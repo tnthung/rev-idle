@@ -14,7 +14,7 @@
 - [x] `rev.shell(command)` for executing a shell command.
 - [x] Rework states module for correct type modeling.
 - [x] In-game UI injection.
-- [ ] Make capture button background Red when in capture mode.
-- [ ] Change resume icon to point to the right.
+- [x] Make capture button background Red when in capture mode.
+- [x] Change resume icon to point to the right.
 - [ ] Add a script list UI for quick access.
 - [ ] Port changing and Auto-port detection.

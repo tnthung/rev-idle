@@ -156,7 +156,12 @@ internal sealed class ControlOverlay : IDisposable
             colors.highlightedColor = new Color(82f / 255f, 88f / 255f, 94f / 255f, 1);
             colors.pressedColor = new Color(55f / 255f, 59f / 255f, 63f / 255f, 1);
             colors.selectedColor = new Color(69f / 255f, 74f / 255f, 79f / 255f, 1);
-            colors.disabledColor = new Color(34f / 255f, 34f / 255f, 34f / 255f, 1);
+            var disabledColor = CaptureDisabledColor(false);
+            colors.disabledColor = new Color(
+                disabledColor.Red,
+                disabledColor.Green,
+                disabledColor.Blue,
+                disabledColor.Alpha);
             colors.colorMultiplier = 1;
             button.colors = colors;
             RectTransform rect = buttonObject.GetComponent<RectTransform>();
@@ -239,6 +244,14 @@ internal sealed class ControlOverlay : IDisposable
         _reloadStop.interactable = presentation.ReloadStopEnabled;
         _resumePauseIcon.sprite = _icons[(int)presentation.ResumePauseIcon];
         _resumePause.interactable = presentation.ResumePauseEnabled;
+        var disabledColor = CaptureDisabledColor(state?.Capture == true);
+        ColorBlock captureColors = _capture.colors;
+        captureColors.disabledColor = new Color(
+            disabledColor.Red,
+            disabledColor.Green,
+            disabledColor.Blue,
+            disabledColor.Alpha);
+        _capture.colors = captureColors;
         _capture.interactable = presentation.CaptureEnabled;
         _reloadStopImage.raycastTarget = state?.Capture != true;
         _resumePauseImage.raycastTarget = state?.Capture != true;
@@ -246,6 +259,11 @@ internal sealed class ControlOverlay : IDisposable
         if (state?.Capture == true)
             _tooltipRoot.SetActive(false);
     }
+
+    internal static (float Red, float Green, float Blue, float Alpha) CaptureDisabledColor(bool captureActive) =>
+        captureActive
+            ? (1, 0, 0, 1)
+            : (34f / 255f, 34f / 255f, 34f / 255f, 1);
 
     public void Dispose()
     {

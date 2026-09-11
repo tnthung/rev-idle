@@ -45,6 +45,7 @@ await ControlBridgeDoesNotSendUsingReconnectedGeneration();
 await WsPacketContextCarriesOriginGeneration();
 ControlPresentationProjectsClosedPhases();
 ControlIconsPreserveNegativeSpace();
+ControlOverlayUsesRedCaptureBackground();
 ControlOverlayDefinesSelectedButtonColor();
 ControlOverlayRetainsInactiveIconAssets();
 ControlOverlayBindsButtonsToBackgroundGraphic();
@@ -87,7 +88,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("98 tests passed.");
+System.Console.WriteLine("99 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -701,6 +702,27 @@ static void ControlIconsPreserveNegativeSpace()
     Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 11, 7), testName);
     Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 11, 8), testName);
     Equal(false, ControlOverlay.IconPixel(ControlIcon.Resume, 7, 7), testName);
+}
+
+static void ControlOverlayUsesRedCaptureBackground()
+{
+    const string testName = nameof(ControlOverlayUsesRedCaptureBackground);
+    MethodInfo? method = typeof(ControlOverlay).GetMethod(
+        "CaptureDisabledColor",
+        BindingFlags.Static | BindingFlags.NonPublic);
+    Equal(true, method is not null, testName);
+
+    var inactive = ((float Red, float Green, float Blue, float Alpha))method!.Invoke(null, new object[] { false })!;
+    Equal(34f / 255f, inactive.Red, testName);
+    Equal(34f / 255f, inactive.Green, testName);
+    Equal(34f / 255f, inactive.Blue, testName);
+    Equal(1f, inactive.Alpha, testName);
+
+    var active = ((float Red, float Green, float Blue, float Alpha))method.Invoke(null, new object[] { true })!;
+    Equal(1f, active.Red, testName);
+    Equal(0f, active.Green, testName);
+    Equal(0f, active.Blue, testName);
+    Equal(1f, active.Alpha, testName);
 }
 
 static void ControlOverlayBindsButtonsToBackgroundGraphic()
