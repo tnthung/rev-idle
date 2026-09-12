@@ -10,7 +10,7 @@ mod control;
 pub(crate) mod test_support;
 
 pub(crate) use packets::{
-    ClickCommand, DragCommand, InvokeReq, InvokeRes, LockScript, PauseScript, PressCommand, ReloadScript,
+    ClickCommand, DragCommand, InvokeReq, InvokeRes, LoadScript, LockScript, PauseScript, PressCommand, ReloadScript,
     ReloadLockedScript, ResumeLockedScript, ResumeScript, ScrollCommand, StartCapture, StateReq, StateRes, StopCapture, StopScript, TransferReq,
     TransferRes, UiPathReq, UiPathRes,
 };

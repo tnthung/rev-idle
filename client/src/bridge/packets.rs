@@ -100,6 +100,11 @@ pub(crate) struct StartCapture {}
 pub(crate) struct StopCapture {}
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct LockScript {}
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct LoadScript {
+    pub(crate) path: String,
+    pub(crate) locked: bool,
+}
 
 impl Packet for StateReq {
     const TYPE: &'static str = "StateReq";
@@ -126,6 +131,7 @@ impl Packet for ResumeLockedScript { const TYPE: &'static str = "ResumeLockedScr
 impl Packet for StartCapture { const TYPE: &'static str = "StartCapture"; }
 impl Packet for StopCapture { const TYPE: &'static str = "StopCapture"; }
 impl Packet for LockScript { const TYPE: &'static str = "LockScript"; }
+impl Packet for LoadScript { const TYPE: &'static str = "LoadScript"; }
 impl Packet for StateUpdate { const TYPE: &'static str = "StateUpdate"; }
 
 impl Packet for InvokeReq {
@@ -276,7 +282,13 @@ mod tests {
             (StartCapture::TYPE, serde_json::to_value(StartCapture {}).unwrap()),
             (StopCapture::TYPE, serde_json::to_value(StopCapture {}).unwrap()),
             (LockScript::TYPE, serde_json::to_value(LockScript {}).unwrap()),
-            (StateUpdate::TYPE, serde_json::to_value(StateUpdate { phase: ScriptPhase::Paused, capture: true, locked: false }).unwrap()),
+            (LoadScript::TYPE, serde_json::to_value(LoadScript { path: r"C:\scripts\unity_loop2.js".to_owned(), locked: true }).unwrap()),
+            (StateUpdate::TYPE, serde_json::to_value(StateUpdate {
+                phase: ScriptPhase::Paused,
+                capture: true,
+                locked: false,
+                scripts: vec![r"C:\scripts\test.js".to_owned(), r"C:\scripts\unity_loop2.js".to_owned()],
+            }).unwrap()),
         ];
 
         for (packet_type, packet) in packets {

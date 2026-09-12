@@ -1,6 +1,6 @@
 use super::{
     connection::{PacketContext, WsError},
-    packets::{LockScript, PauseScript, ReloadLockedScript, ReloadScript, ResumeLockedScript, ResumeScript, StartCapture, StopCapture, StopScript},
+    packets::{LoadScript, LockScript, PauseScript, ReloadLockedScript, ReloadScript, ResumeLockedScript, ResumeScript, StartCapture, StopCapture, StopScript},
     WsConnection,
 };
 use crate::app::{ScriptCommand, StateUpdate};
@@ -10,6 +10,18 @@ pub(crate) fn register_control_handlers(
     connection: &WsConnection,
     command_tx: mpsc::Sender<ScriptCommand>,
 ) -> Result<(), WsError> {
+    let command_sender = command_tx.clone();
+    connection.handler::<LoadScript, _, _>(move |_context: PacketContext, packet| {
+        let command_tx = command_sender.clone();
+        async move {
+            command_tx.send(if packet.locked {
+                ScriptCommand::LoadLocked(packet.path.into())
+            } else {
+                ScriptCommand::Load(packet.path.into())
+            }).await.ok();
+            Ok(())
+        }
+    })?;
     let command_sender = command_tx.clone();
     connection.handler::<ReloadScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
@@ -96,8 +108,8 @@ pub(crate) async fn publish_state(
     let mut last_sent = None;
     let generation = *generations.borrow_and_update();
     if generation != 0 {
-        let state = *state_updates.borrow_and_update();
-        last_sent = Some((generation, state));
+        let state = state_updates.borrow_and_update().clone();
+        last_sent = Some((generation, state.clone()));
         if *shutdown.borrow() {
             return;
         }
@@ -128,9 +140,9 @@ pub(crate) async fn publish_state(
                 }
                 let generation = *generations.borrow_and_update();
                 if generation != 0 {
-                    let state = *state_updates.borrow_and_update();
-                    if last_sent != Some((generation, state)) {
-                        last_sent = Some((generation, state));
+                    let state = state_updates.borrow_and_update().clone();
+                    if last_sent.as_ref().map(|(sent_generation, sent_state)| (*sent_generation, sent_state)) != Some((generation, &state)) {
+                        last_sent = Some((generation, state.clone()));
                         if *shutdown.borrow() {
                             return;
                         }
@@ -153,10 +165,10 @@ pub(crate) async fn publish_state(
                     state_channel_open = false;
                     continue;
                 }
-                let state = *state_updates.borrow_and_update();
+                let state = state_updates.borrow_and_update().clone();
                 let generation = *generations.borrow();
-                if generation != 0 && last_sent != Some((generation, state)) {
-                    last_sent = Some((generation, state));
+                if generation != 0 && last_sent.as_ref().map(|(sent_generation, sent_state)| (*sent_generation, sent_state)) != Some((generation, &state)) {
+                    last_sent = Some((generation, state.clone()));
                     if *shutdown.borrow() {
                         return;
                     }
@@ -180,7 +192,7 @@ pub(crate) async fn publish_state(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        test_support::raw_server, LockScript, ReloadLockedScript, ReloadScript, ResumeLockedScript, ResumeScript, StartCapture,
+        test_support::raw_server, LoadScript, LockScript, ReloadLockedScript, ReloadScript, ResumeLockedScript, ResumeScript, StartCapture,
         StopCapture, StopScript, PauseScript, WsConnection,
     };
     use crate::app::{ScriptCommand, ScriptPhase, StateUpdate};
@@ -192,6 +204,50 @@ mod tests {
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::Message;
     use super::{publish_state, register_control_handlers};
+
+    #[tokio::test]
+    async fn load_script_handler_preserves_path_and_lock_mode() {
+        let (address, peer_rx) = raw_server().await;
+        let connection = WsConnection::connect_for_test(
+            address,
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+        );
+        let (command_tx, mut command_rx) = mpsc::channel(2);
+        register_control_handlers(&connection, command_tx).unwrap();
+        let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        for (locked, expected) in [
+            (false, ScriptCommand::Load(std::path::PathBuf::from(r"C:\scripts\first.js"))),
+            (true, ScriptCommand::LoadLocked(std::path::PathBuf::from(r"C:\scripts\second.js"))),
+        ] {
+            peer.send(Message::Text(
+                json!({
+                    "uuid": uuid::Uuid::new_v4(),
+                    "type": LoadScript::TYPE,
+                    "payload": {
+                        "path": if locked { r"C:\scripts\second.js" } else { r"C:\scripts\first.js" },
+                        "locked": locked,
+                    },
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), command_rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                expected,
+            );
+        }
+        connection.shutdown().await;
+    }
 
     #[tokio::test]
     async fn notification_handlers_enqueue_commands_without_responses() {
@@ -355,6 +411,7 @@ mod tests {
             phase: ScriptPhase::Paused,
             capture: true,
             locked: false,
+            scripts: Vec::new(),
         });
         let generation = connection.connection_generation();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -378,7 +435,7 @@ mod tests {
         assert_eq!(envelope["type"], StateUpdate::TYPE);
         assert_eq!(
             envelope["payload"],
-            json!({ "phase": "paused", "capture": true, "locked": false }),
+            json!({ "phase": "paused", "capture": true, "locked": false, "scripts": [] }),
         );
         assert!(tokio::time::timeout(Duration::from_millis(30), peer.next())
             .await
@@ -387,6 +444,7 @@ mod tests {
             phase: ScriptPhase::Paused,
             capture: true,
             locked: false,
+            scripts: Vec::new(),
         });
         assert!(tokio::time::timeout(Duration::from_millis(30), peer.next())
             .await
@@ -395,6 +453,7 @@ mod tests {
             phase: ScriptPhase::Running,
             capture: false,
             locked: false,
+            scripts: Vec::new(),
         });
         let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
             .await
@@ -406,7 +465,7 @@ mod tests {
         assert_eq!(envelope["type"], StateUpdate::TYPE);
         assert_eq!(
             envelope["payload"],
-            json!({ "phase": "running", "capture": false, "locked": false }),
+            json!({ "phase": "running", "capture": false, "locked": false, "scripts": [] }),
         );
         shutdown_tx.send_replace(true);
         tokio::time::timeout(Duration::from_secs(1), publisher)
@@ -423,6 +482,7 @@ mod tests {
             phase: ScriptPhase::Stopped,
             capture: false,
             locked: false,
+            scripts: Vec::new(),
         });
         let generation = connection.connection_generation();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -436,6 +496,7 @@ mod tests {
             phase: ScriptPhase::Running,
             capture: false,
             locked: false,
+            scripts: Vec::new(),
         });
         tokio::task::yield_now().await;
         assert!(!publisher.is_finished());
@@ -481,6 +542,7 @@ mod tests {
             phase: ScriptPhase::Running,
             capture: false,
             locked: false,
+            scripts: Vec::new(),
         });
         let mut generation = connection.connection_generation();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -514,11 +576,13 @@ mod tests {
             phase: ScriptPhase::Stopped,
             capture: false,
             locked: false,
+            scripts: Vec::new(),
         });
         state_tx.send_replace(StateUpdate {
             phase: ScriptPhase::Paused,
             capture: true,
             locked: false,
+            scripts: Vec::new(),
         });
         let mut second_peer = tokio::time::timeout(Duration::from_secs(1), second_rx)
             .await
@@ -531,7 +595,7 @@ mod tests {
             .unwrap();
         let envelope: serde_json::Value = serde_json::from_str(message.into_text().unwrap().as_ref())
             .unwrap();
-        assert_eq!(envelope["payload"], json!({ "phase": "paused", "capture": true, "locked": false }));
+        assert_eq!(envelope["payload"], json!({ "phase": "paused", "capture": true, "locked": false, "scripts": [] }));
         assert!(tokio::time::timeout(Duration::from_millis(30), second_peer.next())
             .await
             .is_err());

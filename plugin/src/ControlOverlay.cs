@@ -8,6 +8,7 @@ namespace RevIdle.ScoreTelemetry;
 
 internal enum ControlIcon
 {
+    Menu,
     Reload,
     Stop,
     Resume,
@@ -28,22 +29,85 @@ internal readonly record struct ControlPresentation(
     bool ReloadStopEnabled,
     ControlIcon ResumePauseIcon,
     bool ResumePauseEnabled,
-    bool CaptureEnabled)
+    bool CaptureEnabled,
+    bool MenuEnabled)
 {
     public static ControlPresentation From(ControlState? state) => From(state, locked: false);
 
     public static ControlPresentation From(ControlState? state, bool locked)
     {
         if (state is null || state.Value.Capture)
-            return new(ControlIcon.Reload, false, ControlIcon.Resume, false, false);
+            return new(ControlIcon.Reload, false, ControlIcon.Resume, false, false, false);
         ControlPresentation presentation = state.Value.Phase switch
         {
-            ScriptPhase.Stopped => new(ControlIcon.Reload, true, ControlIcon.Resume, false, true),
-            ScriptPhase.Running => new(ControlIcon.Stop, true, ControlIcon.Pause, true, false),
-            ScriptPhase.Paused => new(ControlIcon.Stop, true, ControlIcon.Resume, true, true),
-            _ => new(ControlIcon.Reload, false, ControlIcon.Resume, false, false)
+            ScriptPhase.Stopped => new(ControlIcon.Reload, true, ControlIcon.Resume, false, true, true),
+            ScriptPhase.Running => new(ControlIcon.Stop, true, ControlIcon.Pause, true, false, true),
+            ScriptPhase.Paused => new(ControlIcon.Stop, true, ControlIcon.Resume, true, true, true),
+            _ => new(ControlIcon.Reload, false, ControlIcon.Resume, false, false, true)
         };
-        return locked ? presentation with { ResumePauseIcon = ControlIcon.Lock, CaptureEnabled = false } : presentation;
+        presentation = presentation with { MenuEnabled = presentation.MenuEnabled && state.Value.Scripts?.Count > 0 };
+        return locked ? presentation with { ResumePauseIcon = ControlIcon.Lock, CaptureEnabled = false, MenuEnabled = false } : presentation;
+    }
+}
+
+internal readonly record struct ScriptSelection(string Path, bool Locked);
+
+internal sealed class ScriptMenuController
+{
+    private static readonly TimeSpan Window = TimeSpan.FromMilliseconds(200);
+    private readonly Action<ScriptSelection> _publish;
+    private DateTime? _pendingAt;
+    private string? _pendingPath;
+
+    internal ScriptMenuController(Action<ScriptSelection> publish)
+    {
+        _publish = publish;
+    }
+
+    internal bool Open { get; private set; }
+
+    internal void Toggle()
+    {
+        if (Open)
+            Close();
+        else
+            Open = true;
+    }
+
+    internal void Click(DateTime now, string path)
+    {
+        if (_pendingAt is DateTime pendingAt &&
+            _pendingPath == path &&
+            now - pendingAt >= TimeSpan.Zero &&
+            now - pendingAt <= Window)
+        {
+            _pendingAt = null;
+            _pendingPath = null;
+            Open = false;
+            _publish(new ScriptSelection(path, true));
+            return;
+        }
+        _pendingAt = now;
+        _pendingPath = path;
+    }
+
+    internal void Flush(DateTime now)
+    {
+        if (_pendingAt is not DateTime pendingAt || now - pendingAt < Window)
+            return;
+        string? path = _pendingPath;
+        _pendingAt = null;
+        _pendingPath = null;
+        Open = false;
+        if (path is not null)
+            _publish(new ScriptSelection(path, false));
+    }
+
+    internal void Close()
+    {
+        Open = false;
+        _pendingAt = null;
+        _pendingPath = null;
     }
 }
 
@@ -102,6 +166,8 @@ internal sealed class ControlOverlay : IDisposable
     internal const int TooltipHeight = 28;
 
     private readonly GameObject _root;
+    private readonly Button _menu;
+    private readonly Image _menuImage;
     private readonly Button _reloadStop;
     private readonly Image _reloadStopIcon;
     private readonly Image _reloadStopImage;
@@ -112,6 +178,10 @@ internal sealed class ControlOverlay : IDisposable
     private readonly Image _captureImage;
     private readonly Text _tooltip;
     private readonly GameObject _tooltipRoot;
+    private readonly GameObject _menuRoot;
+    private readonly GameObject _dismissRoot;
+    private readonly List<GameObject> _menuItems = new();
+    private readonly List<string> _scripts = new();
     private readonly Texture2D _texture;
     private readonly Sprite _sprite;
     private readonly Texture2D[] _iconTextures;
@@ -125,10 +195,11 @@ internal sealed class ControlOverlay : IDisposable
     // click handlers know whether a double-click should enter or exit lock.
     // It is never set independently of Apply(ControlState?).
     private bool _locked;
+    private readonly ScriptMenuController _menuController;
     private readonly ControlDebounce _reloadStopDebounce;
     private readonly ControlDebounce _resumePauseDebounce;
 
-    public static ControlOverlay? Create(Action<ControlCommand> publish)
+    public static ControlOverlay? Create(Action<ControlCommand> publish, Action<string, bool> load)
     {
         Font? font = null;
         try { font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"); }
@@ -144,12 +215,13 @@ internal sealed class ControlOverlay : IDisposable
                 }
             }
         }
-        return font is null ? null : new ControlOverlay(publish, font);
+        return font is null ? null : new ControlOverlay(publish, load, font);
     }
 
-    private ControlOverlay(Action<ControlCommand> publish, Font font)
+    private ControlOverlay(Action<ControlCommand> publish, Action<string, bool> load, Font font)
     {
         _font = font;
+        _menuController = new ScriptMenuController(selection => load(selection.Path, selection.Locked));
         _reloadStopDebounce = new ControlDebounce(publish);
         _resumePauseDebounce = new ControlDebounce(publish);
         _texture = new Texture2D(12, 12, TextureFormat.RGBA32, false)
@@ -196,6 +268,20 @@ internal sealed class ControlOverlay : IDisposable
         canvas.sortingOrder = short.MaxValue;
         _root.AddComponent<GraphicRaycaster>();
 
+        _dismissRoot = new GameObject("Script Menu Dismiss", Il2CppType.Of<RectTransform>());
+        _dismissRoot.transform.SetParent(_root.transform, false);
+        Image dismissImage = _dismissRoot.AddComponent<Image>();
+        dismissImage.color = Color.clear;
+        Button dismiss = _dismissRoot.AddComponent<Button>();
+        dismiss.targetGraphic = dismissImage;
+        dismiss.onClick.AddListener((UnityAction)_menuController.Close);
+        RectTransform dismissRect = _dismissRoot.GetComponent<RectTransform>();
+        dismissRect.anchorMin = Vector2.zero;
+        dismissRect.anchorMax = Vector2.one;
+        dismissRect.offsetMin = Vector2.zero;
+        dismissRect.offsetMax = Vector2.zero;
+        _dismissRoot.SetActive(false);
+
         GameObject group = new("Buttons", Il2CppType.Of<RectTransform>());
         group.transform.SetParent(_root.transform, false);
         RectTransform groupRect = group.GetComponent<RectTransform>();
@@ -203,7 +289,7 @@ internal sealed class ControlOverlay : IDisposable
         groupRect.anchorMax = new Vector2(1, 0);
         groupRect.pivot = new Vector2(1, 0);
         groupRect.anchoredPosition = Vector2.zero;
-        groupRect.sizeDelta = new Vector2(130, 50);
+        groupRect.sizeDelta = new Vector2(168, 46);
 
         (Button Button, Image Icon, Image Image) CreateButton(string name, ControlIcon icon, float x, string tooltip)
         {
@@ -231,7 +317,7 @@ internal sealed class ControlOverlay : IDisposable
             rect.anchorMin = Vector2.zero;
             rect.anchorMax = Vector2.zero;
             rect.pivot = Vector2.zero;
-            rect.anchoredPosition = new Vector2(x, 10);
+            rect.anchoredPosition = new Vector2(x, 8);
             rect.sizeDelta = new Vector2(30, 30);
 
             GameObject labelObject = new("Icon", Il2CppType.Of<RectTransform>());
@@ -263,6 +349,7 @@ internal sealed class ControlOverlay : IDisposable
 
         void HandleResumePauseClick()
         {
+            _menuController.Close();
             DateTime now = DateTime.UtcNow;
             if (_locked)
             {
@@ -277,6 +364,7 @@ internal sealed class ControlOverlay : IDisposable
 
         void HandleReloadStopClick()
         {
+            _menuController.Close();
             if (_locked)
             {
                 _reloadStopDebounce.Click(DateTime.UtcNow, null, ControlCommand.Stop);
@@ -322,12 +410,28 @@ internal sealed class ControlOverlay : IDisposable
         tooltipTextRect.offsetMax = new Vector2(-6, -4);
         tooltipObject.SetActive(false);
 
-        (_reloadStop, _reloadStopIcon, _reloadStopImage) = CreateButton("Reload Stop", ControlIcon.Reload, 10, "Reload / Stop");
-        (_resumePause, _resumePauseIcon, _resumePauseImage) = CreateButton("Resume Pause", ControlIcon.Resume, 50, "Resume / Pause");
-        (_capture, _, _captureImage) = CreateButton("Capture", ControlIcon.Capture, 90, "Capture UI path");
+        _menuRoot = new GameObject("Script Menu", Il2CppType.Of<RectTransform>());
+        _menuRoot.transform.SetParent(group.transform, false);
+        RectTransform menuRect = _menuRoot.GetComponent<RectTransform>();
+        menuRect.anchorMin = Vector2.zero;
+        menuRect.anchorMax = Vector2.zero;
+        menuRect.pivot = new Vector2(1, 0);
+        menuRect.anchoredPosition = new Vector2(5, 8);
+        menuRect.sizeDelta = new Vector2(232, 0);
+        _menuRoot.SetActive(false);
+
+        (_menu, _, _menuImage) = CreateButton("Script Menu", ControlIcon.Menu, 9, "Scripts");
+        (_reloadStop, _reloadStopIcon, _reloadStopImage) = CreateButton("Reload Stop", ControlIcon.Reload, 49, "Reload / Stop");
+        (_resumePause, _resumePauseIcon, _resumePauseImage) = CreateButton("Resume Pause", ControlIcon.Resume, 89, "Resume / Pause");
+        (_capture, _, _captureImage) = CreateButton("Capture", ControlIcon.Capture, 129, "Capture UI path");
+        _menu.onClick.AddListener((UnityAction)_menuController.Toggle);
         _reloadStop.onClick.AddListener((UnityAction)HandleReloadStopClick);
         _resumePause.onClick.AddListener((UnityAction)HandleResumePauseClick);
-        _capture.onClick.AddListener((UnityAction)(() => publish(ControlCommand.Capture)));
+        _capture.onClick.AddListener((UnityAction)(() =>
+        {
+            _menuController.Close();
+            publish(ControlCommand.Capture);
+        }));
     }
 
     public void Apply(ControlState? state)
@@ -346,6 +450,67 @@ internal sealed class ControlOverlay : IDisposable
             _resumePauseDebounce.Flush(now);
         _locked = state?.Locked == true;
         ControlPresentation presentation = ControlPresentation.From(state, _locked);
+        IReadOnlyList<string> scripts = state?.Scripts ?? Array.Empty<string>();
+        bool scriptsChanged = !_scripts.SequenceEqual(scripts);
+        if (!presentation.MenuEnabled || scriptsChanged)
+            _menuController.Close();
+        else
+            _menuController.Flush(now);
+        if (scriptsChanged)
+        {
+            foreach (GameObject item in _menuItems)
+            {
+                item.SetActive(false);
+                UnityEngine.Object.Destroy(item);
+            }
+            _menuItems.Clear();
+            _scripts.Clear();
+            _scripts.AddRange(scripts);
+            _menuRoot.GetComponent<RectTransform>().sizeDelta = new Vector2(232, scripts.Count * 30);
+            for (int index = 0; index < scripts.Count; index++)
+            {
+                string path = scripts[index];
+                GameObject itemObject = new($"Script {index}", Il2CppType.Of<RectTransform>());
+                itemObject.transform.SetParent(_menuRoot.transform, false);
+                Image itemImage = itemObject.AddComponent<Image>();
+                itemImage.sprite = _sprite;
+                itemImage.type = Image.Type.Sliced;
+                Button item = itemObject.AddComponent<Button>();
+                item.targetGraphic = itemImage;
+                ColorBlock itemColors = item.colors;
+                itemColors.normalColor = new Color(69f / 255f, 74f / 255f, 79f / 255f, 1);
+                itemColors.highlightedColor = new Color(82f / 255f, 88f / 255f, 94f / 255f, 1);
+                itemColors.pressedColor = new Color(55f / 255f, 59f / 255f, 63f / 255f, 1);
+                itemColors.selectedColor = itemColors.normalColor;
+                item.colors = itemColors;
+                RectTransform itemRect = itemObject.GetComponent<RectTransform>();
+                itemRect.anchorMin = Vector2.zero;
+                itemRect.anchorMax = Vector2.zero;
+                itemRect.pivot = Vector2.zero;
+                itemRect.anchoredPosition = new Vector2(0, (scripts.Count - index - 1) * 30);
+                itemRect.sizeDelta = new Vector2(232, 30);
+
+                GameObject textObject = new("Text", Il2CppType.Of<RectTransform>());
+                textObject.transform.SetParent(itemObject.transform, false);
+                Text text = textObject.AddComponent<Text>();
+                text.font = _font;
+                text.fontSize = 14;
+                text.alignment = TextAnchor.MiddleLeft;
+                text.color = Color.white;
+                text.raycastTarget = false;
+                text.text = Path.GetFileName(path);
+                RectTransform textRect = textObject.GetComponent<RectTransform>();
+                textRect.anchorMin = Vector2.zero;
+                textRect.anchorMax = Vector2.one;
+                textRect.offsetMin = new Vector2(8, 0);
+                textRect.offsetMax = new Vector2(-8, 0);
+                item.onClick.AddListener((UnityAction)(() => _menuController.Click(DateTime.UtcNow, path)));
+                _menuItems.Add(itemObject);
+            }
+        }
+        _menu.interactable = presentation.MenuEnabled;
+        _menuRoot.SetActive(_menuController.Open);
+        _dismissRoot.SetActive(_menuController.Open);
         _reloadStopCommand = reloadStopCommand;
         _resumePauseCommand = resumePauseCommand;
         _reloadStopIcon.sprite = _icons[(int)presentation.ReloadStopIcon];
@@ -361,10 +526,11 @@ internal sealed class ControlOverlay : IDisposable
             disabledColor.Alpha);
         _capture.colors = captureColors;
         _capture.interactable = presentation.CaptureEnabled;
-        _reloadStopImage.raycastTarget = state?.Capture != true;
-        _resumePauseImage.raycastTarget = state?.Capture != true;
-        _captureImage.raycastTarget = state?.Capture != true;
-        if (state?.Capture == true || _locked)
+        _reloadStopImage.raycastTarget = state?.Capture != true && (presentation.ReloadStopEnabled || !_menuController.Open);
+        _resumePauseImage.raycastTarget = state?.Capture != true && (presentation.ResumePauseEnabled || !_menuController.Open);
+        _captureImage.raycastTarget = state?.Capture != true && (presentation.CaptureEnabled || !_menuController.Open);
+        _menuImage.raycastTarget = state?.Capture != true;
+        if (state?.Capture == true || _locked || _menuController.Open)
             _tooltipRoot.SetActive(false);
     }
 
@@ -401,6 +567,7 @@ internal sealed class ControlOverlay : IDisposable
         int distance = centerX * centerX + centerY * centerY;
         return icon switch
         {
+            ControlIcon.Menu => x is >= 3 and <= 12 && y is 4 or 7 or 10,
             ControlIcon.Reload => distance is >= 64 and <= 121 && !(x >= 10 && y >= 10) ||
                 x is >= 10 and <= 13 && y is >= 8 and <= 11 && y - 8 <= 13 - x,
             ControlIcon.Stop => x is >= 4 and <= 11 && y is >= 4 and <= 11 &&

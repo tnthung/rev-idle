@@ -20,5 +20,6 @@
   ,"StartCapture": {}
   ,"StopCapture": {}
   ,"LockScript": {}
-  ,"StateUpdate": { "phase": "paused", "capture": true, "locked": false }
+  ,"LoadScript": { "path": "C:\\scripts\\unity_loop2.js", "locked": true }
+  ,"StateUpdate": { "phase": "paused", "capture": true, "locked": false, "scripts": ["C:\\scripts\\test.js", "C:\\scripts\\unity_loop2.js"] }
 }

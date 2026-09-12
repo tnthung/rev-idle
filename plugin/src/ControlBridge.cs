@@ -20,7 +20,11 @@ internal enum ScriptPhase
     Paused
 }
 
-internal readonly record struct ControlState(ScriptPhase Phase, bool Capture, bool Locked = false);
+internal readonly record struct ControlState(
+    ScriptPhase Phase,
+    bool Capture,
+    bool Locked = false,
+    IReadOnlyList<string>? Scripts = null);
 
 internal sealed class ControlBridge
 {
@@ -56,7 +60,7 @@ internal sealed class ControlBridge
                 if (context.CancellationToken.IsCancellationRequested ||
                     _connection.ConnectionGeneration != context.Generation)
                     return Task.CompletedTask;
-                _state = new ControlState(phase.Value, packet.Capture, packet.Locked);
+                _state = new ControlState(phase.Value, packet.Capture, packet.Locked, packet.Scripts?.ToArray());
                 _stateGeneration = context.Generation;
             }
             return Task.CompletedTask;
@@ -112,6 +116,37 @@ internal sealed class ControlBridge
         try
         {
             send = _connection.Send(packet, expectedGeneration);
+        }
+        catch (Exception exception)
+        {
+            Report($"Control notification send failed: {exception.Message}");
+            return;
+        }
+        _ = send.ContinueWith(completed =>
+        {
+            if (completed.IsFaulted)
+                Report($"Control notification send failed: {completed.Exception?.GetBaseException().Message}");
+            else if (completed.IsCanceled)
+                Report("Control notification send was canceled.");
+        }, TaskScheduler.Default);
+    }
+
+    internal void Load(string path, bool locked)
+    {
+        long expectedGeneration;
+        lock (_gate)
+        {
+            if (_state is null)
+            {
+                Report("Control notification ignored because state is unavailable.");
+                return;
+            }
+            expectedGeneration = _stateGeneration;
+        }
+        Task send;
+        try
+        {
+            send = _connection.Send(new LoadScript(path, locked), expectedGeneration);
         }
         catch (Exception exception)
         {

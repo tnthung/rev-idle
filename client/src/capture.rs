@@ -27,10 +27,10 @@ const CAPTURE_MESSAGE: u32 = WM_APP + 1;
 /// Width/height (in client pixels) of the overlay's button row, bottom-right
 /// anchored, that `ControlOverlay.cs` renders in the game window. Clicks
 /// inside this rect are exempt from the lock-mode block below so the
-/// Reload/Stop and Resume/Pause buttons stay usable while locked. Must be
+/// script controls stay usable while locked. Must be
 /// kept in sync with the overlay's actual layout.
-const OVERLAY_CONTROLS_WIDTH: i32 = 130;
-const OVERLAY_CONTROLS_HEIGHT: i32 = 50;
+const OVERLAY_CONTROLS_WIDTH: i32 = 168;
+const OVERLAY_CONTROLS_HEIGHT: i32 = 46;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CaptureState;
@@ -369,7 +369,7 @@ mod tests {
     fn locked_click_inside_overlay_controls_passes_through() {
         let point = POINT { x: 1850, y: 1060 };
         // 1920x1080 client area; (1850, 1060) falls inside the bottom-right
-        // 130x50 overlay button rect.
+        // 168x46 overlay button rect.
         let down = decide_mouse_action(WPARAM(WM_LBUTTONDOWN as usize), point, Some((1850, 1060, 1920, 1080)), true);
         assert_eq!(down, MouseAction::PassThrough);
     }
@@ -384,9 +384,9 @@ mod tests {
     #[test]
     fn overlay_controls_rect_matches_the_bottom_right_corner() {
         assert!(within_overlay_controls(1850, 1060, 1920, 1080));
-        assert!(within_overlay_controls(1790, 1030, 1920, 1080));
-        assert!(!within_overlay_controls(1789, 1060, 1920, 1080));
-        assert!(!within_overlay_controls(1850, 1029, 1920, 1080));
+        assert!(within_overlay_controls(1752, 1034, 1920, 1080));
+        assert!(!within_overlay_controls(1751, 1060, 1920, 1080));
+        assert!(!within_overlay_controls(1850, 1033, 1920, 1080));
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -1,5 +1,6 @@
 use super::{
     bindings::{BridgeMouseInput, HostControls, SharedMouse},
+    history,
     session::ScriptSession,
 };
 #[cfg(test)]
@@ -18,18 +19,21 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, watch};
 
-async fn load_path(path: &Path, connection: WsConnection) -> Result<ScriptSession, String> {
-    let source = tokio::fs::read_to_string(path)
+async fn load_path(path: &Path, connection: WsConnection) -> Result<(ScriptSession, std::path::PathBuf), String> {
+    let absolute_path = std::path::absolute(path)
+        .map_err(|error| format!("failed to resolve {}: {error}", path.display()))?;
+    let source = tokio::fs::read_to_string(&absolute_path)
         .await
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        .map_err(|error| format!("failed to read {}: {error}", absolute_path.display()))?;
 
-    ScriptSession::new_with_connection(&source, &path.to_string_lossy(), connection)
+    ScriptSession::new_with_connection(&source, &absolute_path.to_string_lossy(), connection)
         .await
-        .map_err(|error| format!("failed to load {}: {error}", path.display()))
+        .map(|session| (session, absolute_path.clone()))
+        .map_err(|error| format!("failed to load {}: {error}", absolute_path.display()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -62,6 +66,7 @@ pub(crate) async fn run(
         console_locked,
         capture_state,
         lock_state,
+        Some(history::history_path()),
         state_updates,
     )
     .await
@@ -94,6 +99,7 @@ pub(super) async fn run_with_controls(
         console_locked,
         capture_state,
         lock_state,
+        None,
         state_updates,
     )
     .await
@@ -125,6 +131,7 @@ pub(super) async fn run_with_controls_and_state(
         console_locked,
         capture_state,
         lock_state,
+        None,
         state_updates,
     )
     .await
@@ -143,13 +150,31 @@ async fn run_with_controls_and_lifecycle(
     console_locked: Arc<AtomicBool>,
     capture_state: CaptureState,
     lock_state: LockState,
+    script_history_path: Option<std::path::PathBuf>,
     state_updates: watch::Sender<StateUpdate>,
 ) -> Result<(), String> {
     let mut current_path = initial_path;
-    let mut session = match current_path.as_deref() {
-        Some(path) => match load_path(path, connection.clone()).await {
-            Ok(session) => {
-                println!("running {}", path.display());
+    let (mut script_history, script_history_writable) = match script_history_path.as_deref() {
+        Some(path) => match history::load_history(path) {
+            Ok(history) => (history, true),
+            Err(error) => {
+                eprintln!("failed to read script history {}: {error}", path.display());
+                (Vec::new(), false)
+            }
+        },
+        None => (Vec::new(), true),
+    };
+    let mut session = match current_path.clone() {
+        Some(path) => match load_path(&path, connection.clone()).await {
+            Ok((session, absolute_path)) => {
+                current_path = Some(absolute_path.clone());
+                history::record(&mut script_history, absolute_path.clone());
+                if script_history_writable
+                    && let Some(path) = script_history_path.as_deref()
+                {
+                    history::save_history(path, &script_history);
+                }
+                println!("running {}", absolute_path.display());
                 Some(session)
             }
             Err(error) => {
@@ -173,6 +198,12 @@ async fn run_with_controls_and_lifecycle(
     // flight (see below) can't be pushed back onto the mpsc channel, so it
     // waits here and takes priority over the channel on the next iteration.
     let mut pending_command: Option<ScriptCommand> = None;
+    let mut script_history_strings = script_history
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let mut script_history_changed = !script_history_strings.is_empty();
+    let mut script_history_checked_at = Instant::now();
 
     loop {
         if *shutdown.borrow() {
@@ -180,15 +211,41 @@ async fn run_with_controls_and_lifecycle(
             return Ok(());
         }
 
-        let state = StateUpdate::new(
+        if script_history_checked_at.elapsed() >= Duration::from_secs(1) {
+            script_history_checked_at = Instant::now();
+            let history_len = script_history.len();
+            script_history.retain(|path| path.is_file());
+            if script_history.len() != history_len {
+                script_history_strings = script_history
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .collect();
+                script_history_changed = true;
+                if script_history_writable
+                    && let Some(path) = script_history_path.as_deref()
+                {
+                    history::save_history(path, &script_history);
+                }
+            }
+        }
+        let mut state = StateUpdate::new(
             current_path.is_some(),
             session.is_some(),
             paused,
             capture_state.is_enabled(),
             lock_state.is_enabled(),
         );
-        if *state_updates.borrow() != state {
+        let state_changed = {
+            let current = state_updates.borrow();
+            current.phase != state.phase
+                || current.capture != state.capture
+                || current.locked != state.locked
+                || script_history_changed
+        };
+        if state_changed {
+            state.scripts = script_history_strings.clone();
             state_updates.send_replace(state);
+            script_history_changed = false;
         }
 
         // Recomputed every iteration (rather than at each of the many places
@@ -267,7 +324,12 @@ async fn run_with_controls_and_lifecycle(
 
         if let Some(command) = command {
             match command {
-                ScriptCommand::Load(path) => {
+                load @ (ScriptCommand::Load(_) | ScriptCommand::LoadLocked(_)) => {
+                    let (path, lock_after_load) = match load {
+                        ScriptCommand::Load(path) => (path, false),
+                        ScriptCommand::LoadLocked(path) => (path, true),
+                        _ => unreachable!(),
+                    };
                     capture_state.set_enabled(false);
                     lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
@@ -275,12 +337,27 @@ async fn run_with_controls_and_lifecycle(
                     script_running.store(false, Ordering::Release);
                     paused = false;
                     current_path = Some(path);
-                    if let Some(path) = current_path.as_deref() {
-                        match load_path(path, connection.clone()).await {
-                            Ok(loaded) => {
+                    if let Some(path) = current_path.clone() {
+                        match load_path(&path, connection.clone()).await {
+                            Ok((loaded, absolute_path)) => {
+                                current_path = Some(absolute_path.clone());
+                                history::record(&mut script_history, absolute_path.clone());
+                                script_history_strings = script_history
+                                    .iter()
+                                    .map(|path| path.to_string_lossy().into_owned())
+                                    .collect();
+                                script_history_changed = true;
+                                if script_history_writable
+                                    && let Some(path) = script_history_path.as_deref()
+                                {
+                                    history::save_history(path, &script_history);
+                                }
                                 session = Some(loaded);
                                 script_running.store(true, Ordering::Release);
-                                println!("running {}", path.display());
+                                if lock_after_load {
+                                    lock_state.set_enabled(true);
+                                }
+                                println!("running {}", absolute_path.display());
                             }
                             Err(error) => eprintln!("{error}"),
                         }
@@ -294,15 +371,27 @@ async fn run_with_controls_and_lifecycle(
                     session = None;
                     script_running.store(false, Ordering::Release);
                     paused = false;
-                    if let Some(path) = current_path.as_deref() {
-                        match load_path(path, connection.clone()).await {
-                            Ok(loaded) => {
+                    if let Some(path) = current_path.clone() {
+                        match load_path(&path, connection.clone()).await {
+                            Ok((loaded, absolute_path)) => {
+                                current_path = Some(absolute_path.clone());
+                                history::record(&mut script_history, absolute_path.clone());
+                                script_history_strings = script_history
+                                    .iter()
+                                    .map(|path| path.to_string_lossy().into_owned())
+                                    .collect();
+                                script_history_changed = true;
+                                if script_history_writable
+                                    && let Some(path) = script_history_path.as_deref()
+                                {
+                                    history::save_history(path, &script_history);
+                                }
                                 session = Some(loaded);
                                 script_running.store(true, Ordering::Release);
                                 if lock_after_load {
                                     lock_state.set_enabled(true);
                                 }
-                                println!("reloaded {}", path.display());
+                                println!("reloaded {}", absolute_path.display());
                             }
                             Err(error) => eprintln!("{error}"),
                         }

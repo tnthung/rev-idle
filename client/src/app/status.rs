@@ -4,8 +4,14 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ScriptPhase { Unloaded, Stopped, Running, Paused }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct StateUpdate { pub(crate) phase: ScriptPhase, pub(crate) capture: bool, pub(crate) locked: bool }
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct StateUpdate {
+    pub(crate) phase: ScriptPhase,
+    pub(crate) capture: bool,
+    pub(crate) locked: bool,
+    #[serde(default)]
+    pub(crate) scripts: Vec<String>,
+}
 
 impl StateUpdate {
     pub(crate) fn new(has_path: bool, script_loaded: bool, paused: bool, capture: bool, locked: bool) -> Self {
@@ -13,6 +19,7 @@ impl StateUpdate {
             phase: if !has_path { ScriptPhase::Unloaded } else if !script_loaded { ScriptPhase::Stopped } else if paused { ScriptPhase::Paused } else { ScriptPhase::Running },
             capture: capture && has_path && (!script_loaded || paused),
             locked: locked && has_path && script_loaded,
+            scripts: Vec::new(),
         }
     }
 }

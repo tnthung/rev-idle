@@ -1,4 +1,5 @@
 mod loader;
+mod history;
 mod bindings;
 mod session;
 mod lifecycle;

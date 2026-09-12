@@ -3,6 +3,7 @@ use std::path::PathBuf;
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ScriptCommand {
     Load(PathBuf),
+    LoadLocked(PathBuf),
     Reload,
     ReloadLocked,
     #[allow(dead_code)]

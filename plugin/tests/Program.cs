@@ -39,12 +39,15 @@ await BridgeHandlersStartQueuedRequestWhileEarlierResponseIsPending();
 await ControlBridgeNoConnectionIsUnavailableAndSendIsNonFatal();
 await ControlBridgeStateIsGenerationScoped();
 await ControlBridgeSendsFreshActionsWithoutOptimisticState();
+await ControlBridgePublishesScriptHistoryAndSelections();
 await ControlBridgeIgnoresMalformedPhaseWithoutRemoteError();
 await ControlBridgeIgnoresOldGenerationHandlerAfterReconnect();
 await ControlBridgeDoesNotSendUsingReconnectedGeneration();
 await WsPacketContextCarriesOriginGeneration();
 ControlPresentationProjectsClosedPhases();
 ControlPresentationAppliesLockOverrides();
+ControlPresentationDisablesMenuWithoutHistory();
+ScriptMenuControllerHandlesToggleSelectionAndOutsideClick();
 ControlIconsPreserveNegativeSpace();
 ControlOverlayUsesRedCaptureBackground();
 ControlOverlayDefinesSelectedButtonColor();
@@ -91,7 +94,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("99 tests passed.");
+System.Console.WriteLine("102 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -133,7 +136,8 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("StartCapture", new StartCapture()),
         ("StopCapture", new StopCapture()),
         ("LockScript", new LockScript()),
-        ("StateUpdate", new StateUpdate("paused", true))
+        ("LoadScript", new LoadScript(@"C:\scripts\unity_loop2.js", true)),
+        ("StateUpdate", new StateUpdate("paused", true, false, new[] { @"C:\scripts\test.js", @"C:\scripts\unity_loop2.js" }))
     };
 
     foreach ((string name, object packet) in packets)
@@ -515,6 +519,41 @@ static async Task ControlBridgeSendsFreshActionsWithoutOptimisticState()
     }
 }
 
+static async Task ControlBridgePublishesScriptHistoryAndSelections()
+{
+    const string testName = nameof(ControlBridgePublishesScriptHistoryAndSelections);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    ControlBridge bridge = new(server);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        string[] scripts = { @"C:\scripts\first.js", @"C:\scripts\second.js" };
+        await SendText(peer, WsConnection.SerializeForTest(
+            Guid.NewGuid(),
+            new StateUpdate("running", false, false, scripts)));
+        DateTime stateDeadline = DateTime.UtcNow.AddSeconds(2);
+        while (bridge.State is null && DateTime.UtcNow < stateDeadline)
+        {
+            server.Pump();
+            await Task.Delay(1);
+        }
+
+        Equal(true, bridge.State?.Scripts?.SequenceEqual(scripts) == true, testName);
+
+        bridge.Load(scripts[0], false);
+        using JsonDocument unlocked = JsonDocument.Parse(await ReceiveText(peer));
+        Equal("LoadScript", unlocked.RootElement.GetProperty("type").GetString(), testName);
+        Equal(scripts[0], unlocked.RootElement.GetProperty("payload").GetProperty("path").GetString(), testName);
+        Equal(false, unlocked.RootElement.GetProperty("payload").GetProperty("locked").GetBoolean(), testName);
+
+        bridge.Load(scripts[1], true);
+        using JsonDocument locked = JsonDocument.Parse(await ReceiveText(peer));
+        Equal(scripts[1], locked.RootElement.GetProperty("payload").GetProperty("path").GetString(), testName);
+        Equal(true, locked.RootElement.GetProperty("payload").GetProperty("locked").GetBoolean(), testName);
+    }
+}
+
 static async Task ControlBridgeIgnoresMalformedPhaseWithoutRemoteError()
 {
     const string testName = nameof(ControlBridgeIgnoresMalformedPhaseWithoutRemoteError);
@@ -653,10 +692,11 @@ static async Task WsPacketContextCarriesOriginGeneration()
 static void ControlPresentationProjectsClosedPhases()
 {
     const string testName = nameof(ControlPresentationProjectsClosedPhases);
-    ControlPresentation unloaded = ControlPresentation.From(new ControlState(ScriptPhase.Unloaded, false));
+    ControlPresentation unloaded = ControlPresentation.From(new ControlState(ScriptPhase.Unloaded, false, Scripts: new[] { @"C:\scripts\test.js" }));
     Equal(false, unloaded.ReloadStopEnabled, testName);
     Equal(false, unloaded.ResumePauseEnabled, testName);
     Equal(false, unloaded.CaptureEnabled, testName);
+    Equal(true, unloaded.MenuEnabled, testName);
 
     ControlPresentation stopped = ControlPresentation.From(new ControlState(ScriptPhase.Stopped, false));
     Equal(ControlIcon.Reload, stopped.ReloadStopIcon, testName);
@@ -664,12 +704,13 @@ static void ControlPresentationProjectsClosedPhases()
     Equal(false, stopped.ResumePauseEnabled, testName);
     Equal(true, stopped.CaptureEnabled, testName);
 
-    ControlPresentation running = ControlPresentation.From(new ControlState(ScriptPhase.Running, false));
+    ControlPresentation running = ControlPresentation.From(new ControlState(ScriptPhase.Running, false, Scripts: new[] { @"C:\scripts\test.js" }));
     Equal(ControlIcon.Stop, running.ReloadStopIcon, testName);
     Equal(true, running.ReloadStopEnabled, testName);
     Equal(ControlIcon.Pause, running.ResumePauseIcon, testName);
     Equal(true, running.ResumePauseEnabled, testName);
     Equal(false, running.CaptureEnabled, testName);
+    Equal(true, running.MenuEnabled, testName);
 
     ControlPresentation paused = ControlPresentation.From(new ControlState(ScriptPhase.Paused, false));
     Equal(ControlIcon.Stop, paused.ReloadStopIcon, testName);
@@ -682,10 +723,20 @@ static void ControlPresentationProjectsClosedPhases()
     Equal(false, capturing.ReloadStopEnabled, testName);
     Equal(false, capturing.ResumePauseEnabled, testName);
     Equal(false, capturing.CaptureEnabled, testName);
+    Equal(false, capturing.MenuEnabled, testName);
     ControlPresentation disconnected = ControlPresentation.From(null);
     Equal(false, disconnected.ReloadStopEnabled, testName);
     Equal(false, disconnected.ResumePauseEnabled, testName);
     Equal(false, disconnected.CaptureEnabled, testName);
+    Equal(false, disconnected.MenuEnabled, testName);
+}
+
+static void ControlPresentationDisablesMenuWithoutHistory()
+{
+    const string testName = nameof(ControlPresentationDisablesMenuWithoutHistory);
+    Equal(false, ControlPresentation.From(new ControlState(ScriptPhase.Running, false)).MenuEnabled, testName);
+    Equal(false, ControlPresentation.From(new ControlState(ScriptPhase.Running, false, Scripts: Array.Empty<string>())).MenuEnabled, testName);
+    Equal(true, ControlPresentation.From(new ControlState(ScriptPhase.Running, false, Scripts: new[] { @"C:\scripts\test.js" })).MenuEnabled, testName);
 }
 
 static void ControlPresentationAppliesLockOverrides()
@@ -695,6 +746,7 @@ static void ControlPresentationAppliesLockOverrides()
     ControlPresentation runningLocked = ControlPresentation.From(new ControlState(ScriptPhase.Running, false), locked: true);
     Equal(ControlIcon.Lock, runningLocked.ResumePauseIcon, testName);
     Equal(false, runningLocked.CaptureEnabled, testName);
+    Equal(false, runningLocked.MenuEnabled, testName);
     Equal(true, runningLocked.ReloadStopEnabled, testName);
     Equal(true, runningLocked.ResumePauseEnabled, testName);
     Equal(ControlIcon.Stop, runningLocked.ReloadStopIcon, testName);
@@ -719,6 +771,36 @@ static void ControlPresentationAppliesLockOverrides()
 
     ControlPresentation unspecified = ControlPresentation.From(new ControlState(ScriptPhase.Running, false));
     Equal(ControlIcon.Pause, unspecified.ResumePauseIcon, testName);
+}
+
+static void ScriptMenuControllerHandlesToggleSelectionAndOutsideClick()
+{
+    const string testName = nameof(ScriptMenuControllerHandlesToggleSelectionAndOutsideClick);
+    DateTime start = DateTime.UtcNow;
+    List<ScriptSelection> selected = new();
+    ScriptMenuController controller = new(selected.Add);
+
+    controller.Toggle();
+    Equal(true, controller.Open, testName);
+    controller.Click(start, @"C:\scripts\first.js");
+    controller.Close();
+    controller.Flush(start.AddMilliseconds(200));
+    Equal(false, controller.Open, testName);
+    Equal(0, selected.Count, testName);
+
+    controller.Toggle();
+    controller.Click(start.AddSeconds(1), @"C:\scripts\first.js");
+    controller.Flush(start.AddSeconds(1).AddMilliseconds(200));
+    Equal(1, selected.Count, testName);
+    Equal(new ScriptSelection(@"C:\scripts\first.js", false), selected[0], testName);
+    Equal(false, controller.Open, testName);
+
+    controller.Toggle();
+    controller.Click(start.AddSeconds(2), @"C:\scripts\second.js");
+    controller.Click(start.AddSeconds(2).AddMilliseconds(200), @"C:\scripts\second.js");
+    Equal(2, selected.Count, testName);
+    Equal(new ScriptSelection(@"C:\scripts\second.js", true), selected[1], testName);
+    Equal(false, controller.Open, testName);
 }
 
 static void ControlIconsPreserveNegativeSpace()
@@ -758,6 +840,10 @@ static void ControlIconsPreserveNegativeSpace()
     Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 11, 7), testName);
     Equal(true, ControlOverlay.IconPixel(ControlIcon.Resume, 11, 8), testName);
     Equal(false, ControlOverlay.IconPixel(ControlIcon.Resume, 7, 7), testName);
+
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Menu, 3, 4), testName);
+    Equal(true, ControlOverlay.IconPixel(ControlIcon.Menu, 12, 10), testName);
+    Equal(false, ControlOverlay.IconPixel(ControlIcon.Menu, 7, 8), testName);
 }
 
 static void ControlOverlayUsesRedCaptureBackground()
