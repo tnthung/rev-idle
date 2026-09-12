@@ -15,7 +15,18 @@ export async function afterResume() {
 }
 
 
-let initialized = false;
+export async function onDisconnect() {
+  rev.global.initialized = false;
+}
+
+
+export async function afterLoad() {
+  rev.resize(1270, 600);
+  console.clear();
+  Action.dismissLoop();
+}
+
+
 let executionConfig = await import("./unity_loop2_config.js").then(m => m.default);
 let eternityBootstrapped = false;
 let first9ECCompleted = false;
@@ -27,14 +38,6 @@ let lastAttackCheck = null;
 
 export default async function main() {
   executionConfig = (await import("./unity_loop2_config.js")).default;
-
-  // local initialization
-  if (!initialized) {
-    rev.resize(1270, 600);
-    console.clear();
-    Action.dismissLoop();
-    initialized = true;
-  }
 
   // global initialization
   if (!rev.global.initialized) {

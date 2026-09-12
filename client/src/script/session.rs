@@ -80,6 +80,10 @@ pub(super) struct ScriptSession {
     // Rust drops fields in declaration order. Persistent roots must be gone
     // before their context and runtime.
     script: Persistent<Function<'static>>,
+    after_load: Option<Persistent<Function<'static>>>,
+    on_connect: Option<Persistent<Function<'static>>>,
+    on_disconnect: Option<Persistent<Function<'static>>>,
+    before_stop: Option<Persistent<Function<'static>>>,
     before_pause: Option<Persistent<Function<'static>>>,
     after_resume: Option<Persistent<Function<'static>>>,
     parse: Persistent<Function<'static>>,
@@ -106,7 +110,7 @@ impl ScriptSession {
         let source = source.to_owned();
         let name = name.to_owned();
 
-        let (script, before_pause, after_resume, parse, freeze) = context
+        let (script, after_load, on_connect, on_disconnect, before_stop, before_pause, after_resume, parse, freeze) = context
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<_> = async {
                     let console = Object::new(ctx.clone())?;
@@ -148,13 +152,21 @@ impl ScriptSession {
                             "script must `export default` the function to run",
                         )
                     })?;
-                    // Both hooks are optional: a script that doesn't export
-                    // them just runs without any pause/resume handler.
+                    // Hooks are optional: a script that doesn't export one
+                    // just runs without that lifecycle handler.
+                    let after_load: Option<Function> = namespace.get("afterLoad").ok();
+                    let on_connect: Option<Function> = namespace.get("onConnect").ok();
+                    let on_disconnect: Option<Function> = namespace.get("onDisconnect").ok();
+                    let before_stop: Option<Function> = namespace.get("beforeStop").ok();
                     let before_pause: Option<Function> = namespace.get("beforePause").ok();
                     let after_resume: Option<Function> = namespace.get("afterResume").ok();
 
                     Ok((
                         Persistent::save(&ctx, script),
+                        after_load.map(|hook| Persistent::save(&ctx, hook)),
+                        on_connect.map(|hook| Persistent::save(&ctx, hook)),
+                        on_disconnect.map(|hook| Persistent::save(&ctx, hook)),
+                        before_stop.map(|hook| Persistent::save(&ctx, hook)),
                         before_pause.map(|hook| Persistent::save(&ctx, hook)),
                         after_resume.map(|hook| Persistent::save(&ctx, hook)),
                         Persistent::save(&ctx, parse),
@@ -169,6 +181,10 @@ impl ScriptSession {
 
         Ok(Self {
             script,
+            after_load,
+            on_connect,
+            on_disconnect,
+            before_stop,
             before_pause,
             after_resume,
             parse,
@@ -179,16 +195,33 @@ impl ScriptSession {
         })
     }
 
-    /// Calls an optional lifecycle hook (`beforePause`/`afterResume`) if the
-    /// script exported one, awaiting it if it returns a promise. A no-op
-    /// (`Ok(())`) when the script didn't export that hook.
-    async fn run_hook(&self, hook: &Option<Persistent<Function<'static>>>) -> Result<(), String> {
+    /// Calls an optional lifecycle hook if the script exported one, awaiting
+    /// it if it returns a promise. A no-op when the hook wasn't exported.
+    async fn run_hook(
+        &self,
+        hook: &Option<Persistent<Function<'static>>>,
+        controls: HostControls,
+    ) -> Result<(), String> {
         let Some(hook) = hook else { return Ok(()) };
         let hook = hook.clone();
+        let connection = self.connection.clone();
+        let parse = self.parse.clone();
+        let freeze = self.freeze.clone();
 
         self.context
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<()> = async {
+                    let parse: Function = parse.restore(&ctx)?;
+                    let freeze: Function = freeze.restore(&ctx)?;
+                    let rev = super::bindings::create_rev(
+                        ctx.clone(),
+                        connection,
+                        controls,
+                        parse,
+                        freeze,
+                        Rc::new(Cell::new(false)),
+                    )?;
+                    ctx.globals().set("rev", rev)?;
                     let hook: Function = hook.restore(&ctx)?;
                     let result: MaybePromise = hook.call(())?;
                     let _: Value = result.into_future().await?;
@@ -201,12 +234,32 @@ impl ScriptSession {
             .await
     }
 
-    pub(super) async fn run_before_pause(&self) -> Result<(), String> {
-        self.run_hook(&self.before_pause).await
+    pub(super) async fn run_after_load(&self, controls: HostControls) -> Result<(), String> {
+        self.run_hook(&self.after_load, controls).await
     }
 
-    pub(super) async fn run_after_resume(&self) -> Result<(), String> {
-        self.run_hook(&self.after_resume).await
+    pub(super) async fn run_on_connect(&self, controls: HostControls) -> Result<(), String> {
+        self.run_hook(&self.on_connect, controls).await
+    }
+
+    pub(super) async fn run_on_disconnect(&self, controls: HostControls) -> Result<(), String> {
+        self.run_hook(&self.on_disconnect, controls).await
+    }
+
+    pub(super) async fn run_before_stop(&self, controls: HostControls) -> Result<(), String> {
+        self.run_hook(&self.before_stop, controls).await
+    }
+
+    pub(super) async fn run_before_pause(&self, controls: HostControls) -> Result<(), String> {
+        self.run_hook(&self.before_pause, controls).await
+    }
+
+    pub(super) async fn run_after_resume(&self, controls: HostControls) -> Result<(), String> {
+        self.run_hook(&self.after_resume, controls).await
+    }
+
+    pub(super) fn has_connection_hooks(&self) -> bool {
+        self.on_connect.is_some() || self.on_disconnect.is_some()
     }
 
     pub(super) async fn invoke<S, C: Into<HostControls>>(

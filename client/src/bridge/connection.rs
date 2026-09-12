@@ -48,6 +48,12 @@ pub(crate) enum WsError {
     AlreadyResponded,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConnectionEvent {
+    Connected,
+    Disconnected,
+}
+
 impl fmt::Display for WsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
@@ -232,6 +238,7 @@ impl Drop for InboundGuard {
 
 struct State {
     active: Option<Active>,
+    connection_events: Option<mpsc::UnboundedSender<ConnectionEvent>>,
     next_generation: u64,
     pending: HashMap<Uuid, Pending>,
     timed_out: VecDeque<Uuid>,
@@ -254,6 +261,7 @@ impl Inner {
         Self {
             state: Mutex::new(State {
                 active: None,
+                connection_events: None,
                 next_generation: 0,
                 pending: HashMap::new(),
                 timed_out: VecDeque::new(),
@@ -282,6 +290,9 @@ impl Inner {
         let generation = state.next_generation;
         state.active = Some(Active { generation, outbound });
         self.generation.send(generation).ok();
+        if let Some(events) = state.connection_events.as_ref() {
+            events.send(ConnectionEvent::Connected).ok();
+        }
         generation
     }
 
@@ -349,6 +360,9 @@ impl Inner {
             {
                 state.active = None;
                 self.generation.send(0).ok();
+                if let Some(events) = state.connection_events.as_ref() {
+                    events.send(ConnectionEvent::Disconnected).ok();
+                }
                 state.timed_out.clear();
                 state.timed_out_set.clear();
             }
@@ -391,7 +405,13 @@ impl Inner {
         let (pending, inbound) = {
             let mut state = self.state.lock().unwrap();
             state.shutting_down = true;
-            state.active = None;
+            if state.active.take().is_some() {
+                self.generation.send(0).ok();
+                if let Some(events) = state.connection_events.as_ref() {
+                    events.send(ConnectionEvent::Disconnected).ok();
+                }
+            }
+            state.connection_events = None;
             state.timed_out.clear();
             state.timed_out_set.clear();
             let pending = state.pending.drain().map(|(_, pending)| pending).collect::<Vec<_>>();
@@ -529,6 +549,12 @@ impl WsConnection {
 
     pub(crate) fn connection_generation(&self) -> watch::Receiver<u64> {
         self.inner.generation.subscribe()
+    }
+
+    pub(crate) fn connection_events(&self) -> mpsc::UnboundedReceiver<ConnectionEvent> {
+        let (events, receiver) = mpsc::unbounded_channel();
+        self.inner.state.lock().unwrap().connection_events = Some(events);
+        receiver
     }
 
     #[cfg(test)]
@@ -1236,6 +1262,30 @@ mod tests {
         generation.changed().await.unwrap();
         assert_eq!(*generation.borrow(), 2);
         connection.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn connection_events_preserve_every_rapid_transition() {
+        let connection = super::WsConnection::disconnected_for_test();
+        let mut events = connection.connection_events();
+        let (first_outbound, _) = tokio::sync::mpsc::channel(1);
+        let first = connection.inner.activate(first_outbound);
+        connection.inner.close_generation(first);
+        let (second_outbound, _) = tokio::sync::mpsc::channel(1);
+        let second = connection.inner.activate(second_outbound);
+        connection.inner.close_generation(second);
+        let (third_outbound, _) = tokio::sync::mpsc::channel(1);
+        connection.inner.activate(third_outbound);
+
+        for expected in [
+            super::ConnectionEvent::Connected,
+            super::ConnectionEvent::Disconnected,
+            super::ConnectionEvent::Connected,
+            super::ConnectionEvent::Disconnected,
+            super::ConnectionEvent::Connected,
+        ] {
+            assert_eq!(events.recv().await.unwrap(), expected);
+        }
     }
 
     #[tokio::test]

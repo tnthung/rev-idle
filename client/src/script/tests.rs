@@ -6,6 +6,7 @@ use super::lifecycle::{
     capture_action,
     disable_capture_if_running,
     run_with_controls,
+    run_with_controls_and_connection,
     run_with_controls_and_state,
     CaptureAction,
 };
@@ -1841,6 +1842,407 @@ async fn pause_and_resume_hooks_run_around_the_actual_transition() {
         .await;
 
     fs::remove_file(path).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn connection_hooks_survive_a_pause_during_disconnect() {
+    use crate::global_state::GlobalState;
+    use futures_util::StreamExt;
+    use std::fs;
+    use tokio_tungstenite::{tungstenite::protocol::Role, WebSocketStream};
+
+    let path = std::env::temp_dir().join(format!(
+        "rev-idle-lifecycle-hooks-test-{}.js",
+        std::process::id(),
+    ));
+    fs::write(
+        &path,
+        r#"
+            export function afterLoad() { rev.click(1, 1); }
+            export function onConnect() { rev.global.connected = true; rev.click(2, 2); }
+            export async function onDisconnect() { rev.click(3, 3); await rev.sleep(100); }
+            export function beforeStop() { rev.global.disconnectBeforeStop = true; }
+            export default (async () => {
+                if (!rev.global.connected)
+                    await rev.sleep(5000);
+                rev.global.connectedInvocations = (rev.global.connectedInvocations ?? 0) + 1;
+                if (rev.global.connectedInvocations > 1)
+                    rev.click(9, 9);
+                try {
+                    await rev.state();
+                } catch {
+                    throw new Error("terminal");
+                }
+            });
+        "#,
+    )
+    .unwrap();
+
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    struct HookMouse(mpsc::UnboundedSender<(i32, i32)>);
+    impl MouseInput for HookMouse {
+        fn click_at(
+            &mut self,
+            x: i32,
+            y: i32,
+            _button: Button,
+        ) -> Result<(), String> {
+            self.0.send((x, y)).map_err(|error| error.to_string())
+        }
+    }
+
+    let gate = ActionGate::default();
+    let controls = HostControls {
+        mouse: Rc::new(RefCell::new(HookMouse(event_tx))),
+        window: Rc::new(FakeWindow),
+        actions_paused: gate.clone(),
+    };
+    let (command_tx, command_rx) = mpsc::channel(8);
+    let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let reserved = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let address = reserved.local_addr().unwrap();
+    drop(reserved);
+    let connection = crate::bridge::WsConnection::connect_for_test(
+        address,
+        Duration::from_millis(20),
+        Duration::from_millis(100),
+    );
+    let cleanup_path = path.clone();
+    let local = tokio::task::LocalSet::new();
+
+    local
+        .run_until(async move {
+            let runner_connection = connection.clone();
+            let runner = tokio::task::spawn_local(run_with_controls_and_connection(
+                command_rx,
+                runner_connection,
+                pause_rx,
+                Some(path),
+                controls,
+                Duration::from_millis(2),
+            ));
+
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
+                (1, 1),
+                "afterLoad must run before the default function"
+            );
+            let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+            let (stream, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut peer = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
+            assert_eq!(
+                tokio::time::timeout(Duration::from_millis(300), event_rx.recv()).await.unwrap().unwrap(),
+                (2, 2),
+                "onConnect must interrupt the in-flight invocation promptly"
+            );
+            tokio::time::timeout(Duration::from_secs(1), peer.next())
+                .await
+                .expect("script did not start an in-flight bridge request")
+                .expect("peer closed before receiving the bridge request")
+                .expect("bridge request was malformed");
+            peer.close(None).await.unwrap();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_millis(300), event_rx.recv()).await.unwrap().unwrap(),
+                (3, 3),
+                "onDisconnect must win over the in-flight request failure"
+            );
+            pause_tx.send_replace(gate.set_paused(true));
+            assert!(
+                tokio::time::timeout(Duration::from_millis(300), async {
+                    while GlobalState.get("disconnectBeforeStop").is_none() {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .is_err(),
+                "a disconnect-triggered invocation error must not stop the loaded session",
+            );
+            assert!(event_rx.try_recv().is_err(), "the disconnected invocation must not run again");
+
+            command_tx.send(ScriptCommand::Exit).await.unwrap();
+            tokio::time::timeout(Duration::from_millis(300), async {
+                while GlobalState.get("disconnectBeforeStop").is_none() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("beforeStop must still run on explicit exit");
+            tokio::time::timeout(Duration::from_secs(1), runner)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            connection.shutdown().await;
+            GlobalState.delete("disconnectBeforeStop");
+        })
+        .await;
+
+    fs::remove_file(cleanup_path).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn disconnected_script_waits_for_connect_and_survives_disconnect() {
+    use futures_util::StreamExt;
+    use std::fs;
+    use tokio_tungstenite::{tungstenite::protocol::Role, WebSocketStream};
+
+    let path = std::env::temp_dir().join(format!(
+        "rev-idle-disconnected-lifecycle-test-{}.js",
+        std::process::id(),
+    ));
+    fs::write(
+        &path,
+        r#"
+            export function afterLoad() { rev.click(1, 1); }
+            export function onConnect() { rev.click(2, 2); }
+            export function onDisconnect() { rev.click(3, 3); }
+            export function beforeStop() { rev.click(4, 4); }
+            export default (async () => {
+                rev.click(5, 5);
+                await rev.state();
+            });
+        "#,
+    )
+    .unwrap();
+
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    struct ConnectionMouse(mpsc::UnboundedSender<(i32, i32)>);
+    impl MouseInput for ConnectionMouse {
+        fn click_at(
+            &mut self,
+            x: i32,
+            y: i32,
+            _button: Button,
+        ) -> Result<(), String> {
+            self.0.send((x, y)).map_err(|error| error.to_string())
+        }
+    }
+
+    let controls = HostControls {
+        mouse: Rc::new(RefCell::new(ConnectionMouse(event_tx))),
+        window: Rc::new(FakeWindow),
+        actions_paused: ActionGate::default(),
+    };
+    let (command_tx, command_rx) = mpsc::channel(8);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let reserved = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let address = reserved.local_addr().unwrap();
+    drop(reserved);
+    let connection = crate::bridge::WsConnection::connect_for_test(
+        address,
+        Duration::from_millis(20),
+        Duration::from_millis(100),
+    );
+    let cleanup_path = path.clone();
+    let local = tokio::task::LocalSet::new();
+
+    local
+        .run_until(async move {
+            let runner_connection = connection.clone();
+            let runner = tokio::task::spawn_local(run_with_controls_and_connection(
+                command_rx,
+                runner_connection,
+                pause_rx,
+                Some(path),
+                controls,
+                Duration::from_millis(2),
+            ));
+
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
+                (1, 1),
+            );
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await.is_err(),
+                "the default function must wait until the game connects",
+            );
+
+            let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+            let (stream, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            drop(listener);
+            let mut peer = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
+            for expected in [(2, 2), (5, 5)] {
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
+                    expected,
+                );
+            }
+            tokio::time::timeout(Duration::from_secs(1), peer.next())
+                .await
+                .expect("script did not start a bridge request after onConnect")
+                .expect("peer closed before receiving the bridge request")
+                .expect("bridge request was malformed");
+            peer.close(None).await.unwrap();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
+                (3, 3),
+            );
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await.is_err(),
+                "disconnect must keep the loaded session and its hooks alive",
+            );
+
+            let listener = tokio::net::TcpListener::bind(address).await.unwrap();
+            let (stream, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut peer = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
+            for expected in [(2, 2), (5, 5)] {
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
+                    expected,
+                );
+            }
+            tokio::time::timeout(Duration::from_secs(1), peer.next())
+                .await
+                .expect("script did not restart its bridge request after reconnect")
+                .expect("peer closed before receiving the bridge request")
+                .expect("bridge request was malformed");
+
+            command_tx.send(ScriptCommand::Stop).await.unwrap();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
+                (4, 4),
+            );
+            command_tx.send(ScriptCommand::Exit).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), runner)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            peer.close(None).await.ok();
+            connection.shutdown().await;
+        })
+        .await;
+
+    fs::remove_file(cleanup_path).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn before_stop_runs_for_replacement_self_stop_failure_and_exit() {
+    use std::fs;
+
+    let root = std::env::temp_dir().join(format!(
+        "rev-idle-before-stop-paths-test-{}",
+        std::process::id(),
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let replaced = root.join("replaced.js");
+    let self_stopping = root.join("self-stopping.js");
+    let failing = root.join("failing.js");
+    let exiting = root.join("exiting.js");
+    fs::write(
+        &replaced,
+        r#"
+            export function beforeStop() { rev.click(1, 1); }
+            export default (async () => { await rev.sleep(5000); });
+        "#,
+    )
+    .unwrap();
+    fs::write(
+        &self_stopping,
+        r#"
+            export function afterLoad() { rev.click(2, 2); }
+            export function beforeStop() { rev.click(3, 3); }
+            export default (() => rev.stop());
+        "#,
+    )
+    .unwrap();
+    fs::write(
+        &failing,
+        r#"
+            export function afterLoad() { rev.click(4, 4); }
+            export function beforeStop() { rev.click(5, 5); }
+            export default (() => { throw new Error("expected failure"); });
+        "#,
+    )
+    .unwrap();
+    fs::write(
+        &exiting,
+        r#"
+            export function afterLoad() { rev.click(6, 6); }
+            export function beforeStop() { rev.click(7, 7); }
+            export default (async () => { await rev.sleep(5000); });
+        "#,
+    )
+    .unwrap();
+
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    struct HookMouse(mpsc::UnboundedSender<(i32, i32)>);
+    impl MouseInput for HookMouse {
+        fn click_at(
+            &mut self,
+            x: i32,
+            y: i32,
+            _button: Button,
+        ) -> Result<(), String> {
+            self.0.send((x, y)).map_err(|error| error.to_string())
+        }
+    }
+
+    let controls = HostControls {
+        mouse: Rc::new(RefCell::new(HookMouse(event_tx))),
+        window: Rc::new(FakeWindow),
+        actions_paused: ActionGate::default(),
+    };
+    let (command_tx, command_rx) = mpsc::channel(8);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let connection = crate::bridge::WsConnection::disconnected_for_test();
+    let local = tokio::task::LocalSet::new();
+
+    local
+        .run_until(async move {
+            let runner = tokio::task::spawn_local(run_with_controls_and_connection(
+                command_rx,
+                connection,
+                pause_rx,
+                Some(replaced),
+                controls,
+                Duration::from_millis(2),
+            ));
+
+            command_tx.send(ScriptCommand::Load(self_stopping)).await.unwrap();
+            for expected in [(1, 1), (2, 2), (3, 3)] {
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
+                    expected
+                );
+            }
+
+            command_tx.send(ScriptCommand::Load(failing)).await.unwrap();
+            for expected in [(4, 4), (5, 5)] {
+                assert_eq!(
+                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
+                    expected
+                );
+            }
+
+            command_tx.send(ScriptCommand::Load(exiting)).await.unwrap();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
+                (6, 6)
+            );
+            command_tx.send(ScriptCommand::Exit).await.unwrap();
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
+                (7, 7)
+            );
+            tokio::time::timeout(Duration::from_secs(1), runner)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        })
+        .await;
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]

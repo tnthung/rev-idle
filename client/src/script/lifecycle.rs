@@ -7,10 +7,11 @@ use super::{
 use super::State;
 use crate::{
     app::{ActionGate, PauseUpdate, ScriptCommand, StateUpdate},
-    bridge::WsConnection,
+    bridge::{ConnectionEvent, WsConnection},
     capture::{CaptureState, LockState},
     window::Win32WindowControl,
 };
+use futures_util::FutureExt;
 use std::{
     cell::RefCell,
     path::Path,
@@ -87,9 +88,10 @@ pub(super) async fn run_with_controls(
     let capture_state = CaptureState::default();
     let lock_state = LockState::default();
     let (state_updates, _) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    let connection = WsConnection::disconnected_for_test();
     run_with_controls_and_lifecycle(
         commands,
-        WsConnection::disconnected_for_test(),
+        connection,
         hotkey_pauses,
         initial_path,
         controls,
@@ -119,10 +121,44 @@ pub(super) async fn run_with_controls_and_state(
     let script_running = Arc::new(AtomicBool::new(false));
     let console_locked = Arc::new(AtomicBool::new(false));
     let capture_state = CaptureState::default();
+    let connection = WsConnection::disconnected_for_test();
     run_with_controls_and_lifecycle(
         commands,
-        WsConnection::disconnected_for_test(),
+        connection,
         hotkey_pauses,
+        initial_path,
+        controls,
+        loop_delay,
+        shutdown,
+        script_running,
+        console_locked,
+        capture_state,
+        lock_state,
+        None,
+        state_updates,
+    )
+    .await
+}
+
+#[cfg(test)]
+pub(super) async fn run_with_controls_and_connection(
+    commands: mpsc::Receiver<ScriptCommand>,
+    connection: WsConnection,
+    pause_rx: watch::Receiver<PauseUpdate>,
+    initial_path: Option<std::path::PathBuf>,
+    controls: HostControls,
+    loop_delay: Duration,
+) -> Result<(), String> {
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+    let script_running = Arc::new(AtomicBool::new(false));
+    let console_locked = Arc::new(AtomicBool::new(false));
+    let capture_state = CaptureState::default();
+    let lock_state = LockState::default();
+    let (state_updates, _) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    run_with_controls_and_lifecycle(
+        commands,
+        connection,
+        pause_rx,
         initial_path,
         controls,
         loop_delay,
@@ -164,9 +200,17 @@ async fn run_with_controls_and_lifecycle(
         },
         None => (Vec::new(), true),
     };
+    let connection_generation = connection.connection_generation();
+    let mut connected = false;
+    let mut connection_events = None;
     let mut session = match current_path.clone() {
         Some(path) => match load_path(&path, connection.clone()).await {
             Ok((session, absolute_path)) => {
+                connection_events = Some(connection.connection_events());
+                connected = *connection_generation.borrow() != 0;
+                if let Err(error) = session.run_after_load(controls.clone()).await {
+                    eprintln!("afterLoad hook failed: {error}");
+                }
                 current_path = Some(absolute_path.clone());
                 history::record(&mut script_history, absolute_path.clone());
                 if script_history_writable
@@ -207,6 +251,12 @@ async fn run_with_controls_and_lifecycle(
 
     loop {
         if *shutdown.borrow() {
+            drop(connection_events.take());
+            if let Some(active) = session.as_ref()
+                && let Err(error) = active.run_before_stop(controls.clone()).await
+            {
+                eprintln!("beforeStop hook failed: {error}");
+            }
             script_running.store(false, Ordering::Release);
             return Ok(());
         }
@@ -253,33 +303,22 @@ async fn run_with_controls_and_lifecycle(
         // drift out of sync with them.
         console_locked.store(session.is_some() && !paused, Ordering::Release);
 
-        if hotkey_channel_open {
-            match hotkey_pauses.has_changed() {
-                Ok(true) => {
-                    let update = *hotkey_pauses.borrow_and_update();
-                    apply_hotkey_update_and_report(
-                        update,
-                        &controls.actions_paused,
-                        &lock_state,
-                        session.as_ref(),
-                        &mut paused,
-                    )
-                    .await;
-                    disable_capture_if_running(&capture_state, session.is_some(), paused);
-                    continue;
-                }
-                Ok(false) => {}
-                Err(_) => hotkey_channel_open = false,
-            }
-        }
-
         let command = if let Some(command) = pending_command.take() {
             Some(command)
-        } else if session.is_some() && !paused {
+        } else if session
+            .as_ref()
+            .is_some_and(|active| !paused && (connected || !active.has_connection_hooks()))
+        {
             match commands.try_recv() {
                 Ok(command) => Some(command),
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    drop(connection_events.take());
+                    if let Some(active) = session.as_ref()
+                        && let Err(error) = active.run_before_stop(controls.clone()).await
+                    {
+                        eprintln!("beforeStop hook failed: {error}");
+                    }
                     script_running.store(false, Ordering::Release);
                     return Ok(());
                 }
@@ -287,6 +326,32 @@ async fn run_with_controls_and_lifecycle(
         } else {
             tokio::select! {
                 biased;
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        drop(connection_events.take());
+                        if let Some(active) = session.as_ref()
+                            && let Err(error) = active.run_before_stop(controls.clone()).await
+                        {
+                            eprintln!("beforeStop hook failed: {error}");
+                        }
+                        script_running.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                    continue;
+                }
+                command = commands.recv() => match command {
+                    Some(command) => Some(command),
+                    None => {
+                        drop(connection_events.take());
+                        if let Some(active) = session.as_ref()
+                            && let Err(error) = active.run_before_stop(controls.clone()).await
+                        {
+                            eprintln!("beforeStop hook failed: {error}");
+                        }
+                        script_running.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                },
                 changed = hotkey_pauses.changed(), if hotkey_channel_open => {
                     match changed {
                         Ok(()) => {
@@ -294,6 +359,7 @@ async fn run_with_controls_and_lifecycle(
                             apply_hotkey_update_and_report(
                                 update,
                                 &controls.actions_paused,
+                                &controls,
                                 &lock_state,
                                 session.as_ref(),
                                 &mut paused,
@@ -305,20 +371,36 @@ async fn run_with_controls_and_lifecycle(
                     }
                     continue;
                 }
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        script_running.store(false, Ordering::Release);
-                        return Ok(());
+                event = async {
+                    match connection_events.as_mut() {
+                        Some(events) => events.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    match event {
+                        Some(ConnectionEvent::Connected) => {
+                            connected = true;
+                            if let Some(active) = session.as_ref()
+                                && let Err(error) = active.run_on_connect(controls.clone()).await
+                            {
+                                eprintln!("onConnect hook failed: {error}");
+                            }
+                        }
+                        Some(ConnectionEvent::Disconnected) => {
+                            connected = false;
+                            if let Some(active) = session.as_ref()
+                                && let Err(error) = active.run_on_disconnect(controls.clone()).await
+                            {
+                                eprintln!("onDisconnect hook failed: {error}");
+                            }
+                        }
+                        None => {
+                            connected = false;
+                            connection_events = None;
+                        }
                     }
                     continue;
                 }
-                command = commands.recv() => match command {
-                    Some(command) => Some(command),
-                    None => {
-                        script_running.store(false, Ordering::Release);
-                        return Ok(());
-                    }
-                },
             }
         };
 
@@ -330,6 +412,12 @@ async fn run_with_controls_and_lifecycle(
                         ScriptCommand::LoadLocked(path) => (path, true),
                         _ => unreachable!(),
                     };
+                    drop(connection_events.take());
+                    if let Some(active) = session.as_ref()
+                        && let Err(error) = active.run_before_stop(controls.clone()).await
+                    {
+                        eprintln!("beforeStop hook failed: {error}");
+                    }
                     capture_state.set_enabled(false);
                     lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
@@ -340,6 +428,11 @@ async fn run_with_controls_and_lifecycle(
                     if let Some(path) = current_path.clone() {
                         match load_path(&path, connection.clone()).await {
                             Ok((loaded, absolute_path)) => {
+                                connection_events = Some(connection.connection_events());
+                                connected = *connection_generation.borrow() != 0;
+                                if let Err(error) = loaded.run_after_load(controls.clone()).await {
+                                    eprintln!("afterLoad hook failed: {error}");
+                                }
                                 current_path = Some(absolute_path.clone());
                                 history::record(&mut script_history, absolute_path.clone());
                                 script_history_strings = script_history
@@ -365,6 +458,12 @@ async fn run_with_controls_and_lifecycle(
                 }
                 ScriptCommand::Reload | ScriptCommand::ReloadLocked => {
                     let lock_after_load = matches!(command, ScriptCommand::ReloadLocked);
+                    connection_events = None;
+                    if let Some(active) = session.as_ref()
+                        && let Err(error) = active.run_before_stop(controls.clone()).await
+                    {
+                        eprintln!("beforeStop hook failed: {error}");
+                    }
                     capture_state.set_enabled(false);
                     lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
@@ -374,6 +473,11 @@ async fn run_with_controls_and_lifecycle(
                     if let Some(path) = current_path.clone() {
                         match load_path(&path, connection.clone()).await {
                             Ok((loaded, absolute_path)) => {
+                                connection_events = Some(connection.connection_events());
+                                connected = *connection_generation.borrow() != 0;
+                                if let Err(error) = loaded.run_after_load(controls.clone()).await {
+                                    eprintln!("afterLoad hook failed: {error}");
+                                }
                                 current_path = Some(absolute_path.clone());
                                 history::record(&mut script_history, absolute_path.clone());
                                 script_history_strings = script_history
@@ -409,7 +513,7 @@ async fn run_with_controls_and_lifecycle(
                         println!("script is already paused");
                     } else {
                         if let Some(active) = session.as_ref()
-                            && let Err(error) = active.run_before_pause().await
+                            && let Err(error) = active.run_before_pause(controls.clone()).await
                         {
                             eprintln!("beforePause hook failed: {error}");
                         }
@@ -433,7 +537,7 @@ async fn run_with_controls_and_lifecycle(
                         paused = false;
                         println!("script resumed");
                         if let Some(active) = session.as_ref()
-                            && let Err(error) = active.run_after_resume().await
+                            && let Err(error) = active.run_after_resume(controls.clone()).await
                         {
                             eprintln!("afterResume hook failed: {error}");
                         }
@@ -446,9 +550,14 @@ async fn run_with_controls_and_lifecycle(
                     }
                 }
                 ScriptCommand::Stop => {
+                    connection_events = None;
                     lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
-                    if session.take().is_some() {
+                    if let Some(active) = session.as_ref() {
+                        if let Err(error) = active.run_before_stop(controls.clone()).await {
+                            eprintln!("beforeStop hook failed: {error}");
+                        }
+                        session = None;
                         script_running.store(false, Ordering::Release);
                         paused = false;
                         println!("script stopped");
@@ -486,6 +595,12 @@ async fn run_with_controls_and_lifecycle(
                     lock_state.set_enabled(true);
                 }
                 ScriptCommand::Exit => {
+                    drop(connection_events.take());
+                    if let Some(active) = session.as_ref()
+                        && let Err(error) = active.run_before_stop(controls.clone()).await
+                    {
+                        eprintln!("beforeStop hook failed: {error}");
+                    }
                     capture_state.set_enabled(false);
                     lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
@@ -498,6 +613,7 @@ async fn run_with_controls_and_lifecycle(
                         apply_hotkey_update_and_report(
                             update,
                             &controls.actions_paused,
+                            &controls,
                             &lock_state,
                             session.as_ref(),
                             &mut paused,
@@ -511,6 +627,55 @@ async fn run_with_controls_and_lifecycle(
             continue;
         }
 
+        if hotkey_channel_open {
+            match hotkey_pauses.has_changed() {
+                Ok(true) => {
+                    let update = *hotkey_pauses.borrow_and_update();
+                    apply_hotkey_update_and_report(
+                        update,
+                        &controls.actions_paused,
+                        &controls,
+                        &lock_state,
+                        session.as_ref(),
+                        &mut paused,
+                    )
+                    .await;
+                    disable_capture_if_running(&capture_state, session.is_some(), paused);
+                    continue;
+                }
+                Ok(false) => {}
+                Err(_) => hotkey_channel_open = false,
+            }
+        }
+
+        if let Some(events) = connection_events.as_mut() {
+            match events.try_recv() {
+                Ok(ConnectionEvent::Connected) => {
+                    connected = true;
+                    if let Some(active) = session.as_ref()
+                        && let Err(error) = active.run_on_connect(controls.clone()).await
+                    {
+                        eprintln!("onConnect hook failed: {error}");
+                    }
+                    continue;
+                }
+                Ok(ConnectionEvent::Disconnected) => {
+                    connected = false;
+                    if let Some(active) = session.as_ref()
+                        && let Err(error) = active.run_on_disconnect(controls.clone()).await
+                    {
+                        eprintln!("onDisconnect hook failed: {error}");
+                    }
+                    continue;
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {}
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    connected = false;
+                    connection_events = None;
+                }
+            }
+        }
+
         let stop_requested = {
             let Some(active) = session.as_ref() else {
                 continue;
@@ -518,6 +683,117 @@ async fn run_with_controls_and_lifecycle(
             let invocation = active.invoke((), controls.clone());
             tokio::pin!(invocation);
             tokio::select! {
+                biased;
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        drop(connection_events.take());
+                        if let Err(error) = active.run_before_stop(controls.clone()).await {
+                            eprintln!("beforeStop hook failed: {error}");
+                        }
+                        script_running.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                    false
+                }
+                // Dropping `invocation` here (by not polling it again) cancels
+                // whatever the script is awaiting, including rev.sleep, so
+                // Stop/Exit take effect immediately instead of waiting for the
+                // current invocation (and its sleep) to finish on its own.
+                command = commands.recv() => match command {
+                    Some(ScriptCommand::Stop) => {
+                        drop(connection_events.take());
+                        true
+                    }
+                    Some(ScriptCommand::Exit) => {
+                        drop(connection_events.take());
+                        if let Err(error) = active.run_before_stop(controls.clone()).await {
+                            eprintln!("beforeStop hook failed: {error}");
+                        }
+                        capture_state.set_enabled(false);
+                        controls.actions_paused.set_paused(false);
+                        script_running.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                    Some(other) => {
+                        pending_command = Some(other);
+                        false
+                    }
+                    None => {
+                        drop(connection_events.take());
+                        if let Err(error) = active.run_before_stop(controls.clone()).await {
+                            eprintln!("beforeStop hook failed: {error}");
+                        }
+                        script_running.store(false, Ordering::Release);
+                        return Ok(());
+                    }
+                },
+                // F8 flips the shared ActionGate immediately, from a separate
+                // thread, before this update is even published here — so by
+                // the time we observe it, the pause has already taken effect.
+                // Cancel the in-flight invocation right away (same trick as
+                // Stop/Exit below) instead of letting it run until its next
+                // rev.* call or its own completion. `changed()` marks the
+                // update as seen, so (unlike the plain command case) this
+                // arm must finish processing it itself rather than leaving
+                // it for the top of the loop to pick up.
+                changed = hotkey_pauses.changed(), if hotkey_channel_open => {
+                    if changed.is_err() {
+                        hotkey_channel_open = false;
+                    } else {
+                        let update = *hotkey_pauses.borrow_and_update();
+                        apply_hotkey_update_and_report(
+                            update,
+                            &controls.actions_paused,
+                            &controls,
+                            &lock_state,
+                            Some(active),
+                            &mut paused,
+                        )
+                        .await;
+                        disable_capture_if_running(&capture_state, true, paused);
+                    }
+                    false
+                }
+                event = async {
+                    match connection_events.as_mut() {
+                        Some(events) => events.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let invocation_result = invocation
+                        .as_mut()
+                        .now_or_never()
+                        .map(|result| (result, controls.actions_paused.is_paused()));
+                    let connection_lost = !matches!(event, Some(ConnectionEvent::Connected));
+                    match event {
+                        Some(ConnectionEvent::Connected) => {
+                            connected = true;
+                            if let Err(error) = active.run_on_connect(controls.clone()).await {
+                                eprintln!("onConnect hook failed: {error}");
+                            }
+                        }
+                        Some(ConnectionEvent::Disconnected) => {
+                            connected = false;
+                            if let Err(error) = active.run_on_disconnect(controls.clone()).await {
+                                eprintln!("onDisconnect hook failed: {error}");
+                            }
+                        }
+                        None => {
+                            connected = false;
+                            connection_events = None;
+                        }
+                    }
+                    match invocation_result {
+                        Some((Ok(stop_requested), _)) => stop_requested,
+                        _ if connection_lost && active.has_connection_hooks() => false,
+                        Some((Err(_), true)) => false,
+                        Some((Err(error), false)) => {
+                            eprintln!("script invocation failed: {error}");
+                            true
+                        }
+                        None => false,
+                    }
+                }
                 result = &mut invocation => {
                     match result {
                         Ok(stop_requested) => stop_requested,
@@ -538,64 +814,16 @@ async fn run_with_controls_and_lifecycle(
                         }
                     }
                 }
-                // F8 flips the shared ActionGate immediately, from a separate
-                // thread, before this update is even published here — so by
-                // the time we observe it, the pause has already taken effect.
-                // Cancel the in-flight invocation right away (same trick as
-                // Stop/Exit below) instead of letting it run until its next
-                // rev.* call or its own completion. `changed()` marks the
-                // update as seen, so (unlike the plain command case) this
-                // arm must finish processing it itself rather than leaving
-                // it for the top of the loop to pick up.
-                changed = hotkey_pauses.changed(), if hotkey_channel_open => {
-                    if changed.is_err() {
-                        hotkey_channel_open = false;
-                    } else {
-                        let update = *hotkey_pauses.borrow_and_update();
-                        apply_hotkey_update_and_report(
-                            update,
-                            &controls.actions_paused,
-                            &lock_state,
-                            Some(active),
-                            &mut paused,
-                        )
-                        .await;
-                        disable_capture_if_running(&capture_state, true, paused);
-                    }
-                    false
-                }
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        script_running.store(false, Ordering::Release);
-                        return Ok(());
-                    }
-                    false
-                }
-                // Dropping `invocation` here (by not polling it again) cancels
-                // whatever the script is awaiting, including rev.sleep, so
-                // Stop/Exit take effect immediately instead of waiting for the
-                // current invocation (and its sleep) to finish on its own.
-                command = commands.recv() => match command {
-                    Some(ScriptCommand::Stop) => true,
-                    Some(ScriptCommand::Exit) => {
-                        capture_state.set_enabled(false);
-                        controls.actions_paused.set_paused(false);
-                        script_running.store(false, Ordering::Release);
-                        return Ok(());
-                    }
-                    Some(other) => {
-                        pending_command = Some(other);
-                        false
-                    }
-                    None => {
-                        script_running.store(false, Ordering::Release);
-                        return Ok(());
-                    }
-                },
             }
         };
 
         if stop_requested {
+            connection_events = None;
+            if let Some(active) = session.as_ref()
+                && let Err(error) = active.run_before_stop(controls.clone()).await
+            {
+                eprintln!("beforeStop hook failed: {error}");
+            }
             lock_state.set_enabled(false);
             controls.actions_paused.set_paused(false);
             session = None;
@@ -669,6 +897,7 @@ pub(super) fn apply_hotkey_update(
 async fn apply_hotkey_update_and_report(
     update: PauseUpdate,
     gate: &ActionGate,
+    controls: &HostControls,
     lock_state: &LockState,
     session: Option<&ScriptSession>,
     lifecycle_paused: &mut bool,
@@ -696,7 +925,7 @@ async fn apply_hotkey_update_and_report(
         }
     } else if *lifecycle_paused {
         if let Some(active) = session
-            && let Err(error) = active.run_before_pause().await
+            && let Err(error) = active.run_before_pause(controls.clone()).await
         {
             eprintln!("beforePause hook failed: {error}");
         }
@@ -704,7 +933,7 @@ async fn apply_hotkey_update_and_report(
     } else {
         println!("script resumed");
         if let Some(active) = session
-            && let Err(error) = active.run_after_resume().await
+            && let Err(error) = active.run_after_resume(controls.clone()).await
         {
             eprintln!("afterResume hook failed: {error}");
         }

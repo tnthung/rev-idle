@@ -7,11 +7,22 @@ use std::time::Duration;
 
 use windows::Win32::{
     Foundation::{HINSTANCE, LPARAM, LRESULT, POINT, WPARAM},
-    System::LibraryLoader::GetModuleHandleW,
+    Graphics::Gdi::ClientToScreen,
+    System::{
+        LibraryLoader::GetModuleHandleW,
+        Threading::GetCurrentThreadId,
+    },
+    UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE,
+        MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
+        MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
+    },
     UI::WindowsAndMessaging::{
-        CallNextHookEx, GetMessageW, PeekMessageW, PostThreadMessageW,
-        SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, MSLLHOOKSTRUCT,
-        MSG, PM_NOREMOVE, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_QUIT,
+        CallNextHookEx, GetForegroundWindow, GetMessageW, GetSystemMetrics, PeekMessageW,
+        PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK,
+        MSLLHOOKSTRUCT, MSG, PM_NOREMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN,
+        WM_LBUTTONUP, WM_QUIT,
     },
 };
 
@@ -23,6 +34,8 @@ static CAPTURE_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
 
 const CAPTURE_MESSAGE: u32 = WM_APP + 1;
+const FOCUS_MESSAGE: u32 = WM_APP + 2;
+const FOCUS_CLICK_EXTRA_INFO: usize = 0x52455646;
 
 /// Width/height (in client pixels) of the overlay's button row, bottom-right
 /// anchored, that `ControlOverlay.cs` renders in the game window. Clicks
@@ -135,6 +148,9 @@ unsafe extern "system" fn mouse_hook(
 ) -> LRESULT {
     if code >= 0 && data.0 != 0 {
         let hook_data = unsafe { &*(data.0 as *const MSLLHOOKSTRUCT) };
+        if hook_data.dwExtraInfo == FOCUS_CLICK_EXTRA_INFO {
+            return unsafe { CallNextHookEx(None, code, message, data) };
+        }
         let point = hook_data.pt;
         let lock_enabled = LOCK_ENABLED.load(Ordering::Acquire);
         let needs_location = (is_left_button_down(message) || is_left_button_up(message))
@@ -142,7 +158,24 @@ unsafe extern "system" fn mouse_hook(
         let location = needs_location
             .then(|| window::screen_to_client_position(point.x, point.y).ok().flatten())
             .flatten();
-        match decide_mouse_action(message, point, location, lock_enabled) {
+        let action = decide_mouse_action(message, point, location, lock_enabled);
+        if is_left_button_down(message)
+            && location.is_some()
+            && action != MouseAction::PassThrough
+        {
+            let thread_id = CAPTURE_THREAD_ID.load(Ordering::Acquire);
+            if thread_id != 0 {
+                let _ = unsafe {
+                    PostThreadMessageW(
+                        thread_id,
+                        FOCUS_MESSAGE,
+                        WPARAM(point.x as u32 as usize),
+                        LPARAM(point.y as isize),
+                    )
+                };
+            }
+        }
+        match action {
             MouseAction::PassThrough => {}
             MouseAction::Consume => return LRESULT(1),
             MouseAction::ConsumeAndNotify(point) => {
@@ -198,7 +231,60 @@ fn run_capture_loop(hook: HHOOK, connection: WsConnection, command_tx: tokio::sy
         if !value.as_bool() {
             break;
         }
-        if message.message == CAPTURE_MESSAGE {
+        if message.message == FOCUS_MESSAGE
+            && let Ok(window) = window::find_game_window()
+        {
+            let foreground = unsafe { GetForegroundWindow() };
+            if foreground != window {
+                let mut focus = POINT { x: 1, y: 1 };
+                let virtual_left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+                let virtual_top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+                let virtual_width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+                let virtual_height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+                if virtual_width > 1
+                    && virtual_height > 1
+                    && unsafe { ClientToScreen(window, &mut focus).as_bool() }
+                {
+                    let original = POINT {
+                        x: message.wParam.0 as u32 as i32,
+                        y: message.lParam.0 as i32,
+                    };
+                    let normalize_x = |x: i32| {
+                        (((i64::from(x) - i64::from(virtual_left)) * 65535
+                            / i64::from(virtual_width - 1))
+                        .clamp(0, 65535)) as i32
+                    };
+                    let normalize_y = |y: i32| {
+                        (((i64::from(y) - i64::from(virtual_top)) * 65535
+                            / i64::from(virtual_height - 1))
+                        .clamp(0, 65535)) as i32
+                    };
+                    let position_flags =
+                        MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_VIRTUALDESK;
+                    let mouse_input = |point: POINT, flags| INPUT {
+                        r#type: INPUT_MOUSE,
+                        Anonymous: INPUT_0 {
+                            mi: MOUSEINPUT {
+                                dx: normalize_x(point.x),
+                                dy: normalize_y(point.y),
+                                dwFlags: position_flags | flags,
+                                dwExtraInfo: FOCUS_CLICK_EXTRA_INFO,
+                                ..Default::default()
+                            },
+                        },
+                    };
+                    let inputs = [
+                        mouse_input(focus, Default::default()),
+                        mouse_input(focus, MOUSEEVENTF_LEFTDOWN),
+                        mouse_input(focus, MOUSEEVENTF_LEFTUP),
+                        mouse_input(original, Default::default()),
+                    ];
+                    let _ = unsafe {
+                        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32)
+                    };
+                }
+            }
+        } else if message.message == CAPTURE_MESSAGE {
             let _ = command_tx.blocking_send(crate::app::ScriptCommand::CaptureConsumed);
             let point = POINT {
                 x: message.wParam.0 as u32 as i32,
@@ -247,7 +333,7 @@ impl CaptureWorker {
         let (startup_tx, startup_rx) = std_mpsc::channel();
         let runtime = tokio::runtime::Handle::current();
         let handle = thread::spawn(move || {
-            let thread_id = unsafe { windows::Win32::System::Threading::GetCurrentThreadId() };
+            let thread_id = unsafe { GetCurrentThreadId() };
             let mut message = MSG::default();
             let _ = unsafe { PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE) };
             CAPTURE_THREAD_ID.store(thread_id, Ordering::Release);
