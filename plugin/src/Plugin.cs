@@ -316,7 +316,7 @@ public sealed class ScoreTicker : MonoBehaviour
         Plugin.PumpPackets(0);
         if (Plugin.ControlBridge is not ControlBridge bridge)
             return;
-        _controlOverlay ??= ControlOverlay.Create(bridge.Send, bridge.Load);
+        _controlOverlay ??= ControlOverlay.Create(bridge.Send, bridge.Load, bridge.RemoveFromHistory);
         _controlOverlay?.Apply(bridge.State);
     }
 

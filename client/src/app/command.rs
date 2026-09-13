@@ -4,6 +4,7 @@ use std::path::PathBuf;
 pub(crate) enum ScriptCommand {
     Load(PathBuf),
     LoadLocked(PathBuf),
+    RemoveFromHistory(PathBuf),
     Reload,
     ReloadLocked,
     #[allow(dead_code)]

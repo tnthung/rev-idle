@@ -162,6 +162,37 @@ internal sealed class ControlBridge
         }, TaskScheduler.Default);
     }
 
+    internal void RemoveFromHistory(string path)
+    {
+        long expectedGeneration;
+        lock (_gate)
+        {
+            if (_state is null)
+            {
+                Report("Control notification ignored because state is unavailable.");
+                return;
+            }
+            expectedGeneration = _stateGeneration;
+        }
+        Task send;
+        try
+        {
+            send = _connection.Send(new RemoveScriptHistory(path), expectedGeneration);
+        }
+        catch (Exception exception)
+        {
+            Report($"Control notification send failed: {exception.Message}");
+            return;
+        }
+        _ = send.ContinueWith(completed =>
+        {
+            if (completed.IsFaulted)
+                Report($"Control notification send failed: {completed.Exception?.GetBaseException().Message}");
+            else if (completed.IsCanceled)
+                Report("Control notification send was canceled.");
+        }, TaskScheduler.Default);
+    }
+
     private void Report(string message)
     {
         try { _log?.Invoke(message); } catch { }

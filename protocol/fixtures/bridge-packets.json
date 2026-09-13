@@ -21,5 +21,6 @@
   ,"StopCapture": {}
   ,"LockScript": {}
   ,"LoadScript": { "path": "C:\\scripts\\unity_loop2.js", "locked": true }
+  ,"RemoveScriptHistory": { "path": "C:\\scripts\\test.js" }
   ,"StateUpdate": { "phase": "paused", "capture": true, "locked": false, "scripts": ["C:\\scripts\\test.js", "C:\\scripts\\unity_loop2.js"] }
 }

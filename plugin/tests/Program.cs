@@ -50,11 +50,15 @@ ControlPresentationProjectsClosedPhases();
 ControlPresentationAppliesLockOverrides();
 ControlPresentationEnablesMenuWithoutHistory();
 ScriptMenuControllerHandlesToggleSelectionAndOutsideClick();
+ScriptMenuControllerRequiresTwoClicksToRemoveHistory();
+ScriptMenuControllerClosingResetsRemovalConfirmation();
+ScriptMenuControllerTransfersRemovalConfirmation();
 await ScriptMenuControllerOpensSelectedScript();
 await ScriptMenuControllerIgnoresCanceledOpen();
 await ScriptMenuControllerRunsFilePickerOffCallingThread();
 ControlOverlayNativeDialogDataHasWin64Layout();
 ControlIconsPreserveNegativeSpace();
+ControlOverlayJoinsHistoryButtonsWithoutChangingRowWidth();
 ControlOverlayUsesRedCaptureBackground();
 ControlOverlayDefinesSelectedButtonColor();
 ControlOverlayRetainsInactiveIconAssets();
@@ -100,7 +104,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("108 tests passed.");
+System.Console.WriteLine("111 tests passed.");
 
 static void ClientProcessBuildsNonInteractableLaunchArguments()
 {
@@ -174,6 +178,7 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("StopCapture", new StopCapture()),
         ("LockScript", new LockScript()),
         ("LoadScript", new LoadScript(@"C:\scripts\unity_loop2.js", true)),
+        ("RemoveScriptHistory", new RemoveScriptHistory(@"C:\scripts\test.js")),
         ("StateUpdate", new StateUpdate("paused", true, false, new[] { @"C:\scripts\test.js", @"C:\scripts\unity_loop2.js" }))
     };
 
@@ -588,6 +593,11 @@ static async Task ControlBridgePublishesScriptHistoryAndSelections()
         using JsonDocument locked = JsonDocument.Parse(await ReceiveText(peer));
         Equal(scripts[1], locked.RootElement.GetProperty("payload").GetProperty("path").GetString(), testName);
         Equal(true, locked.RootElement.GetProperty("payload").GetProperty("locked").GetBoolean(), testName);
+
+        bridge.RemoveFromHistory(scripts[0]);
+        using JsonDocument removed = JsonDocument.Parse(await ReceiveText(peer));
+        Equal("RemoveScriptHistory", removed.RootElement.GetProperty("type").GetString(), testName);
+        Equal(scripts[0], removed.RootElement.GetProperty("payload").GetProperty("path").GetString(), testName);
     }
 }
 
@@ -840,6 +850,46 @@ static void ScriptMenuControllerHandlesToggleSelectionAndOutsideClick()
     Equal(false, controller.Open, testName);
 }
 
+static void ScriptMenuControllerRequiresTwoClicksToRemoveHistory()
+{
+    const string testName = nameof(ScriptMenuControllerRequiresTwoClicksToRemoveHistory);
+    ScriptMenuController controller = new(_ => { }, () => null);
+    controller.Toggle();
+
+    Equal(false, controller.ConfirmRemoval(@"C:\scripts\first.js"), testName);
+    Equal(@"C:\scripts\first.js", controller.PendingRemovalPath, testName);
+    Equal(true, controller.ConfirmRemoval(@"C:\scripts\first.js"), testName);
+    Equal<string?>(null, controller.PendingRemovalPath, testName);
+    Equal(true, controller.Open, testName);
+}
+
+static void ScriptMenuControllerClosingResetsRemovalConfirmation()
+{
+    const string testName = nameof(ScriptMenuControllerClosingResetsRemovalConfirmation);
+    ScriptMenuController controller = new(_ => { }, () => null);
+    controller.Toggle();
+    Equal(false, controller.ConfirmRemoval(@"C:\scripts\first.js"), testName);
+
+    controller.Close();
+    controller.Toggle();
+
+    Equal(false, controller.ConfirmRemoval(@"C:\scripts\first.js"), testName);
+    Equal(@"C:\scripts\first.js", controller.PendingRemovalPath, testName);
+}
+
+static void ScriptMenuControllerTransfersRemovalConfirmation()
+{
+    const string testName = nameof(ScriptMenuControllerTransfersRemovalConfirmation);
+    ScriptMenuController controller = new(_ => { }, () => null);
+    controller.Toggle();
+
+    Equal(false, controller.ConfirmRemoval(@"C:\scripts\first.js"), testName);
+    Equal(false, controller.ConfirmRemoval(@"C:\scripts\second.js"), testName);
+    Equal(@"C:\scripts\second.js", controller.PendingRemovalPath, testName);
+    Equal(true, controller.ConfirmRemoval(@"C:\scripts\second.js"), testName);
+    Equal(true, controller.Open, testName);
+}
+
 static async Task ScriptMenuControllerOpensSelectedScript()
 {
     const string testName = nameof(ScriptMenuControllerOpensSelectedScript);
@@ -938,6 +988,16 @@ static void ControlIconsPreserveNegativeSpace()
     Equal(true, ControlOverlay.IconPixel(ControlIcon.Menu, 3, 4), testName);
     Equal(true, ControlOverlay.IconPixel(ControlIcon.Menu, 12, 10), testName);
     Equal(false, ControlOverlay.IconPixel(ControlIcon.Menu, 7, 8), testName);
+}
+
+static void ControlOverlayJoinsHistoryButtonsWithoutChangingRowWidth()
+{
+    const string testName = nameof(ControlOverlayJoinsHistoryButtonsWithoutChangingRowWidth);
+    Equal(232f, ControlOverlay.ScriptButtonWidth + ControlOverlay.DeleteButtonWidth, testName);
+    Equal(ControlPixel.Transparent, ControlOverlay.ButtonPixel(0, 0, true, false), testName);
+    Equal(ControlPixel.Border, ControlOverlay.ButtonPixel(11, 0, true, false), testName);
+    Equal(ControlPixel.Border, ControlOverlay.ButtonPixel(0, 0, false, true), testName);
+    Equal(ControlPixel.Transparent, ControlOverlay.ButtonPixel(11, 0, false, true), testName);
 }
 
 static void ControlOverlayUsesRedCaptureBackground()

@@ -67,6 +67,7 @@ internal sealed class ScriptMenuController
     }
 
     internal bool Open { get; private set; }
+    internal string? PendingRemovalPath { get; private set; }
 
     internal void Toggle()
     {
@@ -83,9 +84,7 @@ internal sealed class ScriptMenuController
             now - pendingAt >= TimeSpan.Zero &&
             now - pendingAt <= Window)
         {
-            _pendingAt = null;
-            _pendingPath = null;
-            Open = false;
+            Close();
             _publish(new ScriptSelection(path, true));
             return;
         }
@@ -98,11 +97,22 @@ internal sealed class ScriptMenuController
         if (_pendingAt is not DateTime pendingAt || now - pendingAt < Window)
             return;
         string? path = _pendingPath;
-        _pendingAt = null;
-        _pendingPath = null;
-        Open = false;
+        Close();
         if (path is not null)
             _publish(new ScriptSelection(path, false));
+    }
+
+    internal bool ConfirmRemoval(string path)
+    {
+        _pendingAt = null;
+        _pendingPath = null;
+        if (PendingRemovalPath == path)
+        {
+            PendingRemovalPath = null;
+            return true;
+        }
+        PendingRemovalPath = path;
+        return false;
     }
 
     internal void OpenFile()
@@ -125,6 +135,7 @@ internal sealed class ScriptMenuController
         Open = false;
         _pendingAt = null;
         _pendingPath = null;
+        PendingRemovalPath = null;
     }
 }
 
@@ -232,12 +243,18 @@ internal sealed class ControlOverlay : IDisposable
     private readonly GameObject _menuRoot;
     private readonly GameObject _dismissRoot;
     private readonly List<GameObject> _menuItems = new();
+    private readonly List<Button> _deleteButtons = new();
     private readonly List<string> _scripts = new();
     private readonly Texture2D _texture;
     private readonly Sprite _sprite;
+    private readonly Texture2D _scriptTexture;
+    private readonly Sprite _scriptSprite;
+    private readonly Texture2D _deleteTexture;
+    private readonly Sprite _deleteSprite;
     private readonly Texture2D[] _iconTextures;
     private readonly Sprite[] _icons;
     private readonly Font _font;
+    private readonly Action<string> _removeFromHistory;
     private ControlCommand _reloadStopCommand;
     private ControlCommand _resumePauseCommand;
 
@@ -250,7 +267,10 @@ internal sealed class ControlOverlay : IDisposable
     private readonly ControlDebounce _reloadStopDebounce;
     private readonly ControlDebounce _resumePauseDebounce;
 
-    public static ControlOverlay? Create(Action<ControlCommand> publish, Action<string, bool> load)
+    internal const float ScriptButtonWidth = 202;
+    internal const float DeleteButtonWidth = 30;
+
+    public static ControlOverlay? Create(Action<ControlCommand> publish, Action<string, bool> load, Action<string> removeFromHistory)
     {
         Font? font = null;
         try { font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"); }
@@ -266,10 +286,10 @@ internal sealed class ControlOverlay : IDisposable
                 }
             }
         }
-        return font is null ? null : new ControlOverlay(publish, load, font);
+        return font is null ? null : new ControlOverlay(publish, load, removeFromHistory, font);
     }
 
-    private ControlOverlay(Action<ControlCommand> publish, Action<string, bool> load, Font font)
+    private ControlOverlay(Action<ControlCommand> publish, Action<string, bool> load, Action<string> removeFromHistory, Font font)
     {
         string? OpenScript()
         {
@@ -308,6 +328,7 @@ internal sealed class ControlOverlay : IDisposable
         }
 
         _font = font;
+        _removeFromHistory = removeFromHistory;
         _menuController = new ScriptMenuController(selection => load(selection.Path, selection.Locked), OpenScript);
         _reloadStopDebounce = new ControlDebounce(publish);
         _resumePauseDebounce = new ControlDebounce(publish);
@@ -328,6 +349,40 @@ internal sealed class ControlOverlay : IDisposable
         }
         _texture.Apply();
         _sprite = Sprite.Create(_texture, new Rect(0, 0, 12, 12), new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect, new Vector4(4, 4, 4, 4));
+        _scriptTexture = new Texture2D(12, 12, TextureFormat.RGBA32, false)
+        {
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        for (int y = 0; y < 12; y++)
+        for (int x = 0; x < 12; x++)
+        {
+            _scriptTexture.SetPixel(x, y, ButtonPixel(x, y, true, false) switch
+            {
+                ControlPixel.Border => Color.black,
+                ControlPixel.Fill => Color.white,
+                _ => Color.clear
+            });
+        }
+        _scriptTexture.Apply();
+        _scriptSprite = Sprite.Create(_scriptTexture, new Rect(0, 0, 12, 12), new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect, new Vector4(4, 4, 4, 4));
+        _deleteTexture = new Texture2D(12, 12, TextureFormat.RGBA32, false)
+        {
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        for (int y = 0; y < 12; y++)
+        for (int x = 0; x < 12; x++)
+        {
+            _deleteTexture.SetPixel(x, y, ButtonPixel(x, y, false, true) switch
+            {
+                ControlPixel.Border => Color.black,
+                ControlPixel.Fill => Color.white,
+                _ => Color.clear
+            });
+        }
+        _deleteTexture.Apply();
+        _deleteSprite = Sprite.Create(_deleteTexture, new Rect(0, 0, 12, 12), new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect, new Vector4(4, 4, 4, 4));
         int iconCount = Enum.GetValues<ControlIcon>().Length;
         _iconTextures = new Texture2D[iconCount];
         _icons = new Sprite[iconCount];
@@ -539,7 +594,7 @@ internal sealed class ControlOverlay : IDisposable
         ControlPresentation presentation = ControlPresentation.From(state, _locked);
         IReadOnlyList<string> scripts = state?.Scripts ?? Array.Empty<string>();
         bool scriptsChanged = _menuItems.Count == 0 || !_scripts.SequenceEqual(scripts);
-        if (!presentation.MenuEnabled || scriptsChanged)
+        if (!presentation.MenuEnabled)
             _menuController.Close();
         else
             _menuController.Flush(now);
@@ -551,6 +606,7 @@ internal sealed class ControlOverlay : IDisposable
                 UnityEngine.Object.Destroy(item);
             }
             _menuItems.Clear();
+            _deleteButtons.Clear();
             _scripts.Clear();
             _scripts.AddRange(scripts);
             _menuRoot.GetComponent<RectTransform>().sizeDelta = new Vector2(232, (scripts.Count + 1) * 30);
@@ -559,7 +615,7 @@ internal sealed class ControlOverlay : IDisposable
                 GameObject itemObject = new(index < 0 ? "Open Script" : $"Script {index}", Il2CppType.Of<RectTransform>());
                 itemObject.transform.SetParent(_menuRoot.transform, false);
                 Image itemImage = itemObject.AddComponent<Image>();
-                itemImage.sprite = _sprite;
+                itemImage.sprite = index < 0 ? _sprite : _scriptSprite;
                 itemImage.type = Image.Type.Sliced;
                 Button item = itemObject.AddComponent<Button>();
                 item.targetGraphic = itemImage;
@@ -574,7 +630,7 @@ internal sealed class ControlOverlay : IDisposable
                 itemRect.anchorMax = Vector2.zero;
                 itemRect.pivot = Vector2.zero;
                 itemRect.anchoredPosition = new Vector2(0, (scripts.Count - index - 1) * 30);
-                itemRect.sizeDelta = new Vector2(232, 30);
+                itemRect.sizeDelta = new Vector2(index < 0 ? 232 : ScriptButtonWidth, 30);
 
                 GameObject textObject = new("Text", Il2CppType.Of<RectTransform>());
                 textObject.transform.SetParent(itemObject.transform, false);
@@ -599,9 +655,55 @@ internal sealed class ControlOverlay : IDisposable
                     string path = scripts[index];
                     text.text = Path.GetFileName(path);
                     item.onClick.AddListener((UnityAction)(() => _menuController.Click(DateTime.UtcNow, path)));
+
+                    GameObject deleteObject = new("Delete", Il2CppType.Of<RectTransform>());
+                    deleteObject.transform.SetParent(itemObject.transform, false);
+                    Image deleteImage = deleteObject.AddComponent<Image>();
+                    deleteImage.sprite = _deleteSprite;
+                    deleteImage.type = Image.Type.Sliced;
+                    Button delete = deleteObject.AddComponent<Button>();
+                    delete.targetGraphic = deleteImage;
+                    delete.colors = itemColors;
+                    RectTransform deleteRect = deleteObject.GetComponent<RectTransform>();
+                    deleteRect.anchorMin = Vector2.zero;
+                    deleteRect.anchorMax = Vector2.zero;
+                    deleteRect.pivot = Vector2.zero;
+                    deleteRect.anchoredPosition = new Vector2(ScriptButtonWidth, 0);
+                    deleteRect.sizeDelta = new Vector2(DeleteButtonWidth, 30);
+
+                    GameObject deleteTextObject = new("Text", Il2CppType.Of<RectTransform>());
+                    deleteTextObject.transform.SetParent(deleteObject.transform, false);
+                    Text deleteText = deleteTextObject.AddComponent<Text>();
+                    deleteText.font = _font;
+                    deleteText.fontSize = 18;
+                    deleteText.alignment = TextAnchor.MiddleCenter;
+                    deleteText.color = Color.white;
+                    deleteText.raycastTarget = false;
+                    deleteText.text = "×";
+                    RectTransform deleteTextRect = deleteTextObject.GetComponent<RectTransform>();
+                    deleteTextRect.anchorMin = Vector2.zero;
+                    deleteTextRect.anchorMax = Vector2.one;
+                    deleteTextRect.offsetMin = Vector2.zero;
+                    deleteTextRect.offsetMax = Vector2.zero;
+                    delete.onClick.AddListener((UnityAction)(() =>
+                    {
+                        if (_menuController.ConfirmRemoval(path))
+                            _removeFromHistory(path);
+                    }));
+                    _deleteButtons.Add(delete);
                 }
                 _menuItems.Add(itemObject);
             }
+        }
+        for (int index = 0; index < _deleteButtons.Count; index++)
+        {
+            bool pendingRemoval = _menuController.PendingRemovalPath == _scripts[index];
+            ColorBlock deleteColors = _deleteButtons[index].colors;
+            deleteColors.normalColor = pendingRemoval ? Color.red : new Color(69f / 255f, 74f / 255f, 79f / 255f, 1);
+            deleteColors.highlightedColor = pendingRemoval ? Color.red : new Color(82f / 255f, 88f / 255f, 94f / 255f, 1);
+            deleteColors.pressedColor = pendingRemoval ? Color.red : new Color(55f / 255f, 59f / 255f, 63f / 255f, 1);
+            deleteColors.selectedColor = deleteColors.normalColor;
+            _deleteButtons[index].colors = deleteColors;
         }
         _menu.interactable = presentation.MenuEnabled;
         _menuRoot.SetActive(_menuController.Open);
@@ -637,6 +739,10 @@ internal sealed class ControlOverlay : IDisposable
     public void Dispose()
     {
         UnityEngine.Object.Destroy(_root);
+        UnityEngine.Object.Destroy(_deleteSprite);
+        UnityEngine.Object.Destroy(_deleteTexture);
+        UnityEngine.Object.Destroy(_scriptSprite);
+        UnityEngine.Object.Destroy(_scriptTexture);
         UnityEngine.Object.Destroy(_sprite);
         UnityEngine.Object.Destroy(_texture);
         foreach (Sprite icon in _icons)
@@ -645,10 +751,11 @@ internal sealed class ControlOverlay : IDisposable
             UnityEngine.Object.Destroy(texture);
     }
 
-    internal static ControlPixel ButtonPixel(int x, int y)
+    internal static ControlPixel ButtonPixel(int x, int y, bool roundedLeft = true, bool roundedRight = true)
     {
-        int cornerX = x < 4 ? 3 - x : x > 7 ? x - 8 : 0;
-        int cornerY = y < 4 ? 3 - y : y > 7 ? y - 8 : 0;
+        bool roundedCorner = roundedLeft && x < 4 || roundedRight && x > 7;
+        int cornerX = roundedLeft && x < 4 ? 3 - x : roundedRight && x > 7 ? x - 8 : 0;
+        int cornerY = roundedCorner ? y < 4 ? 3 - y : y > 7 ? y - 8 : 0 : 0;
         int cornerDistance = cornerX * cornerX + cornerY * cornerY;
         if (cornerDistance > 9)
             return ControlPixel.Transparent;

@@ -414,6 +414,22 @@ pub(super) async fn run_with_controls_and_lifecycle(
 
         if let Some(command) = command {
             match command {
+                ScriptCommand::RemoveFromHistory(path) => {
+                    let history_len = script_history.len();
+                    script_history.retain(|entry| entry != &path);
+                    if script_history.len() != history_len {
+                        script_history_strings = script_history
+                            .iter()
+                            .map(|path| path.to_string_lossy().into_owned())
+                            .collect();
+                        script_history_changed = true;
+                        if script_history_writable
+                            && let Some(path) = script_history_path.as_deref()
+                        {
+                            history::save_history(path, &script_history);
+                        }
+                    }
+                }
                 load @ (ScriptCommand::Load(_) | ScriptCommand::LoadLocked(_)) => {
                     let (path, lock_after_load) = match load {
                         ScriptCommand::Load(path) => (path, false),

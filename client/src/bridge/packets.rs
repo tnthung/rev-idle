@@ -105,6 +105,10 @@ pub(crate) struct LoadScript {
     pub(crate) path: String,
     pub(crate) locked: bool,
 }
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct RemoveScriptHistory {
+    pub(crate) path: String,
+}
 
 impl Packet for StateReq {
     const TYPE: &'static str = "StateReq";
@@ -132,6 +136,7 @@ impl Packet for StartCapture { const TYPE: &'static str = "StartCapture"; }
 impl Packet for StopCapture { const TYPE: &'static str = "StopCapture"; }
 impl Packet for LockScript { const TYPE: &'static str = "LockScript"; }
 impl Packet for LoadScript { const TYPE: &'static str = "LoadScript"; }
+impl Packet for RemoveScriptHistory { const TYPE: &'static str = "RemoveScriptHistory"; }
 impl Packet for StateUpdate { const TYPE: &'static str = "StateUpdate"; }
 
 impl Packet for InvokeReq {
@@ -283,6 +288,7 @@ mod tests {
             (StopCapture::TYPE, serde_json::to_value(StopCapture {}).unwrap()),
             (LockScript::TYPE, serde_json::to_value(LockScript {}).unwrap()),
             (LoadScript::TYPE, serde_json::to_value(LoadScript { path: r"C:\scripts\unity_loop2.js".to_owned(), locked: true }).unwrap()),
+            (RemoveScriptHistory::TYPE, serde_json::to_value(RemoveScriptHistory { path: r"C:\scripts\test.js".to_owned() }).unwrap()),
             (StateUpdate::TYPE, serde_json::to_value(StateUpdate {
                 phase: ScriptPhase::Paused,
                 capture: true,

@@ -1,6 +1,6 @@
 use super::{
     connection::{PacketContext, WsError},
-    packets::{LoadScript, LockScript, PauseScript, ReloadLockedScript, ReloadScript, ResumeLockedScript, ResumeScript, StartCapture, StopCapture, StopScript},
+    packets::{LoadScript, LockScript, PauseScript, ReloadLockedScript, ReloadScript, RemoveScriptHistory, ResumeLockedScript, ResumeScript, StartCapture, StopCapture, StopScript},
     WsConnection,
 };
 use crate::app::{ScriptCommand, StateUpdate};
@@ -19,6 +19,14 @@ pub(crate) fn register_control_handlers(
             } else {
                 ScriptCommand::Load(packet.path.into())
             }).await.ok();
+            Ok(())
+        }
+    })?;
+    let command_sender = command_tx.clone();
+    connection.handler::<RemoveScriptHistory, _, _>(move |_context: PacketContext, packet| {
+        let command_tx = command_sender.clone();
+        async move {
+            command_tx.send(ScriptCommand::RemoveFromHistory(packet.path.into())).await.ok();
             Ok(())
         }
     })?;
@@ -192,7 +200,7 @@ pub(crate) async fn publish_state(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        test_support::raw_server, LoadScript, LockScript, ReloadLockedScript, ReloadScript, ResumeLockedScript, ResumeScript, StartCapture,
+        test_support::raw_server, LoadScript, LockScript, ReloadLockedScript, ReloadScript, RemoveScriptHistory, ResumeLockedScript, ResumeScript, StartCapture,
         StopCapture, StopScript, PauseScript, WsConnection,
     };
     use crate::app::{ScriptCommand, ScriptPhase, StateUpdate};
@@ -246,6 +254,43 @@ mod tests {
                 expected,
             );
         }
+        connection.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn remove_script_history_handler_preserves_path() {
+        let (address, peer_rx) = raw_server().await;
+        let connection = WsConnection::connect_for_test(
+            address,
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+        );
+        let (command_tx, mut command_rx) = mpsc::channel(1);
+        register_control_handlers(&connection, command_tx).unwrap();
+        let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+            .await
+            .unwrap()
+            .unwrap();
+
+        peer.send(Message::Text(
+            json!({
+                "uuid": uuid::Uuid::new_v4(),
+                "type": RemoveScriptHistory::TYPE,
+                "payload": { "path": r"C:\scripts\first.js" },
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), command_rx.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            ScriptCommand::RemoveFromHistory(std::path::PathBuf::from(r"C:\scripts\first.js")),
+        );
         connection.shutdown().await;
     }
 

@@ -24,4 +24,5 @@ internal sealed record StartCapture;
 internal sealed record StopCapture;
 internal sealed record LockScript;
 internal sealed record LoadScript(string Path, bool Locked);
+internal sealed record RemoveScriptHistory(string Path);
 internal sealed record StateUpdate(string Phase, bool Capture, bool Locked = false, IReadOnlyList<string>? Scripts = null);
