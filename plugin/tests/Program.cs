@@ -46,8 +46,12 @@ await ControlBridgeDoesNotSendUsingReconnectedGeneration();
 await WsPacketContextCarriesOriginGeneration();
 ControlPresentationProjectsClosedPhases();
 ControlPresentationAppliesLockOverrides();
-ControlPresentationDisablesMenuWithoutHistory();
+ControlPresentationEnablesMenuWithoutHistory();
 ScriptMenuControllerHandlesToggleSelectionAndOutsideClick();
+await ScriptMenuControllerOpensSelectedScript();
+await ScriptMenuControllerIgnoresCanceledOpen();
+await ScriptMenuControllerRunsFilePickerOffCallingThread();
+ControlOverlayNativeDialogDataHasWin64Layout();
 ControlIconsPreserveNegativeSpace();
 ControlOverlayUsesRedCaptureBackground();
 ControlOverlayDefinesSelectedButtonColor();
@@ -94,7 +98,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("102 tests passed.");
+System.Console.WriteLine("106 tests passed.");
 
 static void WsEnvelopeMatchesSharedFixture()
 {
@@ -731,11 +735,11 @@ static void ControlPresentationProjectsClosedPhases()
     Equal(false, disconnected.MenuEnabled, testName);
 }
 
-static void ControlPresentationDisablesMenuWithoutHistory()
+static void ControlPresentationEnablesMenuWithoutHistory()
 {
-    const string testName = nameof(ControlPresentationDisablesMenuWithoutHistory);
-    Equal(false, ControlPresentation.From(new ControlState(ScriptPhase.Running, false)).MenuEnabled, testName);
-    Equal(false, ControlPresentation.From(new ControlState(ScriptPhase.Running, false, Scripts: Array.Empty<string>())).MenuEnabled, testName);
+    const string testName = nameof(ControlPresentationEnablesMenuWithoutHistory);
+    Equal(true, ControlPresentation.From(new ControlState(ScriptPhase.Running, false)).MenuEnabled, testName);
+    Equal(true, ControlPresentation.From(new ControlState(ScriptPhase.Running, false, Scripts: Array.Empty<string>())).MenuEnabled, testName);
     Equal(true, ControlPresentation.From(new ControlState(ScriptPhase.Running, false, Scripts: new[] { @"C:\scripts\test.js" })).MenuEnabled, testName);
 }
 
@@ -778,7 +782,7 @@ static void ScriptMenuControllerHandlesToggleSelectionAndOutsideClick()
     const string testName = nameof(ScriptMenuControllerHandlesToggleSelectionAndOutsideClick);
     DateTime start = DateTime.UtcNow;
     List<ScriptSelection> selected = new();
-    ScriptMenuController controller = new(selected.Add);
+    ScriptMenuController controller = new(selected.Add, () => null);
 
     controller.Toggle();
     Equal(true, controller.Open, testName);
@@ -801,6 +805,63 @@ static void ScriptMenuControllerHandlesToggleSelectionAndOutsideClick()
     Equal(2, selected.Count, testName);
     Equal(new ScriptSelection(@"C:\scripts\second.js", true), selected[1], testName);
     Equal(false, controller.Open, testName);
+}
+
+static async Task ScriptMenuControllerOpensSelectedScript()
+{
+    const string testName = nameof(ScriptMenuControllerOpensSelectedScript);
+    TaskCompletionSource<ScriptSelection> selected = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    ScriptMenuController controller = new(selected.SetResult, () => @"C:\scripts\opened.js");
+
+    controller.Toggle();
+    controller.OpenFile();
+
+    Equal(false, controller.Open, testName);
+    Equal(new ScriptSelection(@"C:\scripts\opened.js", false), await selected.Task.WaitAsync(TimeSpan.FromSeconds(1)), testName);
+}
+
+static async Task ScriptMenuControllerIgnoresCanceledOpen()
+{
+    const string testName = nameof(ScriptMenuControllerIgnoresCanceledOpen);
+    List<ScriptSelection> selected = new();
+    TaskCompletionSource completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    ScriptMenuController controller = new(selected.Add, () =>
+    {
+        completed.SetResult();
+        return null;
+    });
+
+    controller.Toggle();
+    controller.OpenFile();
+    await completed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+    Equal(false, controller.Open, testName);
+    Equal(0, selected.Count, testName);
+}
+
+static async Task ScriptMenuControllerRunsFilePickerOffCallingThread()
+{
+    const string testName = nameof(ScriptMenuControllerRunsFilePickerOffCallingThread);
+    int callingThread = Environment.CurrentManagedThreadId;
+    TaskCompletionSource<int> pickerThread = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    ScriptMenuController controller = new(_ => { }, () =>
+    {
+        pickerThread.SetResult(Environment.CurrentManagedThreadId);
+        return null;
+    });
+
+    controller.OpenFile();
+
+    Equal(false, callingThread == await pickerThread.Task.WaitAsync(TimeSpan.FromSeconds(1)), testName);
+}
+
+static void ControlOverlayNativeDialogDataHasWin64Layout()
+{
+    const string testName = nameof(ControlOverlayNativeDialogDataHasWin64Layout);
+    Type? dataType = typeof(ControlOverlay).GetNestedType("OpenFileNameData", BindingFlags.NonPublic);
+
+    Equal(false, dataType is null, testName);
+    Equal(152, System.Runtime.InteropServices.Marshal.SizeOf(dataType!), testName);
 }
 
 static void ControlIconsPreserveNegativeSpace()

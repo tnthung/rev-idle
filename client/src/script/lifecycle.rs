@@ -174,7 +174,7 @@ pub(super) async fn run_with_controls_and_connection(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_with_controls_and_lifecycle(
+pub(super) async fn run_with_controls_and_lifecycle(
     mut commands: mpsc::Receiver<ScriptCommand>,
     connection: WsConnection,
     mut hotkey_pauses: watch::Receiver<PauseUpdate>,
@@ -223,6 +223,14 @@ async fn run_with_controls_and_lifecycle(
             }
             Err(error) => {
                 eprintln!("{error}");
+                script_history.retain(|entry| {
+                    entry != &std::path::absolute(&path).unwrap_or_else(|_| path.clone())
+                });
+                if script_history_writable
+                    && let Some(path) = script_history_path.as_deref()
+                {
+                    history::save_history(path, &script_history);
+                }
                 None
             }
         },
@@ -452,7 +460,25 @@ async fn run_with_controls_and_lifecycle(
                                 }
                                 println!("running {}", absolute_path.display());
                             }
-                            Err(error) => eprintln!("{error}"),
+                            Err(error) => {
+                                eprintln!("{error}");
+                                let history_len = script_history.len();
+                                script_history.retain(|entry| {
+                                    entry != &std::path::absolute(&path).unwrap_or_else(|_| path.clone())
+                                });
+                                if script_history.len() != history_len {
+                                    script_history_strings = script_history
+                                        .iter()
+                                        .map(|path| path.to_string_lossy().into_owned())
+                                        .collect();
+                                    script_history_changed = true;
+                                    if script_history_writable
+                                        && let Some(path) = script_history_path.as_deref()
+                                    {
+                                        history::save_history(path, &script_history);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -497,7 +523,25 @@ async fn run_with_controls_and_lifecycle(
                                 }
                                 println!("reloaded {}", absolute_path.display());
                             }
-                            Err(error) => eprintln!("{error}"),
+                            Err(error) => {
+                                eprintln!("{error}");
+                                let history_len = script_history.len();
+                                script_history.retain(|entry| {
+                                    entry != &std::path::absolute(&path).unwrap_or_else(|_| path.clone())
+                                });
+                                if script_history.len() != history_len {
+                                    script_history_strings = script_history
+                                        .iter()
+                                        .map(|path| path.to_string_lossy().into_owned())
+                                        .collect();
+                                    script_history_changed = true;
+                                    if script_history_writable
+                                        && let Some(path) = script_history_path.as_deref()
+                                    {
+                                        history::save_history(path, &script_history);
+                                    }
+                                }
+                            }
                         }
                     } else {
                         println!("no script is loaded; use load <script-path>");

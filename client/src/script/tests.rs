@@ -7,6 +7,7 @@ use super::lifecycle::{
     disable_capture_if_running,
     run_with_controls,
     run_with_controls_and_connection,
+    run_with_controls_and_lifecycle,
     run_with_controls_and_state,
     CaptureAction,
 };
@@ -3341,6 +3342,65 @@ async fn load_locked_replaces_the_running_script_and_reports_it_most_recent() {
         runner.await.unwrap().unwrap();
         std::fs::remove_file(first).unwrap();
         std::fs::remove_file(second).unwrap();
+    }).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn failed_history_load_removes_the_script_from_reported_and_saved_history() {
+    static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+    let lock_state = LockState { enabled: &LOCK_ENABLED };
+    lock_state.set_enabled(false);
+    let dir = std::env::temp_dir().join(format!("rev-idle-failed-history-load-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("script.js");
+    let history_path = dir.join("script_history.txt");
+    std::fs::write(&path, r#"export default (() => {})"#).unwrap();
+    let absolute_path = std::path::absolute(&path).unwrap();
+    let (command_tx, command_rx) = mpsc::channel(8);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+    let (state_tx, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    let (controls, _) = recording_controls();
+    let local = tokio::task::LocalSet::new();
+    local.run_until(async move {
+        let runner = tokio::task::spawn_local(run_with_controls_and_lifecycle(
+            command_rx,
+            crate::bridge::WsConnection::disconnected_for_test(),
+            pause_rx,
+            Some(path.clone()),
+            controls,
+            Duration::from_millis(5),
+            shutdown,
+            std::sync::Arc::new(AtomicBool::new(false)),
+            std::sync::Arc::new(AtomicBool::new(false)),
+            CaptureState::default(),
+            lock_state,
+            Some(history_path.clone()),
+            state_tx,
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().phase == ScriptPhase::Running && state_rx.borrow().scripts == vec![absolute_path.to_string_lossy().into_owned()] {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        std::fs::write(&path, r#"export default (() => {"#).unwrap();
+        command_tx.send(ScriptCommand::Load(path.clone())).await.unwrap();
+        let removed = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if state_rx.borrow().phase == ScriptPhase::Stopped && state_rx.borrow().scripts.is_empty() {
+                    break;
+                }
+                state_rx.changed().await.unwrap();
+            }
+        }).await.is_ok();
+        command_tx.send(ScriptCommand::Exit).await.unwrap();
+        runner.await.unwrap().unwrap();
+        assert!(removed);
+        assert_eq!(std::fs::read_to_string(&history_path).unwrap(), "");
+        std::fs::remove_dir_all(dir).unwrap();
     }).await;
 }
 

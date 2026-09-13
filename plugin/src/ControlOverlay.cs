@@ -1,4 +1,5 @@
 using Il2CppInterop.Runtime;
+using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.Events;
@@ -45,7 +46,6 @@ internal readonly record struct ControlPresentation(
             ScriptPhase.Paused => new(ControlIcon.Stop, true, ControlIcon.Resume, true, true, true),
             _ => new(ControlIcon.Reload, false, ControlIcon.Resume, false, false, true)
         };
-        presentation = presentation with { MenuEnabled = presentation.MenuEnabled && state.Value.Scripts?.Count > 0 };
         return locked ? presentation with { ResumePauseIcon = ControlIcon.Lock, CaptureEnabled = false, MenuEnabled = false } : presentation;
     }
 }
@@ -56,12 +56,14 @@ internal sealed class ScriptMenuController
 {
     private static readonly TimeSpan Window = TimeSpan.FromMilliseconds(200);
     private readonly Action<ScriptSelection> _publish;
+    private readonly Func<string?> _openFile;
     private DateTime? _pendingAt;
     private string? _pendingPath;
 
-    internal ScriptMenuController(Action<ScriptSelection> publish)
+    internal ScriptMenuController(Action<ScriptSelection> publish, Func<string?> openFile)
     {
         _publish = publish;
+        _openFile = openFile;
     }
 
     internal bool Open { get; private set; }
@@ -101,6 +103,21 @@ internal sealed class ScriptMenuController
         Open = false;
         if (path is not null)
             _publish(new ScriptSelection(path, false));
+    }
+
+    internal void OpenFile()
+    {
+        Close();
+        _ = Task.Run(_openFile).ContinueWith(completed =>
+        {
+            if (completed.IsFaulted)
+            {
+                Plugin.LogBridgeError($"Open script dialog failed: {completed.Exception?.GetBaseException().Message}");
+                return;
+            }
+            if (!completed.IsCanceled && completed.Result is string path)
+                _publish(new ScriptSelection(path, false));
+        }, TaskScheduler.Default);
     }
 
     internal void Close()
@@ -165,6 +182,40 @@ internal sealed class ControlOverlay : IDisposable
     internal const int TooltipWidth = 132;
     internal const int TooltipHeight = 28;
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OpenFileNameData
+    {
+        internal int StructSize;
+        internal nint Owner;
+        internal nint Instance;
+        internal nint Filter;
+        internal nint CustomFilter;
+        internal int MaxCustomFilter;
+        internal int FilterIndex;
+        internal nint File;
+        internal int MaxFile;
+        internal nint FileTitle;
+        internal int MaxFileTitle;
+        internal nint InitialDirectory;
+        internal nint Title;
+        internal int Flags;
+        internal short FileOffset;
+        internal short FileExtension;
+        internal nint DefaultExtension;
+        internal nint CustomData;
+        internal nint Hook;
+        internal nint TemplateName;
+        internal nint Reserved;
+        internal int ReservedSize;
+        internal int ExtendedFlags;
+    }
+
+    [DllImport("comdlg32.dll", ExactSpelling = true, SetLastError = true)]
+    private static extern bool GetOpenFileNameW(ref OpenFileNameData openFileName);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+
     private readonly GameObject _root;
     private readonly Button _menu;
     private readonly Image _menuImage;
@@ -220,8 +271,44 @@ internal sealed class ControlOverlay : IDisposable
 
     private ControlOverlay(Action<ControlCommand> publish, Action<string, bool> load, Font font)
     {
+        string? OpenScript()
+        {
+            nint file = 0;
+            nint filter = 0;
+            nint title = 0;
+            nint defaultExtension = 0;
+            try
+            {
+                file = Marshal.AllocHGlobal(32768 * sizeof(char));
+                filter = Marshal.StringToHGlobalUni("JavaScript files (*.js)\0*.js\0All files (*.*)\0*.*\0\0");
+                title = Marshal.StringToHGlobalUni("Open script");
+                defaultExtension = Marshal.StringToHGlobalUni("js");
+                Marshal.WriteInt16(file, 0);
+                OpenFileNameData openFileName = new()
+                {
+                    StructSize = Marshal.SizeOf<OpenFileNameData>(),
+                    Owner = GetForegroundWindow(),
+                    Filter = filter,
+                    FilterIndex = 1,
+                    File = file,
+                    MaxFile = 32768,
+                    Title = title,
+                    Flags = 0x00000800 | 0x00001000 | 0x00000008,
+                    DefaultExtension = defaultExtension
+                };
+                return GetOpenFileNameW(ref openFileName) ? Marshal.PtrToStringUni(file) : null;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(file);
+                Marshal.FreeHGlobal(filter);
+                Marshal.FreeHGlobal(title);
+                Marshal.FreeHGlobal(defaultExtension);
+            }
+        }
+
         _font = font;
-        _menuController = new ScriptMenuController(selection => load(selection.Path, selection.Locked));
+        _menuController = new ScriptMenuController(selection => load(selection.Path, selection.Locked), OpenScript);
         _reloadStopDebounce = new ControlDebounce(publish);
         _resumePauseDebounce = new ControlDebounce(publish);
         _texture = new Texture2D(12, 12, TextureFormat.RGBA32, false)
@@ -451,7 +538,7 @@ internal sealed class ControlOverlay : IDisposable
         _locked = state?.Locked == true;
         ControlPresentation presentation = ControlPresentation.From(state, _locked);
         IReadOnlyList<string> scripts = state?.Scripts ?? Array.Empty<string>();
-        bool scriptsChanged = !_scripts.SequenceEqual(scripts);
+        bool scriptsChanged = _menuItems.Count == 0 || !_scripts.SequenceEqual(scripts);
         if (!presentation.MenuEnabled || scriptsChanged)
             _menuController.Close();
         else
@@ -466,11 +553,10 @@ internal sealed class ControlOverlay : IDisposable
             _menuItems.Clear();
             _scripts.Clear();
             _scripts.AddRange(scripts);
-            _menuRoot.GetComponent<RectTransform>().sizeDelta = new Vector2(232, scripts.Count * 30);
-            for (int index = 0; index < scripts.Count; index++)
+            _menuRoot.GetComponent<RectTransform>().sizeDelta = new Vector2(232, (scripts.Count + 1) * 30);
+            for (int index = -1; index < scripts.Count; index++)
             {
-                string path = scripts[index];
-                GameObject itemObject = new($"Script {index}", Il2CppType.Of<RectTransform>());
+                GameObject itemObject = new(index < 0 ? "Open Script" : $"Script {index}", Il2CppType.Of<RectTransform>());
                 itemObject.transform.SetParent(_menuRoot.transform, false);
                 Image itemImage = itemObject.AddComponent<Image>();
                 itemImage.sprite = _sprite;
@@ -498,13 +584,22 @@ internal sealed class ControlOverlay : IDisposable
                 text.alignment = TextAnchor.MiddleLeft;
                 text.color = Color.white;
                 text.raycastTarget = false;
-                text.text = Path.GetFileName(path);
                 RectTransform textRect = textObject.GetComponent<RectTransform>();
                 textRect.anchorMin = Vector2.zero;
                 textRect.anchorMax = Vector2.one;
                 textRect.offsetMin = new Vector2(8, 0);
                 textRect.offsetMax = new Vector2(-8, 0);
-                item.onClick.AddListener((UnityAction)(() => _menuController.Click(DateTime.UtcNow, path)));
+                if (index < 0)
+                {
+                    text.text = "Open";
+                    item.onClick.AddListener((UnityAction)_menuController.OpenFile);
+                }
+                else
+                {
+                    string path = scripts[index];
+                    text.text = Path.GetFileName(path);
+                    item.onClick.AddListener((UnityAction)(() => _menuController.Click(DateTime.UtcNow, path)));
+                }
                 _menuItems.Add(itemObject);
             }
         }
