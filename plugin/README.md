@@ -6,7 +6,7 @@ This BepInEx plugin exposes selected live Revolution Idle values through a loopb
 
 - Revolution Idle for Windows x64 (Steam)
 - BepInEx 6 IL2CPP build 785 or newer with generated `BepInEx/interop` assemblies
-- .NET SDK 8 or newer for building
+- .NET SDK 8 or newer and Rust/Cargo for building
 
 The plugin itself targets .NET 6 because that is the runtime embedded by BepInEx IL2CPP.
 
@@ -20,7 +20,7 @@ From the repository root, run:
 
 From the `plugin` folder, run `.\install.cmd`. The launcher applies an execution-policy bypass only to the installer process; it does not change the system or user execution policy.
 
-The installer asks for the Revolution Idle installation folder. If BepInEx is missing, it downloads and verifies the pinned Windows x64 IL2CPP build, launches the game once to generate interop assemblies, runs the plugin tests and Release build, and installs the verified DLL.
+The installer asks for the Revolution Idle installation folder. If BepInEx is missing, it downloads and verifies the pinned Windows x64 IL2CPP build, launches the game once to generate interop assemblies, runs the plugin tests and Release builds, and installs the verified DLL and `client.exe` in the game root. On game startup, the plugin starts that client with the configured port and `--non-interactable`; client stdout and stderr are forwarded to BepInEx logging.
 
 If only part of a BepInEx installation is present, the installer stops without overwriting it. Repair or remove that partial installation before retrying.
 
@@ -35,6 +35,7 @@ For non-interactive use:
 From the repository root:
 
 ```powershell
+cargo build --manifest-path client/Cargo.toml --release
 dotnet run --project plugin/tests/RevIdle.ScoreTelemetry.Tests.csproj --framework net8.0 -p:TargetFrameworks=net8.0
 dotnet build plugin/src/RevolutionIdle.ScoreTelemetry.csproj -c Release
 ```
@@ -43,7 +44,7 @@ If the game is installed elsewhere, append `/p:GameDir='D:\path\to\Revolution Id
 
 ## Install
 
-Create `BepInEx/plugins/RevIdle.ScoreTelemetry` under the Revolution Idle game folder and copy `plugin/src/bin/Release/RevIdle.ScoreTelemetry.dll` into it. Start the game once to create the config file:
+Create `BepInEx/plugins/RevIdle.ScoreTelemetry` under the Revolution Idle game folder and copy `plugin/src/bin/Release/RevIdle.ScoreTelemetry.dll` into it. Copy `client/target/release/client.exe` to the game root. Start the game once to create the config file:
 
 `BepInEx/config/dev.tnthung.revolutionidle.scoretelemetry.cfg`
 
@@ -55,6 +56,8 @@ Port = 19841
 ```
 
 `0`, non-numeric values, and values outside `1..65535` disable the bridge. The bridge listens only on `127.0.0.1`.
+
+The plugin starts the game-root client automatically after binding the configured port. `--non-interactable` disables only console input; client hotkeys and mouse capture remain enabled.
 
 Click, scroll, and drag commands use the same raw packet connection. They dispatch to Unity uGUI handlers without focusing the game window or moving the cursor.
 
@@ -120,4 +123,4 @@ The JSON response preserves mixed types: BigDouble and integers outside JavaScri
 
 ## Uninstall
 
-Remove `BepInEx/plugins/RevIdle.ScoreTelemetry`. If no other plugins use BepInEx, its loader can also be removed by deleting the added `BepInEx`, `dotnet`, `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, and `changelog.txt` entries beside `Revolution Idle.exe`. This plugin does not edit save files.
+Stop the game, then remove `BepInEx/plugins/RevIdle.ScoreTelemetry` and the game-root `client.exe`. If no other plugins use BepInEx, its loader can also be removed by deleting the added `BepInEx`, `dotnet`, `winhttp.dll`, `doorstop_config.ini`, `.doorstop_version`, and `changelog.txt` entries beside `Revolution Idle.exe`. This plugin does not edit save files.

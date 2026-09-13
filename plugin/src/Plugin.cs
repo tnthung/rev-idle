@@ -1,6 +1,7 @@
 using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using UnityEngine;
@@ -40,6 +41,7 @@ public sealed class Plugin : BasePlugin
         {
             RegisterHandlers(_connection, () => GameController.data, () => 0);
             _controlBridge = new ControlBridge(_connection, LogBridgeError);
+            ClientProcess.Start(Paths.GameRootPath, _connection.Port, message => _logger?.LogInfo($"[Client] {message}"), message => _logger?.LogError($"[Client] {message}"));
         }
         AddComponent<ScoreTicker>();
         nint consoleWindow = GetConsoleWindow();
@@ -195,8 +197,101 @@ public sealed class Plugin : BasePlugin
 
     internal static void StopServer() => _connection?.Dispose();
 
+    internal static void StopClient() => ClientProcess.Stop();
+
     internal static ControlBridge? ControlBridge
         => _controlBridge;
+}
+
+internal static class ClientProcess
+{
+    private static readonly object Sync = new();
+    private static Process? _process;
+
+    internal static ProcessStartInfo BuildStartInfo(string gameRoot, int port)
+        => new()
+        {
+            FileName = Path.Combine(gameRoot, "client.exe"),
+            WorkingDirectory = gameRoot,
+            Arguments = $"--port {port} --non-interactable",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+
+    internal static void Start(string gameRoot, int port, Action<string> logInfo, Action<string> logError)
+    {
+        Process? process = null;
+        try
+        {
+            process = new() { StartInfo = BuildStartInfo(gameRoot, port) };
+            process.OutputDataReceived += (_, eventArgs) =>
+            {
+                if (eventArgs.Data is not null)
+                    logInfo(eventArgs.Data);
+            };
+            process.ErrorDataReceived += (_, eventArgs) =>
+            {
+                if (eventArgs.Data is not null)
+                    logError(eventArgs.Data);
+            };
+            lock (Sync)
+            {
+                if (!process.Start())
+                {
+                    process.Dispose();
+                    logError("Failed to start client.exe.");
+                    return;
+                }
+                _process = process;
+            }
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+        }
+        catch (Exception exception)
+        {
+            lock (Sync)
+            {
+                if (ReferenceEquals(_process, process))
+                    _process = null;
+            }
+            try
+            {
+                if (process is not null && !process.HasExited)
+                    process.Kill();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            process?.Dispose();
+            logError($"Failed to start client.exe: {exception.Message}");
+        }
+    }
+
+    internal static void Stop()
+    {
+        Process? process;
+        lock (Sync)
+        {
+            process = _process;
+            _process = null;
+        }
+        if (process is null)
+            return;
+        try
+        {
+            if (!process.HasExited)
+                process.Kill();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
 }
 
 public sealed class ScoreTicker : MonoBehaviour
@@ -229,11 +324,13 @@ public sealed class ScoreTicker : MonoBehaviour
     {
         _controlOverlay?.Dispose();
         _controlOverlay = null;
+        Plugin.StopClient();
         Plugin.StopServer();
     }
 
     public void OnApplicationQuit()
     {
+        Plugin.StopClient();
         Plugin.StopServer();
     }
 }

@@ -102,11 +102,11 @@ pub(crate) fn screen_to_client_position(
 
 impl WindowControl for Win32WindowControl {
     fn write_clipboard(&self, text: &str) -> Result<(), String> {
-        write_unicode_clipboard(text)
+        write_unicode_clipboard(find_game_window()?, text)
     }
 
     fn read_clipboard(&self) -> Result<String, String> {
-        read_unicode_clipboard()
+        read_unicode_clipboard(find_game_window()?)
     }
 
     fn resize_client(&self, width: i32, height: i32) -> Result<(), String> {

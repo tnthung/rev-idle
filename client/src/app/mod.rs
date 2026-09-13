@@ -27,6 +27,13 @@ enum CtrlCAction {
     Ignore,
 }
 
+#[derive(Debug)]
+struct CliOptions {
+    initial_path: Option<PathBuf>,
+    port: u16,
+    non_interactable: bool,
+}
+
 fn ctrl_c_action(script_running: bool, capture_enabled: bool) -> CtrlCAction {
     if script_running {
         CtrlCAction::StopScript
@@ -66,8 +73,41 @@ mod tests {
     }
 
     #[test]
-    fn omitted_cli_script_path_starts_without_an_initial_script() {
-        assert_eq!(initial_script_path(vec![OsString::from("rev-idle")]), None);
+    fn cli_defaults_to_port_19841_and_interactive_console() {
+        let options = parse_cli([OsString::from("rev-idle")]).unwrap();
+        assert_eq!(options.port, 19841);
+        assert!(!options.non_interactable);
+        assert_eq!(options.initial_path, None);
+    }
+
+    #[test]
+    fn cli_accepts_port_flag_non_interactable_flag_and_script() {
+        let options = parse_cli([
+            OsString::from("rev-idle"),
+            OsString::from("script.js"),
+            OsString::from("--port"),
+            OsString::from("1234"),
+            OsString::from("--non-interactable"),
+        ])
+        .unwrap();
+        assert_eq!(options.port, 1234);
+        assert!(options.non_interactable);
+        assert_eq!(options.initial_path, Some(PathBuf::from("script.js")));
+    }
+
+    #[test]
+    fn cli_rejects_invalid_port_and_unknown_arguments() {
+        for (args, expected) in [
+            (vec!["rev-idle", "--port"], "missing value for --port"),
+            (vec!["rev-idle", "--port", "--non-interactable"], "missing value for --port"),
+            (vec!["rev-idle", "--port", "0"], "port must be between 1 and 65535"),
+            (vec!["rev-idle", "--port", "65536"], "port must be between 1 and 65535"),
+            (vec!["rev-idle", "--port", "abc"], "invalid port 'abc'"),
+            (vec!["rev-idle", "--wat"], "unknown argument '--wat'"),
+        ] {
+            let error = parse_cli(args.into_iter().map(OsString::from)).unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]
@@ -83,11 +123,47 @@ mod tests {
     }
 }
 
-fn initial_script_path<I>(args: I) -> Option<PathBuf>
+fn parse_cli<I>(args: I) -> Result<CliOptions, String>
 where
     I: IntoIterator<Item = std::ffi::OsString>,
 {
-    args.into_iter().nth(1).map(PathBuf::from)
+    let mut args = args.into_iter();
+    args.next();
+    let mut initial_path = None;
+    let mut port = 19841;
+    let mut non_interactable = false;
+    while let Some(argument) = args.next() {
+        if argument == "--non-interactable" {
+            non_interactable = true;
+        } else if argument == "--port" {
+            let value = args
+                .next()
+                .ok_or_else(|| "missing value for --port".to_owned())?;
+            if value.to_string_lossy().starts_with("--") {
+                return Err("missing value for --port".to_owned());
+            }
+            let value = value.to_string_lossy();
+            port = value
+                .parse::<u32>()
+                .map_err(|_| format!("invalid port '{value}'"))?
+                .try_into()
+                .map_err(|_| "port must be between 1 and 65535".to_owned())?;
+            if port == 0 {
+                return Err("port must be between 1 and 65535".to_owned());
+            }
+        } else if argument.to_string_lossy().starts_with('-') {
+            return Err(format!("unknown argument '{}'", argument.to_string_lossy()));
+        } else if initial_path.is_none() {
+            initial_path = Some(PathBuf::from(argument));
+        } else {
+            return Err(format!("unexpected positional argument '{}'", argument.to_string_lossy()));
+        }
+    }
+    Ok(CliOptions {
+        initial_path,
+        port,
+        non_interactable,
+    })
 }
 
 fn task_result(result: Result<io::Result<()>, JoinError>) -> io::Result<()> {
@@ -108,7 +184,8 @@ async fn shutdown_tasks(
 }
 
 pub(crate) async fn run() -> io::Result<()> {
-    let initial_path = initial_script_path(std::env::args_os());
+    let options = parse_cli(std::env::args_os()).map_err(io::Error::other)?;
+    let initial_path = options.initial_path;
     let actions_paused = ActionGate::default();
     let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
     let (command_tx, command_rx) = mpsc::channel(32);
@@ -122,7 +199,7 @@ pub(crate) async fn run() -> io::Result<()> {
         .map_err(io::Error::other)?;
     let connection = crate::bridge::WsConnection::connect(SocketAddr::from((
         [127, 0, 0, 1],
-        19841,
+        options.port,
     )));
     if let Err(error) = crate::bridge::register_control_handlers(&connection, command_tx.clone()) {
         connection.shutdown().await;
@@ -149,11 +226,13 @@ pub(crate) async fn run() -> io::Result<()> {
     let result = local
         .run_until(async move {
             let mut tasks = JoinSet::new();
-            let console_shutdown = shutdown_rx.clone();
-            let console_locked_for_task = console_locked.clone();
-            tasks.spawn_local(async move {
-                crate::console::run(console_commands, console_shutdown, console_locked_for_task).await
-            });
+            if !options.non_interactable {
+                let console_shutdown = shutdown_rx.clone();
+                let console_locked_for_task = console_locked.clone();
+                tasks.spawn_local(async move {
+                    crate::console::run(console_commands, console_shutdown, console_locked_for_task).await
+                });
+            }
             let publisher_shutdown = shutdown_rx.clone();
             let publisher_connection = publisher_connection.clone();
             let publisher_generation = publisher_connection.connection_generation();

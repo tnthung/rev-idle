@@ -11,6 +11,8 @@ using System.Text.Json.Nodes;
 using RevIdle.ScoreTelemetry;
 
 StatePayloadFormatsBigDoubleValues();
+ClientProcessBuildsNonInteractableLaunchArguments();
+await ClientProcessFastExitCanBeStoppedIdempotently();
 StatePayloadSerializesCompleteGraph();
 StatePayloadResolvesSelectedPaths();
 StatePayloadDistinguishesInvalidPathsAndGetterFailures();
@@ -98,7 +100,38 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("106 tests passed.");
+System.Console.WriteLine("108 tests passed.");
+
+static void ClientProcessBuildsNonInteractableLaunchArguments()
+{
+    System.Diagnostics.ProcessStartInfo startInfo = ClientProcess.BuildStartInfo(@"C:\Game", 12345);
+    Equal(@"C:\Game\client.exe", startInfo.FileName, nameof(ClientProcessBuildsNonInteractableLaunchArguments));
+    Equal("--port 12345 --non-interactable", startInfo.Arguments, nameof(ClientProcessBuildsNonInteractableLaunchArguments));
+    Equal(false, startInfo.UseShellExecute, nameof(ClientProcessBuildsNonInteractableLaunchArguments));
+    Equal(true, startInfo.CreateNoWindow, nameof(ClientProcessBuildsNonInteractableLaunchArguments));
+    Equal(true, startInfo.RedirectStandardOutput, nameof(ClientProcessBuildsNonInteractableLaunchArguments));
+    Equal(true, startInfo.RedirectStandardError, nameof(ClientProcessBuildsNonInteractableLaunchArguments));
+    Equal(@"C:\Game", startInfo.WorkingDirectory, nameof(ClientProcessBuildsNonInteractableLaunchArguments));
+}
+
+static async Task ClientProcessFastExitCanBeStoppedIdempotently()
+{
+    string gameRoot = Path.Combine(Path.GetTempPath(), "rev-idle-client-test-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(gameRoot);
+    try
+    {
+        File.Copy(Environment.GetEnvironmentVariable("ComSpec")!, Path.Combine(gameRoot, "client.exe"));
+        ClientProcess.Start(gameRoot, 12345, _ => { }, _ => { });
+        await Task.Delay(1);
+        ClientProcess.Stop();
+        ClientProcess.Stop();
+    }
+    finally
+    {
+        await Task.Delay(500);
+        Directory.Delete(gameRoot, true);
+    }
+}
 
 static void WsEnvelopeMatchesSharedFixture()
 {

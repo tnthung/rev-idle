@@ -350,6 +350,20 @@ function Install-PluginDll {
     return $installedDll
 }
 
+function Install-ClientExe {
+    param([string]$SourceExe, [string]$GameDirectory)
+
+    if (-not (Test-Path -LiteralPath $SourceExe -PathType Leaf)) {
+        throw "Built client executable is missing: $SourceExe"
+    }
+
+    $installedExe = Join-Path $GameDirectory "client.exe"
+    $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SourceExe).Hash
+    Install-VerifiedFile $SourceExe $installedExe $sourceHash
+
+    return $installedExe
+}
+
 function Select-TestTargetFramework {
     $supportedFrameworks = @("net8.0", "net9.0")
 
@@ -397,12 +411,17 @@ function Invoke-ScoreTelemetryInstall {
     $testProject = Join-Path $repositoryRoot "plugin\tests\RevIdle.ScoreTelemetry.Tests.csproj"
     $pluginProject = Join-Path $repositoryRoot "plugin\src\RevolutionIdle.ScoreTelemetry.csproj"
     $builtDll = Join-Path $repositoryRoot "plugin\src\bin\Release\RevIdle.ScoreTelemetry.dll"
+    $clientProject = Join-Path $repositoryRoot "client\Cargo.toml"
+    $builtClient = Join-Path $repositoryRoot "client\target\release\client.exe"
     Invoke-CheckedProcess "dotnet" @("run", "--project", $testProject, "-f", $testTargetFramework, "-p:GameDir=$gameDirectory") "Plugin tests failed."
     Invoke-CheckedProcess "dotnet" @("build", $pluginProject, "-c", "Release", "-warnaserror", "-p:GameDir=$gameDirectory") "Plugin build failed."
+    Invoke-CheckedProcess "cargo" @("build", "--release", "--manifest-path", $clientProject) "Client build failed."
 
     $installedDll = Install-PluginDll $builtDll $gameDirectory
+    $installedClient = Install-ClientExe $builtClient $gameDirectory
     Write-Host "Installed Revolution Idle Score Telemetry to: $installedDll"
-    Write-Host "Start the client, then start Revolution Idle."
+    Write-Host "Installed client to: $installedClient"
+    Write-Host "Start Revolution Idle."
 }
 
 if ($MyInvocation.InvocationName -ne '.') {

@@ -1,9 +1,8 @@
 use windows::{
     core::Error as WinError,
     Win32::{
-        Foundation::{GlobalFree, HANDLE, HGLOBAL},
+        Foundation::{GlobalFree, HANDLE, HGLOBAL, HWND},
         System::{
-            Console::GetConsoleWindow,
             DataExchange::{
                 CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
                 OpenClipboard, SetClipboardData,
@@ -35,7 +34,7 @@ fn unicode_clipboard_contents(text: &str) -> Result<Vec<u16>, String> {
 const CLIPBOARD_OPEN_ATTEMPTS: u32 = 10;
 const CLIPBOARD_OPEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
 
-fn open_clipboard_with_retry(owner: windows::Win32::Foundation::HWND) -> Result<(), String> {
+fn open_clipboard_with_retry(owner: HWND) -> Result<(), String> {
     let mut last_error = None;
     for attempt in 0..CLIPBOARD_OPEN_ATTEMPTS {
         match unsafe { OpenClipboard(Some(owner)) } {
@@ -55,12 +54,7 @@ fn open_clipboard_with_retry(owner: windows::Win32::Foundation::HWND) -> Result<
     ))
 }
 
-pub(super) fn write_unicode_clipboard(text: &str) -> Result<(), String> {
-    let owner = unsafe { GetConsoleWindow() };
-    if owner.is_invalid() {
-        return Err("GetConsoleWindow returned no console window".to_string());
-    }
-
+pub(super) fn write_unicode_clipboard(owner: HWND, text: &str) -> Result<(), String> {
     let contents = unicode_clipboard_contents(text)?;
     let byte_count = contents
         .len()
@@ -103,12 +97,7 @@ pub(super) fn write_unicode_clipboard(text: &str) -> Result<(), String> {
     close_result
 }
 
-pub(super) fn read_unicode_clipboard() -> Result<String, String> {
-    let owner = unsafe { GetConsoleWindow() };
-    if owner.is_invalid() {
-        return Err("GetConsoleWindow returned no console window".to_string());
-    }
-
+pub(super) fn read_unicode_clipboard(owner: HWND) -> Result<String, String> {
     open_clipboard_with_retry(owner)?;
 
     let result = (|| {
@@ -148,6 +137,12 @@ pub(super) fn read_unicode_clipboard() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::{
+        core::w,
+        Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WINDOW_STYLE,
+        },
+    };
 
     #[test]
     fn unicode_clipboard_contents_normalizes_line_endings() {
@@ -155,5 +150,31 @@ mod tests {
             unicode_clipboard_contents("a\nb\rc\r\nd").unwrap(),
             vec![97, 13, 10, 98, 13, 10, 99, 13, 10, 100, 0]
         );
+    }
+
+    #[test]
+    fn clipboard_read_accepts_a_non_console_window_owner() {
+        let owner = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("clipboard owner test"),
+                WINDOW_STYLE::default(),
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .unwrap();
+
+        let result = read_unicode_clipboard(owner);
+
+        unsafe { DestroyWindow(owner) }.unwrap();
+        assert!(result.is_ok(), "{result:?}");
     }
 }

@@ -208,7 +208,14 @@ try {
     $installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $installedDll).Hash
     Assert-Equal $sourceHash $installedHash "Install-PluginDll preserves bytes"
 
-    Write-Output "12 installer tests passed."
+    $sourceClient = Join-Path $testRoot "client.exe"
+    [System.IO.File]::WriteAllBytes($sourceClient, [byte[]](11, 12, 13, 14))
+    $installedClient = Install-ClientExe $sourceClient $gameDir
+    $clientHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceClient).Hash
+    Assert-Equal $clientHash (Get-FileHash -Algorithm SHA256 -LiteralPath $installedClient).Hash "Install-ClientExe preserves bytes"
+    Assert-Equal (Join-Path $gameDir "client.exe") $installedClient "Install-ClientExe installs in the game root"
+
+    Write-Output "14 installer tests passed."
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force
