@@ -83,7 +83,7 @@ export class States {
     .then(data => data.map(zodiac => new UnityZodiac(zodiac)));
 
   static sacrificeState = () => rev.state("gameData.unity.sacriStats")
-    .then(data => Object.entries(data).map(([type, value]) => new ZodiacStat({ type, value })));
+    .then(data => Object.entries(data).map(([type, {value}]) => new ZodiacStat({ type, value })));
 
   /** @type {function(): Promise<AttackLevel>} */
   static attackLevel = () => rev.state("gameData.attacks.level")
