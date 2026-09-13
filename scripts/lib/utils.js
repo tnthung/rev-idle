@@ -84,7 +84,7 @@ export class BigNum {
     if (typeof value === "bigint")
       return new BigNum(value.toString());
 
-    throw new Error("Invalid value type for BigNum");
+    throw new Error(`Invalid value type for BigNum: ${JSON.stringify(value)} (${typeof value})`);
   }
 
   get mantissa() { return mantissa(this.value); }
