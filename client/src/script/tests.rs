@@ -2247,6 +2247,229 @@ async fn before_stop_runs_for_replacement_self_stop_failure_and_exit() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn typescript_entry_transpiles_annotations_interfaces_and_enums_in_memory() {
+    let session = ScriptSession::new_with_connection(
+        r#"
+            interface Config { x: number }
+            enum ButtonValue { Left = 3 }
+            const config: Config = { x: ButtonValue.Left };
+            export default (() => rev.click(config.x, 0));
+        "#,
+        "typescript-entry-test.ts",
+        crate::bridge::WsConnection::disconnected_for_test(),
+    )
+    .await
+    .unwrap();
+    let (controls, events) = recording_controls();
+
+    session.invoke(State::default(), controls).await.unwrap();
+
+    assert_eq!(events.borrow()[0], HostEvent::Click(3, 0, Button::Left));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn typescript_static_import_loads_alongside_javascript_without_emitting_files() {
+    use std::fs;
+
+    let root = std::env::temp_dir().join(format!(
+        "rev-idle-typescript-static-import-test-{}",
+        std::process::id(),
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let config_path = root.join("config.ts");
+    let js_path = root.join("offset.js");
+    fs::write(&config_path, "export const value: number = 4;").unwrap();
+    fs::write(&js_path, "export const value = 5;").unwrap();
+    let entry_path = root.join("entry.ts");
+    let session = ScriptSession::new_with_connection(
+        r#"
+            import { value as typescriptValue } from "./config.ts";
+            import { value as javascriptValue } from "./offset.js";
+            export default (() => rev.click(typescriptValue + javascriptValue, 0));
+        "#,
+        &entry_path.to_string_lossy(),
+        crate::bridge::WsConnection::disconnected_for_test(),
+    )
+    .await
+    .unwrap();
+    let (controls, events) = recording_controls();
+
+    session.invoke(State::default(), controls).await.unwrap();
+
+    assert_eq!(events.borrow()[0], HostEvent::Click(9, 0, Button::Left));
+    let mut files = fs::read_dir(&root)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    files.sort();
+    assert_eq!(files, vec!["config.ts", "offset.js"]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dynamic_typescript_import_refresh_keeps_old_function_and_loads_new_function() {
+    use std::fs;
+
+    let root = std::env::temp_dir().join(format!(
+        "rev-idle-typescript-dynamic-import-test-{}",
+        std::process::id(),
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let config_path = root.join("config.ts");
+    let entry_path = root.join("entry.js");
+    fs::write(
+        &config_path,
+        "export default async (x: number) => {\n    throw new Error(\"old typescript function\");\n};\n",
+    )
+    .unwrap();
+    let session = ScriptSession::new_with_connection(
+        r#"
+            let old;
+            let refreshed;
+            export default (async () => {
+                const current = (await import("./config.ts")).default;
+                if (!old) {
+                    old = current;
+                    return;
+                }
+                if (refreshed) {
+                    if (refreshed !== current) throw new Error("unchanged source was reloaded");
+                    return;
+                }
+                let oldStack;
+                try {
+                    await old(1);
+                } catch (error) {
+                    oldStack = error.stack;
+                }
+                let currentStack;
+                try {
+                    await current(2);
+                } catch (error) {
+                    currentStack = error.stack;
+                }
+                if (!oldStack.includes("config.ts:2:15")) throw new Error(oldStack);
+                if (!currentStack.includes("config.ts:5:15")) throw new Error(currentStack);
+                rev.click(1, 0);
+                rev.click(2, 0);
+                refreshed = current;
+            });
+        "#,
+        &entry_path.to_string_lossy(),
+        crate::bridge::WsConnection::disconnected_for_test(),
+    )
+    .await
+    .unwrap();
+    let (controls, events) = recording_controls();
+
+    session.invoke(State::default(), controls.clone()).await.unwrap();
+    fs::write(
+        &config_path,
+        "\n\n\nexport default async (x: number) => {\n    throw new Error(\"new typescript function\");\n};\n",
+    )
+    .unwrap();
+    session.invoke(State::default(), controls).await.unwrap();
+    session.invoke(State::default(), recording_controls().0).await.unwrap();
+
+    assert_eq!(
+        events.borrow().as_slice(),
+        &[
+            HostEvent::Click(1, 0, Button::Left),
+            HostEvent::Click(2, 0, Button::Left),
+        ],
+    );
+    assert!(!root.join("config.js").exists());
+    assert!(!root.join("config.js.map").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn typescript_runtime_errors_report_original_source_line() {
+    let session = ScriptSession::new_with_connection(
+        "interface Marker { value: number }\n\n\nenum Kind { Test }\n\nconst marker: Marker = { value: Kind.Test };\nexport default (() => { throw new Error(\"typescript runtime\"); });\n",
+        "typescript-errors-test.ts",
+        crate::bridge::WsConnection::disconnected_for_test(),
+    )
+    .await
+    .unwrap();
+    let (controls, _) = recording_controls();
+
+    let error = session.invoke(State::default(), controls).await.unwrap_err();
+
+    assert!(error.contains("typescript-errors-test.ts:7"), "unexpected error: {error}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn typescript_top_level_error_maps_unicode_utf16_column() {
+    let error = ScriptSession::new_with_connection(
+        "    const label: string = \"😀\"; throw new Error(label);\nexport default (() => {});\n",
+        "typescript-top-level-test.ts",
+        crate::bridge::WsConnection::disconnected_for_test(),
+    )
+    .await
+    .err()
+    .unwrap();
+
+    assert!(error.contains("typescript-top-level-test.ts:1:43"), "unexpected error: {error}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn typescript_error_after_unicode_uses_utf16_source_map_columns() {
+    let error = ScriptSession::new_with_connection(
+        "const values: unknown[] = [\"\u{1f600}\u{1f600}\u{1f600}\u{1f600}\", JSON.parse(\"invalid\")];\nexport default (() => {});\n",
+        "typescript-unicode-test.ts",
+        crate::bridge::WsConnection::disconnected_for_test(),
+    )
+    .await
+    .err()
+    .unwrap();
+
+    // The mapped call expression starts at JSON, after eight UTF-16 units of emoji.
+    assert!(error.contains("typescript-unicode-test.ts:1:40"), "unexpected error: {error}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn typescript_async_and_hook_errors_report_original_source_lines() {
+    let hook_session = ScriptSession::new_with_connection(
+        "interface HookConfig { value: number }\n\nexport async function afterLoad() {\n    await Promise.resolve();\n    throw new Error(\"typescript hook\");\n}\nexport default (() => {});\n",
+        "typescript-hook-test.ts",
+        crate::bridge::WsConnection::disconnected_for_test(),
+    )
+    .await
+    .unwrap();
+    let (controls, _) = recording_controls();
+    let hook_error = hook_session.run_after_load(controls).await.unwrap_err();
+    assert!(hook_error.contains("typescript-hook-test.ts:5:15"), "unexpected error: {hook_error}");
+
+    let async_session = ScriptSession::new_with_connection(
+        "interface AsyncConfig { value: number }\n\nexport default (async () => {\n    await Promise.resolve();\n    throw new Error(\"typescript async\");\n});\n",
+        "typescript-async-test.ts",
+        crate::bridge::WsConnection::disconnected_for_test(),
+    )
+    .await
+    .unwrap();
+    let (controls, _) = recording_controls();
+    let async_error = async_session.invoke(State::default(), controls).await.unwrap_err();
+    assert!(async_error.contains("typescript-async-test.ts:5:15"), "unexpected error: {async_error}");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn invalid_typescript_reports_source_name_and_parser_detail() {
+    let error = ScriptSession::new_with_connection(
+        "interface Config { value: number }\nconst value: = 1;\nexport default (() => value);\n",
+        "invalid-typescript-test.ts",
+        crate::bridge::WsConnection::disconnected_for_test(),
+    )
+    .await
+    .err()
+    .unwrap();
+
+    assert!(error.contains("invalid-typescript-test.ts"), "unexpected error: {error}");
+    assert!(error.contains("invalid-typescript-test.ts:2"), "unexpected error: {error}");
+    assert_ne!(error, "Exception generated by QuickJS");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn hotkey_pause_cancels_the_in_flight_invocation_immediately() {
     use crate::app::ScriptCommand;
     use crate::global_state::GlobalState;

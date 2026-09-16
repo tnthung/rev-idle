@@ -10,6 +10,8 @@ futures-util      = { version = "0.3.34", default-features = false, features = [
 tokio-tungstenite = { version = "0.30.0", default-features = false }
 uuid              = { version = "1.26.0", features = ["serde", "v4"] }
 rquickjs          = { version = "0.12.2",  features = ["full-async"] }
+oxc               = { version = "0.150.0", features = ["codegen", "semantic", "transformer"] }
+oxc_sourcemap     = "8.1.2"
 serde             = { version = "1.0.229", features = ["derive"] }
 tokio             = { version = "1.53.1",  features = ["full"] }
 windows = { version = "0.61.3", features = [

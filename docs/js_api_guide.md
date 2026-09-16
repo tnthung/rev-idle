@@ -2,7 +2,7 @@
 
 This guide documents the JavaScript surface available to scripts: the QuickJS runtime, the host-provided `rev` and `console` globals, entry-module lifecycle hooks, and every export from `scripts/lib`.
 
-Signatures use TypeScript notation for clarity, but scripts are JavaScript ES modules. Game state paths are cataloged separately in [STATE_KEYS.md](../plugin/STATE_KEYS.md) and the searchable [state graph](../plugin/STATE_GRAPH.html).
+Scripts may be JavaScript (`.js`) or TypeScript (`.ts`) ES modules. Signatures in this guide use TypeScript notation. Game state paths are cataloged separately in [STATE_KEYS.md](../plugin/STATE_KEYS.md) and the searchable [state graph](../plugin/STATE_GRAPH.html).
 
 ## Script shape and scope
 
@@ -40,8 +40,10 @@ Static imports, re-exports, and dynamic `import()` share the same resolver.
 - A specifier must start with `./` or `../` and is resolved relative to the importing module.
 - `.js` is appended when the specifier has no extension.
 - Package names, URLs, and absolute specifiers are rejected.
-- Every imported file is parsed as UTF-8 JavaScript. JSON modules and import attributes are not supported.
+- Files are read as UTF-8. `.ts` files are transpiled to JavaScript in memory; use explicit `.ts` extensions when importing them. JavaScript and TypeScript modules can import each other. JSON modules and import attributes are not supported.
 - Module identity includes a hash of the current source. A repeated dynamic import observes an edited file; unchanged source reuses the existing module instance.
+
+TypeScript compilation does not emit JavaScript, source-map, or cache files. Generated code and source maps live for the script session, including older imported versions. Runtime stacks map back to the original TypeScript file, line, and column through `Error.prepareStackTrace`; replacing that hook overrides this behavior. Compilation reports syntax errors but does not perform type checking or read `tsconfig.json`. Use editor tooling or `tsc --noEmit` for type checking, with `isolatedModules` enabled for per-file transpilation. The runtime still provides the same host APIs listed above.
 
 ```javascript
 import { States } from "./lib/states.js";

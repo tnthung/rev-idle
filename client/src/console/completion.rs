@@ -12,7 +12,7 @@ pub(super) fn complete(buffer: &str) -> Vec<String> {
             if let Ok(entries) = fs::read_dir(if directory.is_empty() { "." } else { directory }) {
                 for entry in entries.flatten() {
                     let Ok(file_type) = entry.file_type() else { continue };
-                    if !file_type.is_dir() && !entry.path().extension().is_some_and(|extension| extension.eq_ignore_ascii_case("js")) {
+                    if !file_type.is_dir() && !entry.path().extension().is_some_and(|extension| extension.eq_ignore_ascii_case("js") || extension.eq_ignore_ascii_case("ts")) {
                         continue;
                     }
                     let name = entry.file_name();

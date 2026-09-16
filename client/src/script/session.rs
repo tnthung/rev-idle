@@ -1,11 +1,12 @@
 use super::{
     bindings::HostControls,
-    loader::{ScriptModuleLoader, ScriptModuleResolver},
+    loader::ScriptModules,
 };
 use crate::bridge::WsConnection;
 use rquickjs::{
     convert::Coerced,
     function::Rest,
+    loader::Loader,
     promise::MaybePromise,
     AsyncContext,
     AsyncRuntime,
@@ -13,7 +14,6 @@ use rquickjs::{
     Error,
     Function,
     FromJs,
-    Module,
     Object,
     Persistent,
     Value,
@@ -101,18 +101,20 @@ impl ScriptSession {
 
     /// `name` is the module specifier the entry script is declared under; it
     /// also anchors relative `import`s from that script's own directory (see
-    /// `ScriptModuleResolver`). Production callers pass the script's real
+    /// `ScriptModules`). Production callers pass the script's real
     /// path; tests pass a synthetic name since none of them import anything.
     pub(super) async fn new_with_connection(source: &str, name: &str, connection: WsConnection) -> Result<Self, String> {
+        let mut modules = ScriptModules::default();
+        modules.insert(name, source.to_owned())?;
         let runtime = AsyncRuntime::new().map_err(|error| error.to_string())?;
-        runtime.set_loader(ScriptModuleResolver, ScriptModuleLoader).await;
+        runtime.set_loader(modules.clone(), modules.clone()).await;
         let context = AsyncContext::full(&runtime).await.map_err(|error| error.to_string())?;
-        let source = source.to_owned();
         let name = name.to_owned();
 
         let (script, after_load, on_connect, on_disconnect, before_stop, before_pause, after_resume, parse, freeze) = context
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<_> = async {
+                    modules.install_stack_trace(&ctx)?;
                     let console = Object::new(ctx.clone())?;
                     console.set(
                         "log",
@@ -142,7 +144,7 @@ impl ScriptSession {
                     let parse: Function = ctx.eval("JSON.parse")?;
                     let freeze: Function = ctx.eval("Object.freeze")?;
 
-                    let (module, promise) = Module::declare(ctx.clone(), name, source)?.eval()?;
+                    let (module, promise) = modules.load(&ctx, &name, None)?.eval()?;
                     promise.into_future::<()>().await?;
                     let namespace = module.namespace()?;
                     let script: Function = namespace.get("default").map_err(|_| {

@@ -264,12 +264,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("rev-idle-common-prefix-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("unity_loop.js"), "").unwrap();
-        fs::write(dir.join("unity_loop2.js"), "").unwrap();
+        fs::write(dir.join("unity_loop2.ts"), "").unwrap();
         for (keys, expected) in [
             (vec![ConsoleEvent::Tab, ConsoleEvent::Enter], "unity_loop"),
-            (vec![ConsoleEvent::Tab, ConsoleEvent::Char('2'), ConsoleEvent::Tab, ConsoleEvent::Enter], "unity_loop2.js"),
+            (vec![ConsoleEvent::Tab, ConsoleEvent::Char('2'), ConsoleEvent::Tab, ConsoleEvent::Enter], "unity_loop2.ts"),
             (vec![ConsoleEvent::Tab, ConsoleEvent::Tab, ConsoleEvent::Enter], "unity_loop.js"),
-            (vec![ConsoleEvent::Tab, ConsoleEvent::Tab, ConsoleEvent::Tab, ConsoleEvent::Enter], "unity_loop2.js"),
+            (vec![ConsoleEvent::Tab, ConsoleEvent::Tab, ConsoleEvent::Tab, ConsoleEvent::Enter], "unity_loop2.ts"),
         ] {
             let prefix = format!("load {}/uni", dir.display());
             let mut lines = Vec::new();

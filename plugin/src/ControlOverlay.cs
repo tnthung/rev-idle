@@ -300,7 +300,7 @@ internal sealed class ControlOverlay : IDisposable
             try
             {
                 file = Marshal.AllocHGlobal(32768 * sizeof(char));
-                filter = Marshal.StringToHGlobalUni("JavaScript files (*.js)\0*.js\0All files (*.*)\0*.*\0\0");
+                filter = Marshal.StringToHGlobalUni("Script files (*.js;*.ts)\0*.js;*.ts\0All files (*.*)\0*.*\0\0");
                 title = Marshal.StringToHGlobalUni("Open script");
                 defaultExtension = Marshal.StringToHGlobalUni("js");
                 Marshal.WriteInt16(file, 0);

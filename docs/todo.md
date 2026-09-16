@@ -23,4 +23,6 @@
 - [x] `afterLoad` hook: called after the script load/reload, before execution starts.
 - [x] `beforeStop` hook: called before the script stops.
 - [x] Click on mask should bring the game to foreground.
-- [ ] Port changing and Auto-port detection.
+- [x] Support typescript.
+- [ ] Generate state manual when install.
+- [ ] Remove `rev.sleep`.
