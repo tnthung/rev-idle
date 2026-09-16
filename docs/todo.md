@@ -25,4 +25,3 @@
 - [x] Click on mask should bring the game to foreground.
 - [x] Support typescript.
 - [ ] Generate state manual when install.
-- [ ] Remove `rev.sleep`.
