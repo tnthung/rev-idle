@@ -311,7 +311,7 @@ public sealed class ScoreTicker : MonoBehaviour
         {
             nint consoleWindow = Plugin.GetConsoleWindow();
             if (consoleWindow != 0)
-                Plugin.ShowWindow(consoleWindow, IsWindowVisible(consoleWindow) ? 0 : 4);
+                Plugin.ShowWindow(consoleWindow, IsWindowVisible(consoleWindow) ? 0 : 5);
         }
         Plugin.PumpPackets(0);
         if (Plugin.ControlBridge is not ControlBridge bridge)
