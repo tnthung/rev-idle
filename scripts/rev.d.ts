@@ -2,8 +2,7 @@
 
 type RevJsonValue = null | boolean | number | string | RevJsonValue[] | { [key: string]: RevJsonValue };
 
-/** Available inside the entry function and lifecycle hooks, not during module initialization. */
-declare const rev: Readonly<{
+interface Rev {
   /** Reads one state path and unwraps its value. T describes the expected JSON snapshot. */
   state<T = RevJsonValue>(key: string): Promise<T>;
   /** Reads multiple paths into a shallow-frozen object keyed by those exact paths. */
@@ -45,16 +44,21 @@ declare const rev: Readonly<{
   stop(): void;
   /** Process-wide JSON storage. Missing keys read as undefined; assigning undefined stores null. */
   global: Record<string, RevJsonValue | undefined>;
-}>;
+}
+
+/** Available inside the entry function and lifecycle hooks, not during module initialization. */
+declare const rev: Readonly<Rev>;
 
 
-/** The script host's console; available during module initialization as well as execution. */
-declare const console: {
+interface Console {
   /** Writes values separated by spaces to stdout. Errors include their message and stack. */
   log(...values: unknown[]): void;
   /** Writes values separated by spaces to stderr. Errors include their message and stack. */
   error(...values: unknown[]): void;
   /** Clears the terminal and moves the cursor to the top left. */
   clear(): void;
-};
+}
+
+/** The script host's console; available during module initialization as well as execution. */
+declare const console: Console;
 
