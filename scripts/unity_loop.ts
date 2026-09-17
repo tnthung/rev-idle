@@ -46,7 +46,7 @@ export type ZodiacSnapshot = {
 };
 
 export type Config = {
-  shouldUnit: (elapsed: number) => Promise<boolean>;
+  shouldUnite: (elapsed: number) => Promise<boolean>;
   shouldReset: (elapsed: number) => Promise<boolean>;
   unitWith: () => Promise<Exclude<keyof typeof Action.main.unit, keyof Action>>;
   nextZodiacAction: (state: ZodiacSnapshot) => Promise<ZodiacAction | null>;
@@ -81,7 +81,7 @@ export default async function main() {
     - rev.global.pauseDuration);
 
   // unit if the config indicates so
-  if (await config.shouldUnit(elapsed)) {
+  if (await config.shouldUnite(elapsed)) {
     await Action.main.unit[await config.unitWith()]();
     attackMaintenance().catch(console.error);
     await rev.sleep(100);

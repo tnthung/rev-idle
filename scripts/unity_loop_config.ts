@@ -4,7 +4,7 @@ import { States } from "./lib/states";
 
 
 export default {
-  async shouldUnit(elapsed) {
+  async shouldUnite(elapsed) {
     return false;
   },
   async shouldReset(elapsed) {
