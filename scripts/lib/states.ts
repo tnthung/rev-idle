@@ -32,7 +32,7 @@ export class States {
   }
 
   static async DilationMaxScore() {
-    return new BigNum(await rev.state<string | number>("dilationMaxScoreCurrent"));
+    return new BigNum(await rev.state<string | number>("dilationMaxScore"));
   }
 
   static async inDilation() {
