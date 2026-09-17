@@ -262,12 +262,6 @@ async function finishEternalChallenge() {
 async function bootstrapDilation() {
   states.dilationBootstrapped ??= false;
 
-  // toggle dilation twice to raise the score
-  for (let i=0; i<2; i++) {
-    await Action.eternity.dilation.toggle();
-    await rev.sleep(500);
-  }
-
   // check if bought enough DTP points (5)
   let totalDTP = await States.totalDTP();
   if (totalDTP > 5) {
@@ -277,6 +271,12 @@ async function bootstrapDilation() {
     }
 
     return true;
+  }
+
+  // toggle dilation twice to raise the score
+  for (let i=0; i<2; i++) {
+    await Action.eternity.dilation.toggle();
+    await rev.sleep(500);
   }
 
   // apply the DTP if there are unused points
