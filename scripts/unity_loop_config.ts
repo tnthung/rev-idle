@@ -10,7 +10,7 @@ export default {
   async shouldReset(elapsed) {
     return false;
   },
-  async unitWith() {
+  async uniteWith() {
     return "left";
   },
   async nextZodiacAction(state) {

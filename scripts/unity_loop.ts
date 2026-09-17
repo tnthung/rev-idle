@@ -48,7 +48,7 @@ export type ZodiacSnapshot = {
 export type Config = {
   shouldUnite: (elapsed: number) => Promise<boolean>;
   shouldReset: (elapsed: number) => Promise<boolean>;
-  unitWith: () => Promise<Exclude<keyof typeof Action.main.unit, keyof Action>>;
+  uniteWith: () => Promise<Exclude<keyof typeof Action.main.unit, keyof Action>>;
   nextZodiacAction: (state: ZodiacSnapshot) => Promise<ZodiacAction | null>;
   relicsToBuy: () => Promise<number[]>;
 };
@@ -82,7 +82,7 @@ export default async function main() {
 
   // unit if the config indicates so
   if (await config.shouldUnite(elapsed)) {
-    await Action.main.unit[await config.unitWith()]();
+    await Action.main.unit[await config.uniteWith()]();
     attackMaintenance().catch(console.error);
     await rev.sleep(100);
     zodiacMaintenance().catch(console.error);
