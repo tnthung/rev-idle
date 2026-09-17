@@ -35,8 +35,8 @@ export type ZodiacAction =
   | { type: "equip"; slot: number; planet: keyof typeof Planet }
   | { type: "takeOff", planet: keyof typeof Planet, onFull?: { type: "sell" | "sacrifice", slot: number } }
   | { type: "merge"; slots: [number, number, number] }
-  | { type: "enhance"; slot: number }
-  | { type: "reforge"; slot: number }
+  | { type: "enhance"; slot: number; onFail?: ZodiacAction }
+  | { type: "reforge"; slot: number; onFail?: ZodiacAction }
   | { type: "sacrifice"; slot: number }
   | { type: "sell"; slot: number };
 
@@ -117,35 +117,35 @@ export default async function main() {
 
 
 async function zodiacMaintenance() {
-  while (true) {
-    const action = await config.nextZodiacAction({
-      inventory: await States.unityZodiacInventory(),
-      planets:   await States.planetZodiacInventory(),
-    });
-
-    if (!action) break;
-
+  async function execute(action: ZodiacAction) {
     switch (action.type) {
       case "equip":
         await Action.unity.astrology.planet.moveZodiac(action.slot, action.planet);
         break;
 
-      case "takeOff":
+      case "takeOff": {
         if (await Action.unity.astrology.planet.takeOff(action.planet))
           break;
         if (!action.onFull)
           throw new Error(`No inventory space to take off ${action.planet}`);
-
-        const { type, slot } = action.onFull;
-        await Action.unity.astrology.planetShop[type](slot);
+        await execute(action.onFull);
         break;
+      }
 
       case "merge":
         await Action.unity.astrology.planetShop.merge(action.slots[0], action.slots[1], action.slots[2]);
         break;
 
       case "enhance":
-      case "reforge":
+      case "reforge": {
+        if (await Action.unity.astrology.planetShop[action.type](action.slot))
+          break;
+        if (!action.onFail)
+          throw new Error(`Failed to ${action.type} and no onFail action provided`);
+        await execute(action.onFail);
+        break;
+      }
+
       case "sacrifice":
       case "sell":
         await Action.unity.astrology.planetShop[action.type](action.slot);
@@ -154,6 +154,16 @@ async function zodiacMaintenance() {
       default:
         throw new Error(`Unknown action type: ${(action as any).type}`);
     }
+  }
+
+  while (true) {
+    const action = await config.nextZodiacAction({
+      inventory: await States.unityZodiacInventory(),
+      planets:   await States.planetZodiacInventory(),
+    });
+
+    if (!action) break;
+    await execute(action);
   }
 }
 
