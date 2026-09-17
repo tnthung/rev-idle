@@ -63,6 +63,7 @@ let states: {
   allECCompleted?:       boolean,
   dilationBootstrapped?: boolean,
   finish40DTP?:          boolean,
+  completeFullTree?:     boolean,
   lastAttackCheck?:      number,
 } = {};
 
@@ -274,10 +275,10 @@ async function bootstrapDilation() {
   }
 
   // toggle dilation twice to raise the score
-  for (let i=0; i<2; i++) {
-    await Action.eternity.dilation.toggle();
-    await rev.sleep(500);
-  }
+  await Action.eternity.dilation.toggle();
+  await rev.sleep(500);
+  await Action.eternity.dilation.toggle();
+  await rev.sleep(500);
 
   // apply the DTP if there are unused points
   totalDTP = Math.min(await States.totalDTP(), 5);
@@ -320,9 +321,17 @@ async function finishDTP40Loadout() {
 
 
 async function finishSpendingDTP() {
+  states.completeFullTree ??= false;
+
   // skip if spent 65 and dilation score is not 0
-  if (await States.spentDTP() >= 65 && await States.DilationMaxScore().then(v => !v.isZero))
+  if (await States.spentDTP() >= 65 && await States.DilationMaxScore().then(v => !v.isZero)) {
+    if (!states.completeFullTree) {
+      states.completeFullTree = true;
+      console.log(`Completed full tree.`);
+    }
+
     return;
+  }
 
   // get unused dilation points
   const unusedDTP = await States.unusedDTP();
