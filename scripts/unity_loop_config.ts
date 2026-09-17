@@ -7,6 +7,9 @@ export default {
   async shouldUnit(elapsed) {
     return false;
   },
+  async shouldReset(elapsed) {
+    return false;
+  },
   async unitWith() {
     return "left";
   },

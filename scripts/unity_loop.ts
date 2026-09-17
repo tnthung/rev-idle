@@ -46,6 +46,7 @@ export type ZodiacSnapshot = {
 
 export type Config = {
   shouldUnit: (elapsed: number) => Promise<boolean>;
+  shouldReset: (elapsed: number) => Promise<boolean>;
   unitWith: () => Promise<Exclude<keyof typeof Action.main.unit, keyof Action>>;
   nextZodiacAction: (state: ZodiacSnapshot) => Promise<ZodiacAction | null>;
   relicsToBuy: () => Promise<number[]>;
@@ -82,6 +83,12 @@ export default async function main() {
     attackMaintenance().catch(console.error);
     await rev.sleep(100);
     zodiacMaintenance().catch(console.error);
+  }
+
+  // reset the game if the config indicates so
+  else if (await config.shouldReset(elapsed)) {
+    await Action.unity.trial.reset();
+    await rev.sleep(100);
   }
 
   // initialize states for new run
