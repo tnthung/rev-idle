@@ -203,7 +203,7 @@ Only these methods are installed:
 | --- | --- |
 | `console.log(...values)` | Writes one line to stdout. |
 | `console.error(...values)` | Writes one line to stderr. |
-| `console.clear()` | Clears the terminal and moves the cursor to the top left. |
+| `console.clear()` | Clears the terminal and moves the cursor to the top left. When launched by the plugin, clears the BepInEx console. |
 
 Arguments are separated by spaces. Strings print directly, objects use JSON serialization, errors include their name/message/available stack, and other values use string conversion. Formatting placeholders such as `%s` are not interpreted. Cyclic object formatting can throw. Methods such as `warn`, `info`, `debug`, `table`, and `time` do not exist.
 

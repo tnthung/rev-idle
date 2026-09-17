@@ -12,6 +12,7 @@ using RevIdle.ScoreTelemetry;
 
 StatePayloadFormatsBigDoubleValues();
 ClientProcessBuildsNonInteractableLaunchArguments();
+ClientProcessConsumesConsoleClearWithoutLoggingIt();
 await ClientProcessFastExitCanBeStoppedIdempotently();
 StatePayloadSerializesCompleteGraph();
 StatePayloadResolvesSelectedPaths();
@@ -104,7 +105,18 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("111 tests passed.");
+System.Console.WriteLine("112 tests passed.");
+
+static void ClientProcessConsumesConsoleClearWithoutLoggingIt()
+{
+    List<string> output = new();
+    ClientProcess.ForwardOutput("before", output.Add, () => output.Add("cleared"));
+    ClientProcess.ForwardOutput("\u001b[2J\u001b[H", output.Add, () => output.Add("cleared"));
+    ClientProcess.ForwardOutput("after", output.Add, () => output.Add("cleared"));
+    ClientProcess.ForwardOutput("", output.Add, () => output.Add("cleared"));
+    ClientProcess.ForwardOutput(null, output.Add, () => output.Add("cleared"));
+    Equal("before|cleared|after|", string.Join("|", output), nameof(ClientProcessConsumesConsoleClearWithoutLoggingIt));
+}
 
 static void ClientProcessBuildsNonInteractableLaunchArguments()
 {

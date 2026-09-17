@@ -226,11 +226,19 @@ internal static class ClientProcess
         try
         {
             process = new() { StartInfo = BuildStartInfo(gameRoot, port) };
-            process.OutputDataReceived += (_, eventArgs) =>
+            process.OutputDataReceived += (_, eventArgs) => ForwardOutput(eventArgs.Data, logInfo, () =>
             {
-                if (eventArgs.Data is not null)
-                    logInfo(eventArgs.Data);
-            };
+                if (Plugin.GetConsoleWindow() == 0)
+                    return;
+                try
+                {
+                    System.Console.Clear();
+                }
+                catch (IOException exception)
+                {
+                    logError($"Failed to clear console: {exception.Message}");
+                }
+            });
             process.ErrorDataReceived += (_, eventArgs) =>
             {
                 if (eventArgs.Data is not null)
@@ -267,6 +275,14 @@ internal static class ClientProcess
             process?.Dispose();
             logError($"Failed to start client.exe: {exception.Message}");
         }
+    }
+
+    internal static void ForwardOutput(string? message, Action<string> logInfo, Action clearConsole)
+    {
+        if (message == "\u001b[2J\u001b[H")
+            clearConsole();
+        else if (message is not null)
+            logInfo(message);
     }
 
     internal static void Stop()

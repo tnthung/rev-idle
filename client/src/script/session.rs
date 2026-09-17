@@ -20,7 +20,7 @@ use rquickjs::{
 };
 use std::{
     cell::Cell,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     rc::Rc,
 };
 
@@ -133,7 +133,7 @@ impl ScriptSession {
                     console.set(
                         "clear",
                         Function::new(ctx.clone(), || {
-                            print!("\x1B[2J\x1B[H");
+                            print!("\x1B[2J\x1B[H{}", if io::stdout().is_terminal() { "" } else { "\n" });
                             io::stdout().flush().map_err(|error| {
                                 Error::new_from_js_message("console", "JavaScript", error.to_string())
                             })
