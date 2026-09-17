@@ -214,6 +214,10 @@ export class BigNum {
   toString(): string {
     return `${this.man}e${this.exp}`
   }
+
+  toNumber(): number {
+    return this.man * Math.pow(10, Number(this.exp));
+  }
 }
 
 
