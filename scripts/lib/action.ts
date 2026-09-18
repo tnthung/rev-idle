@@ -61,7 +61,11 @@ export function ZODIAC_PLANET_SLOT(p: keyof typeof Planet): string {
   return `scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_planets[2]/flex_group[2]/item_${p.toLowerCase()}[${Planet[p]}]`;
 }
 
-export function ZODIAC_INV_SLOT(n: number): string {
+export function ZODIAC_INV_SLOT_PLANET(n: number): string {
+  return `scene:-454/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/main[0]/ctn_content[1]/ctn_inventory[2]/scrollview[0]/viewport[0]/content[0]/item_slot_zodiac_${n+1}[${n}]`;
+}
+
+export function ZODIAC_INV_SLOT_SHOP(n: number): string {
   return `scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_inventory[2]/scrollview[1]/viewport[0]/content[0]/item_slot_zodiac_${n+1}[${n}]`;
 }
 
@@ -349,15 +353,15 @@ export class Action extends Function {
               async moveZodiac(src: keyof typeof Planet | number, dest: keyof typeof Planet | number) {
                 await Action.unity.astrology.planet();
                 await rev.transfer(
-                  ZODIAC_PLANET_SLOT(src  as keyof typeof Planet) || ZODIAC_INV_SLOT(src  as number),
-                  ZODIAC_PLANET_SLOT(dest as keyof typeof Planet) || ZODIAC_INV_SLOT(dest as number));
+                  ZODIAC_PLANET_SLOT(src  as keyof typeof Planet) || ZODIAC_INV_SLOT_PLANET(src  as number),
+                  ZODIAC_PLANET_SLOT(dest as keyof typeof Planet) || ZODIAC_INV_SLOT_PLANET(dest as number));
               },
               async takeOff(planet: keyof typeof Planet) {
                 const inv = await States.unityZodiacInventory();
                 for (let i=0; i<await States.zodiacInventorySlotCount(); i++)
                   if (!inv[i]) {
                     await Action.unity.astrology.planet();
-                    await rev.transfer(ZODIAC_PLANET_SLOT(planet), ZODIAC_INV_SLOT(i));
+                    await rev.transfer(ZODIAC_PLANET_SLOT(planet), ZODIAC_INV_SLOT_PLANET(i));
                     return true;
                   }
 
@@ -378,7 +382,7 @@ export class Action extends Function {
                 const SELL_BUTTON = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_center[0]/ctn_sell[0]/btn_sell[1]";
 
                 await Action.unity.astrology.planetShop();
-                await rev.transfer(ZODIAC_INV_SLOT(n), SELL_SLOT);
+                await rev.transfer(ZODIAC_INV_SLOT_SHOP(n), SELL_SLOT);
                 await rev.sleep(100);
                 await rev.invoke(SELL_BUTTON);
               },
@@ -387,13 +391,13 @@ export class Action extends Function {
                 const RESULT_SLOT  = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_merging[1]/content[1]/ctn_result[4]/item_slot_zodiac_result[2]";
 
                 await Action.unity.astrology.planetShop.mergeMode();
-                await rev.transfer(ZODIAC_INV_SLOT(a), ZODIAC_MERGE_SLOT(0));
-                await rev.transfer(ZODIAC_INV_SLOT(b), ZODIAC_MERGE_SLOT(1));
-                await rev.transfer(ZODIAC_INV_SLOT(c), ZODIAC_MERGE_SLOT(2));
+                await rev.transfer(ZODIAC_INV_SLOT_SHOP(a), ZODIAC_MERGE_SLOT(0));
+                await rev.transfer(ZODIAC_INV_SLOT_SHOP(b), ZODIAC_MERGE_SLOT(1));
+                await rev.transfer(ZODIAC_INV_SLOT_SHOP(c), ZODIAC_MERGE_SLOT(2));
                 await rev.sleep(100);
                 await rev.invoke(MERGE_BUTTON);
                 await rev.sleep(300);
-                await rev.transfer(RESULT_SLOT, ZODIAC_INV_SLOT(a));
+                await rev.transfer(RESULT_SLOT, ZODIAC_INV_SLOT_SHOP(a));
               },
               async enhance(n: number) {
                 const ENHANCE_SLOT   = "scene:-498/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_enchancing[2]/content[1]/item_slot_zodiac[1]";
@@ -401,25 +405,25 @@ export class Action extends Function {
                 const RESULT_SLOT    = "scene:-498/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_enchancing[2]/content[1]/ctn_result[4]/item_slot_zodiac_result[2]";
 
                 await Action.unity.astrology.planetShop.enhanceMode();
-                await rev.transfer(ZODIAC_INV_SLOT(n), ENHANCE_SLOT);
+                await rev.transfer(ZODIAC_INV_SLOT_SHOP(n), ENHANCE_SLOT);
                 await rev.sleep(100);
 
                 try {
                   await rev.invoke(ENHANCE_BUTTON);
                 } catch {
                   // mostly fails due to insufficient resources
-                  await rev.transfer(ENHANCE_SLOT, ZODIAC_INV_SLOT(n)).catch(_ => {});
+                  await rev.transfer(ENHANCE_SLOT, ZODIAC_INV_SLOT_SHOP(n)).catch(_ => {});
                   return false;
                 }
 
                 await rev.sleep(300);
 
                 try {
-                  await rev.transfer(ENHANCE_SLOT, ZODIAC_INV_SLOT(n));
+                  await rev.transfer(ENHANCE_SLOT, ZODIAC_INV_SLOT_SHOP(n));
                   return false; // did not successfully enhance
                 } catch {} // should be successful enhanced here
 
-                await rev.transfer(RESULT_SLOT, ZODIAC_INV_SLOT(n));
+                await rev.transfer(RESULT_SLOT, ZODIAC_INV_SLOT_SHOP(n));
                 return true;
               },
               async reforge(n: number) {
@@ -428,20 +432,20 @@ export class Action extends Function {
                 const RESULT_SLOT    = "scene:-498/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_redistribution[3]/content[1]/ctn_result[4]/item_slot_zodiac_result[2]"
 
                 await Action.unity.astrology.planetShop.reforgeMode();
-                await rev.transfer(ZODIAC_INV_SLOT(n), REFORGE_SLOT);
+                await rev.transfer(ZODIAC_INV_SLOT_SHOP(n), REFORGE_SLOT);
                 await rev.sleep(100);
 
                 try {
                   await rev.invoke(REFORGE_BUTTON);
                 } catch {
                   // mostly fails due to insufficient resources
-                  await rev.transfer(REFORGE_SLOT, ZODIAC_INV_SLOT(n)).catch(_ => {});
+                  await rev.transfer(REFORGE_SLOT, ZODIAC_INV_SLOT_SHOP(n)).catch(_ => {});
                   return false;
                 }
 
                 await rev.sleep(300);
 
-                await rev.transfer(RESULT_SLOT, ZODIAC_INV_SLOT(n));
+                await rev.transfer(RESULT_SLOT, ZODIAC_INV_SLOT_SHOP(n));
                 return true;
               },
               async sacrifice(n: number) {
@@ -449,7 +453,7 @@ export class Action extends Function {
                 const SACRIFICE_BUTTON = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_sacrificing[4]/content[1]/btn_action[2]";
 
                 await Action.unity.astrology.planetShop.sacrificeMode();
-                await rev.transfer(ZODIAC_INV_SLOT(n), SACRIFICE_SLOT);
+                await rev.transfer(ZODIAC_INV_SLOT_SHOP(n), SACRIFICE_SLOT);
                 await rev.sleep(100);
                 await rev.invoke(SACRIFICE_BUTTON);
               },
