@@ -20,14 +20,15 @@ declare global {
   interface ObjectConstructor {
     map(
       obj: Record<string, any>,
-      fn: (key: string, value: any) => [string, any],
+      fn: (key: string, value: any) => [string, any] | null,
     ): Record<string, any>;
   }
 }
 
 Object.map = function(obj, fn) {
   return Object.fromEntries(Object.entries(obj)
-    .map(([key, value]) => fn(key, value)));
+    .map(([key, value]) => fn(key, value))
+    .filter(entry => entry !== null));
 };
 
 

@@ -53,12 +53,12 @@ export class States {
 
   static async unityZodiacInventory(): Promise<Record<string, UnityZodiac>> {
     return Object.map(await rev.state<Record<string, UnityZodiacData>>("gameData.unity.inventory"),
-      (key, value) => [key, new UnityZodiac(value)]);
+      (key, value) => value && [key, new UnityZodiac(value)]);
   }
 
   static async planetZodiacInventory(): Promise<Record<keyof typeof Planet, UnityZodiac>> {
     return Object.map(await rev.state<Record<keyof typeof Planet, UnityZodiacData>>("gameData.unity.planetsInventory"),
-      (key, value) => [key, new UnityZodiac(value)]);
+      (key, value) => value && [key, new UnityZodiac(value)]);
   }
 
   static async gold() {
