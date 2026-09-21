@@ -86,8 +86,8 @@ export class States {
     return new EternalChallenge(await rev.state<EternalChallengeData>(`gameData.eternity.challenges.${n}`));
   }
 
-  static async nextUnityZodiacs() {
-    return (await rev.state<UnityZodiacData[]>("gameData.unity.NextZodiacs")).map(zodiac => new UnityZodiac(zodiac));
+  static async nextUnityZodiacs(): Promise<[UnityZodiac, UnityZodiac, UnityZodiac, UnityZodiac]> {
+    return (await rev.state<UnityZodiacData[]>("gameData.unity.NextZodiacs")).map(zodiac => new UnityZodiac(zodiac)) as any;
   }
 
   static async sacrificeState() {
@@ -196,6 +196,10 @@ export class UnityZodiac {
 
   get mergeKey() {
     return `${this.Element};${this.rarity};${this.rarityPlus}`;
+  }
+
+  hasStat(statType: ZodiacStatType) {
+    return this.stats.some(stat => stat.type === statType);
   }
 }
 
