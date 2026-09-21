@@ -138,6 +138,13 @@ export class BigNum {
     return Math.sign(this.man - other.man);
   }
 
+  lt (other: BigNum) { return this.cmp(other) <   0; }
+  lte(other: BigNum) { return this.cmp(other) <=  0; }
+  gt (other: BigNum) { return this.cmp(other) >   0; }
+  gte(other: BigNum) { return this.cmp(other) >=  0; }
+  eq (other: BigNum) { return this.cmp(other) === 0; }
+  neq(other: BigNum) { return this.cmp(other) !== 0; }
+
   max(other: BigNum) { return this.cmp(other) >= 0 ? new BigNum(this) : new BigNum(other); }
   min(other: BigNum) { return this.cmp(other) <= 0 ? new BigNum(this) : new BigNum(other); }
 
