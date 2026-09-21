@@ -46,11 +46,11 @@ export type ZodiacSnapshot = {
 };
 
 export type Config = {
-  shouldUnite: (elapsed: number) => Promise<boolean>;
-  shouldReset: (elapsed: number) => Promise<boolean>;
-  uniteWith: () => Promise<Exclude<keyof typeof Action.main.unit, keyof Action>>;
-  nextZodiacAction: (state: ZodiacSnapshot) => Promise<ZodiacAction | null>;
-  relicsToBuy: () => Promise<number[]>;
+  shouldUnite?: (elapsed: number) => Promise<boolean>;
+  shouldReset?: (elapsed: number) => Promise<boolean>;
+  uniteWith?: () => Promise<Exclude<keyof typeof Action.main.unit, keyof Action>>;
+  nextZodiacAction?: (state: ZodiacSnapshot) => Promise<ZodiacAction | null>;
+  relicsToBuy?: () => Promise<number[]>;
 };
 
 let config: Config;
@@ -81,7 +81,13 @@ export default async function main() {
     - rev.global.pauseDuration);
 
   // unit if the config indicates so
-  if (await config.shouldUnite(elapsed)) {
+  if (await config.shouldUnite?.(elapsed)) {
+    if (!config.uniteWith) {
+      console.error("uniteWith must be defined to enable unite");
+      rev.stop();
+      return;
+    }
+
     await Action.main.unit[await config.uniteWith()]();
     attackMaintenance().catch(console.error);
     await rev.sleep(100);
@@ -89,7 +95,7 @@ export default async function main() {
   }
 
   // reset the game if the config indicates so
-  else if (await config.shouldReset(elapsed)) {
+  else if (await config.shouldReset?.(elapsed)) {
     await Action.unity.trial.reset();
     await rev.sleep(100);
   }
@@ -158,7 +164,7 @@ async function zodiacMaintenance() {
   }
 
   while (true) {
-    const action = await config.nextZodiacAction({
+    const action = await config.nextZodiacAction?.({
       inventory: await States.unityZodiacInventory(),
       planets:   await States.planetZodiacInventory(),
     });
@@ -171,7 +177,7 @@ async function zodiacMaintenance() {
 
 async function attackMaintenance() {
   await Action.attack.upgradeRings();
-  await Action.attack.buyRelics(await config.relicsToBuy());
+  await Action.attack.buyRelics(await config.relicsToBuy?.() ?? []);
 }
 
 
