@@ -55,7 +55,7 @@ export type Config = {
 
 let config: Config;
 async function loadConfig() {
-  config = (await import("./unity_loop_config.ts")).default;
+  config = (await import("./setup1.ts")).default;
 }
 
 

@@ -1,7 +1,5 @@
 import type { Config } from "./unity_loop";
 
-import { States } from "./lib/states";
-
 
 export default {
   async shouldUnite(elapsed) {
