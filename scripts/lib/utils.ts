@@ -258,3 +258,11 @@ export type Enumerate<N extends number, Acc extends number[] = []> =
 
 export type Range<S extends number, E extends number> =
   Exclude<Enumerate<E>, Enumerate<S>>;
+
+
+export enum UnityDirection {
+  left,
+  top,
+  bottom,
+  right,
+}
