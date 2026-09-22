@@ -124,6 +124,13 @@ async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnT
   return null
 
 
+  function mergeKey(zodiac: UnityZodiac): string {
+    let key = zodiac.mergeKey;
+    if (zodiac.sign === ZodiacSign.Aries)
+      key += ";aries";
+    return key;
+  }
+
   function replaceWeakest(statType: ZodiacStatType) {
     const weakestPlanet = Object.entries(planets)
       .filter(([_, z]) => z.hasStat(statType))
@@ -152,11 +159,4 @@ async function relicsToBuy(): ReturnType<Exclude<Config["relicsToBuy"], undefine
     .filter(({ eta }) => eta.lte(RELIC_COST_CAP));
 
   return eta.map(({ relicId }) => relicId);
-}
-
-function mergeKey(zodiac: UnityZodiac): string {
-  let key = zodiac.mergeKey;
-  if (zodiac.sign === ZodiacSign.Aries)
-    key += ";aries";
-  return key;
 }
