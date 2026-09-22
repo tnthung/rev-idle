@@ -129,13 +129,13 @@ export class BigNum {
   get isNeg():    boolean { return this.man < 0; }
   get isPos():    boolean { return !this.isNeg; }
 
-  cmp(other: BigNum) {
+  cmp(other: BigNum): -1 | 0 | 1 {
     if (this.isZero || other.isZero || this.isNeg !== other.isNeg)
-      return Math.sign(this.man - other.man);
+      return Math.sign(this.man - other.man) as -1 | 0 | 1;
 
     const expDiff = this.exp - other.exp;
-    if (expDiff !== 0n) return (expDiff > 0 ? 1 : -1) * (this.isNeg ? -1 : 1);
-    return Math.sign(this.man - other.man);
+    if (expDiff !== 0n) return (expDiff > 0 ? 1 : -1) * (this.isNeg ? -1 : 1) as -1 | 0 | 1;
+    return Math.sign(this.man - other.man) as -1 | 0 | 1;
   }
 
   lt (other: BigNum) { return this.cmp(other) <   0; }
