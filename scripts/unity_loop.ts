@@ -127,10 +127,12 @@ async function zodiacMaintenance() {
   async function execute(action: ZodiacAction) {
     switch (action.type) {
       case "equip":
+        console.log(`Equipping zodiac from slot ${action.slot} to planet ${action.planet}`);
         await Action.unity.astrology.planet.moveZodiac(action.slot, action.planet);
         break;
 
       case "takeOff": {
+        console.log(`Taking off zodiac from planet ${action.planet}`);
         if (await Action.unity.astrology.planet.takeOff(action.planet))
           break;
         if (!action.onFull)
@@ -140,11 +142,13 @@ async function zodiacMaintenance() {
       }
 
       case "merge":
+        console.log(`Merging zodiacs from slots ${action.slots.join(", ")}`);
         await Action.unity.astrology.planetShop.merge(action.slots[0], action.slots[1], action.slots[2]);
         break;
 
       case "enhance":
       case "reforge": {
+        console.log(`Attempting to ${action.type} zodiac in slot ${action.slot}`);
         if (await Action.unity.astrology.planetShop[action.type](action.slot))
           break;
         if (!action.onFail)
@@ -155,6 +159,7 @@ async function zodiacMaintenance() {
 
       case "sacrifice":
       case "sell":
+        console.log(`Selling zodiac from slot ${action.slot}`);
         await Action.unity.astrology.planetShop[action.type](action.slot);
         break;
 
