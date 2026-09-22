@@ -224,6 +224,7 @@ export class UnityPlanet {
 
   constructor({ bonusType, bonusValue, type, unlocked }: UnityPlanetData) {
     this.bonusType = PlanetStatType[bonusType];
+    if (this.bonusType == null) console.log(`planet stat type ${bonusType} is missing from the enum`);
     this.bonusValue = new BigNum(bonusValue);
     this.type = Planet[type];
     this.unlocked = unlocked;
@@ -243,6 +244,7 @@ export class ZodiacStat {
 
   constructor({ type, value }: ZodiacStatData) {
     this.type = ZodiacStatType[type];
+    if (type == null) console.error(`zodiac stat type ${type} is missing from the enum`);
     this.value = new BigNum(value);
   }
 }
@@ -410,7 +412,7 @@ export enum ZodiacStatType {
   LuckAdd,
   Ach29Reward,
   DTPCost,
-  CenterDTUEffect,
+  CenterDTUEff,
   ZodiacQualityMult,
 }
 
