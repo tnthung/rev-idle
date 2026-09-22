@@ -76,21 +76,53 @@ async function shouldUniteByUnityLevel(): ReturnType<Exclude<Config["shouldUnite
 async function uniteWith(): ReturnType<Exclude<Config["uniteWith"], undefined>> {
   const choices = await States.nextUnityZodiacs();
 
-  const GameSpeedChoice = choices.find(c => c.hasStat(ZodiacStatType.GameSpeed));
-  const MultsGainChoice = choices.find(c => c.hasStat(ZodiacStatType.MultsGain));
+  // find GameSpeed and MultsGain choices, if both missing return default choice
+  const gameSpeedChoice = choices.find(c => c.hasStat(ZodiacStatType.GameSpeed));
+  const multsGainChoice = choices.find(c => c.hasStat(ZodiacStatType.MultsGain));
+  if (!gameSpeedChoice && !multsGainChoice) return defaultChoice();
 
-  if (!GameSpeedChoice && !MultsGainChoice)
-    return idx2dir(choices.indexOf(
-      choices.find(c => c.Element === ZodiacElement.Fire) ??
-      choices.find(c => c.Element === ZodiacElement.Water) ??
-      choices.sort((a, b) => b.score.cmp(a.score))[0]
-    ) as UnityDirection);
+  // get indexes of GameSpeed and MultsGain choices
+  const gameSpeedIdx = gameSpeedChoice && (choices.indexOf(gameSpeedChoice) as UnityDirection);
+  const multsGainIdx = multsGainChoice && (choices.indexOf(multsGainChoice) as UnityDirection);
 
-  if (!GameSpeedChoice) return idx2dir(choices.indexOf(MultsGainChoice!) as UnityDirection);
-  if (!MultsGainChoice) return idx2dir(choices.indexOf(GameSpeedChoice!) as UnityDirection);
+  // prioritize GameSpeed and MultsGain choices if opposite if missing
+  if (!gameSpeedIdx) return idx2dir(multsGainIdx!);
+  if (!multsGainIdx) return idx2dir(gameSpeedIdx!);
 
-  if (MultsGainChoice.quality.gte(ZODIAC_QUALITY_MIN)) return idx2dir(choices.indexOf(MultsGainChoice) as UnityDirection);
-  if (GameSpeedChoice.quality.gte(ZODIAC_QUALITY_MIN)) return idx2dir(choices.indexOf(GameSpeedChoice) as UnityDirection);
+  // check if the quality of the choices meets the minimum requirement, if none return default choice
+  const multsGainQualityValid = multsGainChoice.quality.gte(ZODIAC_QUALITY_MIN);
+  const gameSpeedQualityValid = gameSpeedChoice.quality.gte(ZODIAC_QUALITY_MIN);
+  if (!multsGainQualityValid && !gameSpeedQualityValid) return defaultChoice();
+
+  // prioritize GameSpeed and MultsGain choices if opposite quality is too low
+  if (!multsGainQualityValid) return idx2dir(gameSpeedIdx);
+  if (!gameSpeedQualityValid) return idx2dir(multsGainIdx);
+
+  // get current inventory and planets
+  const [planet, inventory] = await Promise.all([
+    States.planetZodiacInventory(),
+    States.unityZodiacInventory(),
+  ]);
+
+  // check if the weakest MultsGain zodiac can be replaced by the new choice
+  const weakestMultsGain = findWeakestZodiacOfType(ZodiacStatType.MultsGain, planet)
+  if (weakestMultsGain && compareZodiacStat(ZodiacStatType.MultsGain, multsGainChoice, weakestMultsGain[1]) > 0)
+    return idx2dir(multsGainIdx);
+
+  // check if the weakest GameSpeed zodiac can be replaced by the new choice
+  const weakestGameSpeed = findWeakestZodiacOfType(ZodiacStatType.GameSpeed, planet)
+  if (weakestGameSpeed && compareZodiacStat(ZodiacStatType.GameSpeed, gameSpeedChoice, weakestGameSpeed[1]) > 0)
+    return idx2dir(gameSpeedIdx);
+
+  // collect the merge bucket
+  const mergeBuckets = collectMergeBuckets(inventory);
+
+  // check if there are any mergeable zodiacs in the inventory
+  for (const choice of choices) {
+    const bucket = mergeBuckets[mergeKey(choice)];
+    if (bucket && (bucket.length % 3 === 2))
+      return idx2dir(choices.indexOf(choice) as UnityDirection);
+  }
 
   return idx2dir(choices.indexOf(choices.sort((a, b) => b.score.cmp(a.score))[0]) as UnityDirection);
 
@@ -98,24 +130,26 @@ async function uniteWith(): ReturnType<Exclude<Config["uniteWith"], undefined>> 
   function idx2dir(index: UnityDirection) {
     return UnityDirection[index] as keyof typeof UnityDirection;
   }
+
+  function defaultChoice() {
+    return idx2dir(choices.indexOf(
+      choices.find(c => c.Element === ZodiacElement.Fire) ??
+      choices.find(c => c.Element === ZodiacElement.Water) ??
+      choices.sort((a, b) => b.score.cmp(a.score))[0]
+    ) as UnityDirection);
+  }
 }
 
 
 async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnType<Exclude<Config["nextZodiacAction"], undefined>> {
-  const mergeBuckets = {} as Record<string, number[]>;
-
-  for (const [slot, zodiac] of Object.entries(inventory)) {
+  for (const [slot, zodiac] of Object.entries(inventory))
     if (zodiac.quality.lt(ZODIAC_QUALITY_MIN))
       return { type: "sell", slot: Number(slot) };
 
-    const key = mergeKey(zodiac);
-    mergeBuckets[key] ??= [];
-    mergeBuckets[key].push(Number(slot));
-  }
-
-  for (const slots of Object.values(mergeBuckets)) {
-    if (slots.length < 3) continue;
-    return { type: "merge", slots: slots.slice(0, 3) as [number, number, number] };
+  for (const bucket of Object.values(collectMergeBuckets(inventory))) {
+    if (bucket.length < 3) continue;
+    return { type: "merge", slots: bucket.slice(0, 3)
+      .map(({ slot }) => Number(slot)) as any };
   }
 
   for (const r = replaceWeakest(ZodiacStatType.MultsGain); r;) return r;
@@ -124,26 +158,14 @@ async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnT
   return null
 
 
-  function mergeKey(zodiac: UnityZodiac): string {
-    let key = zodiac.mergeKey;
-    if (zodiac.sign === ZodiacSign.Aries)
-      key += ";aries";
-    return key;
-  }
-
   function replaceWeakest(statType: ZodiacStatType) {
-    const weakestPlanet = Object.entries(planets)
-      .filter(([_, z]) => z.hasStat(statType))
-      .sort(([_, a], [__, b]) => a.score.cmp(b.score))
-      .at(0) as [keyof typeof Planet, UnityZodiac] | undefined;
-
-    if (!weakestPlanet)
+    for (const weakest = findWeakestZodiacOfType(statType, planets); weakest;) {
+      const [planet, zodiac] = weakest;
+      for (const [slot, invZodiac] of Object.entries(inventory))
+        if (compareZodiacStat(statType, invZodiac, zodiac) > 0)
+          return { type: "equip", planet, slot: Number(slot) } as const;
       return;
-
-    const [planet, zodiac] = weakestPlanet;
-    for (const [slot, invZodiac] of Object.entries(inventory))
-      if (invZodiac.statMap[statType]?.value.gt(zodiac.statMap[statType]!.value))
-        return { type: "equip", planet, slot: Number(slot) } as const;
+    }
   }
 }
 
@@ -159,4 +181,38 @@ async function relicsToBuy(): ReturnType<Exclude<Config["relicsToBuy"], undefine
     .filter(({ eta }) => eta.lte(RELIC_COST_CAP));
 
   return eta.map(({ relicId }) => relicId);
+}
+
+
+function mergeKey(zodiac: UnityZodiac): string {
+  let key = zodiac.mergeKey;
+  if (zodiac.sign === ZodiacSign.Aries)
+    key += ";aries";
+  return key;
+}
+
+function collectMergeBuckets(inventory: Record<string, UnityZodiac>) {
+  const mergeBuckets = {} as Record<string, { slot: string, zodiac: UnityZodiac }[]>;
+
+  for (const [slot, zodiac] of Object.entries(inventory)) {
+    const key = mergeKey(zodiac);
+    mergeBuckets[key] ??= [];
+    mergeBuckets[key].push({ slot, zodiac });
+  }
+
+  return mergeBuckets;
+}
+
+function findWeakestZodiacOfType<K extends string>(
+  statType:  ZodiacStatType,
+  inventory: Record<K, UnityZodiac>,
+) {
+  return Object.entries<UnityZodiac>(inventory)
+    .filter(([_, z]) => z.hasStat(statType))
+    .sort(([_, a], [__, b]) => compareZodiacStat(statType, a, b))
+    .at(0) as [K, UnityZodiac] | undefined;
+}
+
+function compareZodiacStat(statType: ZodiacStatType, a: UnityZodiac, b: UnityZodiac) {
+  return (b.statMap[statType] && a.statMap[statType]?.cmp(b.statMap[statType])) ?? 0
 }
