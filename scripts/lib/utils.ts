@@ -219,8 +219,18 @@ export class BigNum {
     return values.reduce((acc, val) => acc.add(val), new BigNum(0));
   }
 
-  toString(): string {
-    return `${this.man}e${this.exp}`
+  toString(manLen?: number): string {
+    if (manLen == null)
+      return `${this.man}e${this.exp}`;
+
+    if (manLen === 0)
+      return `e${this.exp}`;
+
+    const man = this.man
+      .toString()
+      .slice(0, manLen)
+      .padEnd(manLen, "0");
+    return `${man}e${this.exp}`;
   }
 
   toNumber(): number {
