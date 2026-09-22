@@ -74,6 +74,10 @@ export class States {
       .map(relic => new AttackRelic(relic));
   }
 
+  static async attackRelic(n: number) {
+    return new AttackRelic((await rev.state<AttackRelicData>(`gameData.attacks.relics.${n}`)));
+  }
+
   static async zodiacInventorySlotCount() {
     return await rev.state<number>("gameController.inventory.SlotZodiac.CurrentValue");
   }

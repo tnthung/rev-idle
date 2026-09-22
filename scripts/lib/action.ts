@@ -497,13 +497,16 @@ export class Action extends Function {
           .catch(_ => {});
       },
       async buyRelics(n: number[]) {
-        let gold = await States.gold();
         for (const index of n) {
+          const [gold, relic] = await Promise.all([
+            States.gold(),
+            States.attackRelic(index),
+          ]);
+
+          if (relic.totalCost.lt(gold)) break;
+          console.log(`Buying relic ${index+1}`)
           await Action.attack.buyRelic(index);
-          const newGold = await States.gold();
-          if (gold.cmp(newGold) !== 0)
-            await rev.sleep(1000);
-          gold = newGold;
+          await rev.sleep(1000);
         }
       },
     });
