@@ -70,6 +70,15 @@ internal static class StatePayload
         }
     }
 
+    internal static JsonElement EncodeValue(object? value)
+    {
+        using MemoryStream stream = new();
+        using (var writer = new Utf8JsonWriter(stream))
+            WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0);
+        using JsonDocument document = JsonDocument.Parse(stream.ToArray());
+        return document.RootElement.Clone();
+    }
+
     private static bool TryResolve(object data, string path, out object? value)
     {
         if (path.Length == 0)

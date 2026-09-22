@@ -275,6 +275,22 @@ pub(super) fn create_rev<'js>(
     )?;
     let state: Function = state_wrapper.call((state_raw, parse.clone(), freeze.clone()))?;
     rev.set("state", state)?;
+    let slot_connection = connection.clone();
+    rev.set(
+        "slot",
+        Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, path: String| {
+            let connection = slot_connection.clone();
+            async move {
+                if path.trim().is_empty() {
+                    return Err(host_error("slot path must not be empty".to_owned()));
+                }
+                ctx.json_parse(connection.request(crate::bridge::SlotReq { path })
+                    .await
+                    .map_err(|error| bridge_error(&ctx, error.to_string()))?
+                    .value.to_string())
+            }
+        }))?,
+    )?;
     let invoke_connection = connection.clone();
     let invoke_controls = controls.clone();
     rev.set(
@@ -284,7 +300,7 @@ pub(super) fn create_rev<'js>(
             let controls = invoke_controls.clone();
             async move {
                 if path.trim().is_empty() {
-                    return Err(host_error("button path must not be empty".to_owned()));
+                    return Err(host_error("UI path must not be empty".to_owned()));
                 }
                 if controls.actions_paused.is_paused() {
                     return Ok(());

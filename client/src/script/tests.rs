@@ -376,7 +376,66 @@ async fn rev_invoke_skips_paused_actions_and_rejects_empty_paths() {
 
     let session = ScriptSession::new(r#"export default (async () => await rev.invoke(" "))"#).await.unwrap();
     let (controls, _) = recording_controls();
-    assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("button path"));
+    assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("UI path"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rev_slot_returns_arbitrary_data_null_and_remote_errors() {
+    use crate::bridge::{test_support::raw_server, WsConnection};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
+
+    for (response_type, payload, expected) in [
+        ("SlotRes", json!({ "value": { "level": 12, "effects": ["speed", null] } }), json!({ "level": 12, "effects": ["speed", null] })),
+        ("SlotRes", json!({ "value": null }), Value::Null),
+        ("RemoteError", json!({ "message": "slot target not found" }), Value::Null),
+    ] {
+        let (address, peer_rx) = raw_server().await;
+        let connection = WsConnection::connect_for_test(
+            address,
+            Duration::from_millis(20),
+            Duration::from_secs(1),
+        );
+        let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx).await.unwrap().unwrap();
+        let session = ScriptSession::new_with_connection(
+            &format!(r#"export default async () => {{
+                const value = await rev.slot("scene:1/Canvas[0]/Slot[3]");
+                if (JSON.stringify(value) !== JSON.stringify({expected})) throw new Error("unexpected slot value");
+            }}"#),
+            "slot-test.js",
+            connection.clone(),
+        ).await.unwrap();
+        let (controls, _) = recording_controls();
+        controls.actions_paused.set_paused(true);
+        let invocation = session.invoke(State::default(), controls);
+        tokio::pin!(invocation);
+        let message = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::select! {
+                result = &mut invocation => panic!("slot completed before bridge response: {result:?}"),
+                message = peer.next() => message.unwrap().unwrap(),
+            }
+        }).await.unwrap();
+        let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+        assert_eq!(request["type"], "SlotReq");
+        assert_eq!(request["payload"], json!({ "path": "scene:1/Canvas[0]/Slot[3]" }));
+        peer.send(Message::Text(
+            json!({ "uuid": request["uuid"], "type": response_type, "payload": payload }).to_string().into(),
+        )).await.unwrap();
+        if response_type == "RemoteError" {
+            assert!(invocation.await.unwrap_err().contains("slot target not found"));
+        } else {
+            invocation.await.unwrap();
+        }
+        connection.shutdown().await;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rev_slot_rejects_blank_paths() {
+    let session = ScriptSession::new(r#"export default async () => await rev.slot(" ")"#).await.unwrap();
+    let (controls, _) = recording_controls();
+    assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("slot path must not be empty"));
 }
 
 #[tokio::test(flavor = "current_thread")]

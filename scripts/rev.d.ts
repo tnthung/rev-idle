@@ -10,10 +10,12 @@ interface Rev {
   /** Supports a dynamic list of paths. The plugin rejects an empty list. */
   state(...keys: string[]): Promise<RevJsonValue>;
 
-  /** Invokes a Button at an exact Unity hierarchy path. */
+  /** Invokes a button or checkbox at an exact Unity hierarchy path. */
   invoke(path: string): Promise<void>;
   /** Dispatches drag/drop between exact Unity slot paths. */
   transfer(source: string, destination: string): Promise<void>;
+  /** Reads the item data at an exact Unity slot path; returns null when empty. */
+  slot(path: string): Promise<unknown>;
 
   /** Clicks at client-area coordinates. Coordinates must be finite 32-bit integers. */
   click(x: number, y: number, button?: "left" | "right" | "middle"): void;
@@ -61,4 +63,3 @@ interface Console {
 
 /** The script host's console; available during module initialization as well as execution. */
 declare const console: Console;
-

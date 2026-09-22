@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Reflection;
+using Il2CppInterop.Runtime;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
@@ -14,16 +16,34 @@ internal static class UnityUiClickDispatcher
     {
         GameObject? target = FindByPath(path);
         Button[] matches = target is null ? Array.Empty<Button>() : target.GetComponents<Button>().ToArray();
+        Toggle[] toggles = target is null ? Array.Empty<Toggle>() : target.GetComponents<Toggle>().ToArray();
 
-        if (matches.Length == 0)
+        if (matches.Length + toggles.Length == 0)
         {
             result = $"invoke target not found: '{path}'";
             return false;
         }
-        if (matches.Length != 1)
+        if (matches.Length + toggles.Length != 1)
         {
-            result = $"invoke target is ambiguous: '{path}' matches {matches.Length} buttons";
+            result = $"invoke target is ambiguous: '{path}' matches {matches.Length + toggles.Length} buttons or checkboxes";
             return false;
+        }
+
+        if (toggles.Length == 1)
+        {
+            if (!toggles[0].IsActive() || !toggles[0].IsInteractable())
+            {
+                result = $"invoke checkbox is inactive or not interactable: '{path}'";
+                return false;
+            }
+            if (EventSystem.current is null)
+            {
+                result = "no EventSystem";
+                return false;
+            }
+            toggles[0].OnPointerClick(new PointerEventData(EventSystem.current) { button = PointerEventData.InputButton.Left });
+            result = $"invoked '{GetPath(toggles[0].gameObject)}'";
+            return true;
         }
 
         Button targetButton = matches[0];
@@ -72,6 +92,17 @@ internal static class UnityUiClickDispatcher
         for (int index = 0; index < raycasts.Count; index++)
         {
             GameObject? candidate = raycasts[index].gameObject;
+            Toggle? target = candidate is null ? null : candidate.GetComponentInParent<Toggle>();
+            if (target is null)
+                continue;
+            type = "checkbox";
+            path = GetPath(target.gameObject);
+            result = $"captured checkbox '{path}' at ({x}, {y})";
+            return true;
+        }
+        for (int index = 0; index < raycasts.Count; index++)
+        {
+            GameObject? candidate = raycasts[index].gameObject;
             GameObject? target = candidate is null ? null : ExecuteEvents.GetEventHandler<IDropHandler>(candidate);
             if (target is null)
                 continue;
@@ -81,7 +112,7 @@ internal static class UnityUiClickDispatcher
             return true;
         }
 
-        result = $"no button or slot at ({x}, {y})";
+        result = $"no button, checkbox, or slot at ({x}, {y})";
         return true;
     }
 
@@ -176,6 +207,43 @@ internal static class UnityUiClickDispatcher
         }
 
         result = $"dispatched transfer from '{source}' to '{destination}'; acceptance is controlled by the game";
+        return true;
+    }
+
+    internal static bool TryReadSlot(string path, out object? value, out string result)
+    {
+        value = null;
+        GameObject? target = FindByPath(path);
+        if (target is null)
+        {
+            result = $"slot target not found: '{path}'";
+            return false;
+        }
+        Component[] handlers = target.GetComponents<Component>()
+            .Where(component => component.TryCast<IDropHandler>() is not null).ToArray();
+        if (handlers.Length != 1)
+        {
+            result = $"slot target must have exactly one drop handler; found {handlers.Length}: '{path}'";
+            return false;
+        }
+
+        // GetComponents<Component> returns base wrappers; recover the game's
+        // concrete proxy before reflecting inherited DragSlot<T> properties.
+        string typeName = IL2CPP.il2cpp_class_get_name_(handlers[0].ObjectClass)!;
+        string typeNamespace = IL2CPP.il2cpp_class_get_namespace_(handlers[0].ObjectClass)!;
+        Type? type = typeof(GameData).Assembly.GetType(typeNamespace.Length == 0 ? typeName : $"{typeNamespace}.{typeName}");
+        PropertyInfo? slotted = type?.GetProperty("Slotted");
+        PropertyInfo? item = type?.GetProperty("Value");
+        if (slotted?.PropertyType != typeof(bool) || item is null)
+        {
+            result = $"slot target does not expose item data: '{path}'";
+            return false;
+        }
+        object slot = typeof(Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase)
+            .GetMethod("Cast")!.MakeGenericMethod(type!).Invoke(handlers[0], null)!;
+        if ((bool)slotted.GetValue(slot)!)
+            value = item.GetValue(slot);
+        result = $"read slot '{path}'";
         return true;
     }
 

@@ -107,7 +107,8 @@ public sealed class Plugin : BasePlugin
         Func<nint, ClickCommand, (bool Success, string Error)> click,
         Func<nint, ScrollCommand, (bool Success, string Error)> scroll,
         Func<nint, DragCommand, (bool Success, string Error)> drag,
-        Func<nint, PressCommand, (bool Success, string Error)>? press = null)
+        Func<nint, PressCommand, (bool Success, string Error)>? press = null,
+        Func<string, (bool Success, object? Value, string Error)>? slot = null)
     {
         _connection = connection;
         connection.Handler<StateReq>(async (context, packet) =>
@@ -147,6 +148,17 @@ public sealed class Plugin : BasePlugin
             if (!success)
                 throw new InvalidOperationException(error);
             await context.Send(new TransferRes());
+        });
+        connection.Handler<SlotReq>(async (context, packet) =>
+        {
+            (bool success, object? value, string error) = (slot ?? (path =>
+            {
+                bool found = UnityUiClickDispatcher.TryReadSlot(path, out object? item, out string message);
+                return (found, item, message);
+            }))(packet.Path);
+            if (!success)
+                throw new InvalidOperationException(error);
+            await context.Send(new SlotRes(StatePayload.EncodeValue(value)));
         });
         connection.Handler<ClickCommand>((context, packet) =>
         {

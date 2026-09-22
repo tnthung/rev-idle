@@ -208,7 +208,7 @@ async fn describe_capture(connection: &WsConnection, x: i32, y: i32, width: i32,
 
     match crate::bridge::request_ui_path(connection, x, y, width, height).await {
         Ok(UiPathTarget { target_type: Some(target_type), path: Some(path) })
-            if target_type == "button" || target_type == "slot" => {
+            if target_type == "button" || target_type == "checkbox" || target_type == "slot" => {
             if let Err(error) = write_clipboard(&path) {
                 return vec![format!("click: {x}, {y}; {target_type}: {path:?}; clipboard write failed: {error}")];
             }
@@ -486,6 +486,7 @@ mod tests {
         for (response_type, payload, expected, copied_path) in [
             ("UiPathRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}), vec!["click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Buy DTP")),
             ("UiPathRes", json!({"type":"slot","path":"scene:1/Canvas[0]/Slot"}), vec!["click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Slot")),
+            ("UiPathRes", json!({"type":"checkbox","path":"scene:1/Canvas[0]/Checkbox"}), vec!["click: 123, 456; checkbox: \"scene:1/Canvas[0]/Checkbox\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Checkbox")),
             ("UiPathRes", json!({"type":null,"path":null}), vec!["click: 123, 456".to_owned()], None),
             ("RemoteError", json!({"message":"no EventSystem"}), vec!["click: 123, 456; lookup failed: Remote(\"no EventSystem\")".to_owned()], None),
         ] {

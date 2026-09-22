@@ -46,6 +46,16 @@ pub(crate) struct TransferReq {
 pub(crate) struct TransferRes {}
 
 #[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct SlotReq {
+    pub(crate) path: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct SlotRes {
+    pub(crate) value: Value,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct ClickCommand {
     pub(crate) x: i32,
     pub(crate) y: i32,
@@ -187,6 +197,18 @@ impl Requestable for TransferReq {
     type Response = TransferRes;
 }
 
+impl Packet for SlotReq {
+    const TYPE: &'static str = "SlotReq";
+}
+
+impl Packet for SlotRes {
+    const TYPE: &'static str = "SlotRes";
+}
+
+impl Requestable for SlotReq {
+    type Response = SlotRes;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,6 +268,11 @@ mod tests {
                 .unwrap(),
             ),
             (TransferRes::TYPE, serde_json::to_value(TransferRes {}).unwrap()),
+            (
+                SlotReq::TYPE,
+                serde_json::to_value(SlotReq { path: "scene:1/Canvas[0]/Inventory/3".to_owned() }).unwrap(),
+            ),
+            (SlotRes::TYPE, serde_json::to_value(SlotRes { value: serde_json::json!({ "level": 12 }) }).unwrap()),
             (
                 ClickCommand::TYPE,
                 serde_json::to_value(ClickCommand { x: 1200, y: 80, width: 1920, height: 1080 }).unwrap(),

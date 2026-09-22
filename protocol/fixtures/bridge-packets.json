@@ -7,6 +7,8 @@
   "InvokeRes": {},
   "TransferReq": { "source": "scene:1/Canvas[0]/Inventory/3", "destination": "scene:1/Canvas[0]/Combine/0" },
   "TransferRes": {},
+  "SlotReq": { "path": "scene:1/Canvas[0]/Inventory/3" },
+  "SlotRes": { "value": { "level": 12 } },
   "ClickCommand": { "x": 1200, "y": 80, "width": 1920, "height": 1080 },
   "ScrollCommand": { "x": 600, "y": 400, "length": -1, "axis": 1, "width": 1920, "height": 1080 },
   "DragCommand": { "startX": 1200, "startY": 80, "endX": 600, "endY": 400, "width": 1920, "height": 1080 },

@@ -79,18 +79,22 @@ Capture is one-shot: the first captured left-button down consumes its matching u
 
 ## Capture, invoke, and transfer UI elements
 
-Run `capture` in the client and click an element. Capture consumes one click, then turns itself off. It prints client coordinates followed by `button: "<path>"` or `slot: "<path>"`, copies a valid path to the clipboard, and prints `Copied to clipboard`. It checks buttons first, then drop slots, including their parent objects. If neither exists, it prints only coordinates and leaves the clipboard unchanged. Use the copied paths in scripts:
+Run `capture` in the client and click an element. Capture consumes one click, then turns itself off. It prints client coordinates followed by `button: "<path>"`, `checkbox: "<path>"`, or `slot: "<path>"`, copies a valid path to the clipboard, and prints `Copied to clipboard`. It checks buttons first, then checkboxes, then drop slots, including their parent objects. If none exists, it prints only coordinates and leaves the clipboard unchanged. Use the copied paths in scripts:
 
 ```javascript
 await rev.invoke(buttonPath);
+await rev.invoke(checkboxPath);
 await rev.transfer(sourceSlotPath, destinationSlotPath);
+const item = await rev.slot(sourceSlotPath); // unknown; null when empty
 ```
 
 Only exact, case-sensitive paths are accepted; name lookup is not supported. Paths include the scene handle and escaped object names with sibling indexes. Capture again after scene or hierarchy changes. Hidden and inactive Unity UI Buttons can be invoked, but must still pass `IsInteractable()`. Invocation calls the registered `onClick` event on Unity's main thread without moving the mouse or raycasting. Errors reject the promise; paused scripts skip the action.
 
+Checkbox invocation calls the game's pointer-click handler and requires an active, interactable Toggle (including BundleToggle). Open the Automation tab before invoking its checkboxes. Slot reads return the generic slot's `Value` through the state serializer, or `null` when `Slotted` is false. Missing or unsupported slots reject. Reads run on Unity's main thread, support initialized inactive slots, and remain available while actions are paused.
+
 Transfer requires two distinct slot objects with one drop handler each and exactly one draggable item in the source. Lookup includes hidden and inactive objects; no screen coordinates or raycasts are used. The plugin calls the item's drag lifecycle and the destination's drop handler directly on Unity's main thread, without activating the panels. The game controls compatibility, validation, and occupied-slot behavior. A resolved promise means handlers were called, not that the game accepted or completed the transfer; check game state before depending on the result. Slots and items must already be instantiated and initialized by the game; hidden-panel transfers remain subject to the handlers' own requirements.
 
-These features require the updated client and plugin and use the loopback WebSocket bridge. Capture returns `{ "type": "button" | "slot" | null, "path": string | null }` without interacting with the target.
+These features require the updated client and plugin and use the loopback WebSocket bridge. Capture returns `{ "type": "button" | "checkbox" | "slot" | null, "path": string | null }` without interacting with the target.
 
 ## Read state
 

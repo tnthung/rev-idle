@@ -116,8 +116,9 @@ A pause can also cancel an in-flight invocation. Module state remains loaded and
 | Signature | Result | Contract |
 | --- | --- | --- |
 | `rev.state(...keys: string[])` | `Promise<JSON value>` | Requests fresh game state. One key unwraps that value; multiple keys return a flat object. No keys are rejected by the plugin. |
-| `rev.invoke(path: string)` | `Promise<void>` | Invokes the Button at an exact Unity hierarchy path. |
+| `rev.invoke(path: string)` | `Promise<void>` | Invokes a button or checkbox at an exact Unity hierarchy path. |
 | `rev.transfer(source: string, destination: string)` | `Promise<void>` | Dispatches drag/drop between two exact Unity slot paths. |
+| `rev.slot(path: string)` | `Promise<unknown>` | Reads the contained item's data, or `null` when the slot is empty. |
 | `rev.click(x: number, y: number, button = "left")` | `void` | Sends one background client-area click. |
 | `rev.clickn(x: number, y: number, count: number, button = "left")` | `Promise<void>` | Sends `count` clicks with 10 ms between them. Zero is allowed. |
 | `rev.scroll(x: number, y: number, length: number, axis = "vertical")` | `void` | Sends a background scroll. |
@@ -169,7 +170,9 @@ Coordinates are signed client-area pixels: `(0, 0)` is the top left. All coordin
 
 `press` accepts one ASCII letter/digit or one of: `left`, `right`, `up`, `down`, `enter`, `escape`, `space`, `tab`, `backspace`, and `f1` through `f12`.
 
-`invoke` rejects an empty path and asks the plugin to run a Button's registered click handler. `transfer` rejects empty paths and asks the plugin to execute the source drag and destination drop handlers. Successful dispatch does not guarantee the game accepted the resulting action; query state when confirmation matters.
+`invoke` rejects an empty path and asks the plugin to run a button's click handler or a checkbox's pointer-click handler. Checkboxes must be active and interactable; open the Automation tab before invoking its checkboxes. Capture recognizes checkbox paths and copies them to the clipboard. `transfer` rejects empty paths and asks the plugin to execute the source drag and destination drop handlers. Successful dispatch does not guarantee the game accepted the resulting action; query state when confirmation matters.
+
+`slot` accepts the same exact hierarchy paths as `transfer`. It returns the slot's item data using the state serializer, or `null` when empty. Empty, missing, or unsupported paths reject. Slots must already be instantiated and initialized; inactive slots can be read. Like `state`, slot reads remain available while actions are paused. Narrow the `unknown` result to the item type expected by your script.
 
 ### Files, shell, and clipboard
 

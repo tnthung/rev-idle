@@ -34,6 +34,7 @@ await BridgeStateHandlerPreservesMixedJsonAndSelectedKeys();
 await BridgeStateHandlerReportsMissingData();
 await BridgeStateHandlerReportsInvalidPath();
 await BridgeUiHandlersReportCorrelatedErrorsOnPumpThread();
+await BridgeSlotHandlerReturnsDataNullAndErrorsOnPumpThread();
 await BridgeInputHandlersRunOnPumpThread();
 KeyboardInputPostsKeyDownAndUpToTheGameWindow();
 KeyboardInputMapsEverySupportedKeyFamily();
@@ -105,7 +106,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("112 tests passed.");
+System.Console.WriteLine("113 tests passed.");
 
 static void ClientProcessConsumesConsoleClearWithoutLoggingIt()
 {
@@ -176,6 +177,8 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("InvokeRes", new InvokeRes()),
         ("TransferReq", new TransferReq("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0")),
         ("TransferRes", new TransferRes()),
+        ("SlotReq", new SlotReq("scene:1/Canvas[0]/Inventory/3")),
+        ("SlotRes", new SlotRes(JsonSerializer.Deserialize<JsonElement>("{\"level\":12}"))),
         ("ClickCommand", new ClickCommand(1200, 80, 1920, 1080)),
         ("ScrollCommand", new ScrollCommand(600, 400, -1, 1, 1920, 1080)),
         ("DragCommand", new DragCommand(1200, 80, 600, 400, 1920, 1080)),
@@ -384,6 +387,59 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
         Equal(transferPumpThread, transferThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
         Equal("source", transferredSource, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
         Equal("destination", transferredDestination, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+    }
+}
+
+static async Task BridgeSlotHandlerReturnsDataNullAndErrorsOnPumpThread()
+{
+    const string testName = nameof(BridgeSlotHandlerReturnsDataNullAndErrorsOnPumpThread);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int handlerThread = 0;
+    int pumpThread = 0;
+    Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () => 0,
+        (_, _, _, _, _) => (true, null, null, ""),
+        _ => (true, ""), (_, _) => (true, ""),
+        (_, _) => (true, ""), (_, _) => (true, ""), (_, _) => (true, ""),
+        slot: path =>
+        {
+            handlerThread = Environment.CurrentManagedThreadId;
+            return path switch
+            {
+                "occupied" => (true, new BridgeStateFixture(), ""),
+                "empty" => (true, null, ""),
+                _ => (false, null, "slot target not found")
+            };
+        });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        foreach (string path in new[] { "occupied", "empty", "missing" })
+        {
+            handlerThread = 0;
+            Guid uuid = Guid.NewGuid();
+            using JsonDocument response = await SendLiteralBridgeRequestAndPump(server, peer, 0,
+                $"{{\"uuid\":\"{uuid}\",\"type\":\"SlotReq\",\"payload\":{{\"path\":\"{path}\"}}}}",
+                thread => { if (handlerThread == 0) pumpThread = thread; });
+            Equal(pumpThread, handlerThread, testName);
+            Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), testName);
+            if (path == "missing")
+                AssertRemoteError(response, uuid, testName, "slot target not found");
+            else
+            {
+                Equal("SlotRes", response.RootElement.GetProperty("type").GetString(), testName);
+                JsonElement value = response.RootElement.GetProperty("payload").GetProperty("value");
+                if (path == "empty")
+                    Equal(JsonValueKind.Null, value.ValueKind, testName);
+                else
+                {
+                    Equal("1e3", value.GetProperty("Score").GetString(), testName);
+                    Equal(true, value.GetProperty("Enabled").GetBoolean(), testName);
+                    Equal(JsonValueKind.Null, value.GetProperty("Nested").GetProperty("Value").ValueKind, testName);
+                    Equal("two", value.GetProperty("Items")[1].GetString(), testName);
+                }
+            }
+        }
     }
 }
 
