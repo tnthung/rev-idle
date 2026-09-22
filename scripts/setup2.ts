@@ -133,8 +133,8 @@ async function uniteWith(): ReturnType<Exclude<Config["uniteWith"], undefined>> 
 
   function defaultChoice() {
     return idx2dir(choices.indexOf(
-      choices.find(c => c.Element === ZodiacElement.Fire) ??
       choices.find(c => c.Element === ZodiacElement.Water) ??
+      choices.find(c => c.Element === ZodiacElement.Fire) ??
       choices.sort((a, b) => b.score.cmp(a.score))[0]
     ) as UnityDirection);
   }
