@@ -169,6 +169,7 @@ export class UnityZodiac {
   score: BigNum;
   sign: ZodiacSign;
   stats: ZodiacStat[];
+  statMap: Partial<Record<ZodiacStatType, ZodiacStat | undefined>>;
 
   constructor({
     Element,
@@ -200,6 +201,7 @@ export class UnityZodiac {
     this.score = new BigNum(score);
     this.sign = ZodiacSign[sign];
     this.stats = stats.map(stat => new ZodiacStat(stat));
+    this.statMap = Object.fromEntries(this.stats.map(stat => [stat.type, stat]));
   }
 
   get mergeKey() {
@@ -207,7 +209,7 @@ export class UnityZodiac {
   }
 
   hasStat(statType: ZodiacStatType) {
-    return this.stats.some(stat => stat.type === statType);
+    return this.statMap[statType] !== undefined;
   }
 }
 
