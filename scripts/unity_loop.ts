@@ -1,7 +1,25 @@
 import { Action } from "./lib/action.ts";
-import { DilationTree, DT_EXTRAS, DT_STAGES } from "./lib/dilation_tree.ts";
-import { States, Planet, UnityZodiac } from "./lib/states.ts";
-import { pollFor, range, type Range } from "./lib/utils.ts";
+import {
+  DilationTree,
+  DT_EXTRAS,
+  DT_STAGES,
+} from "./lib/dilation_tree.ts";
+import {
+  States,
+  Planet,
+  UnityZodiac,
+  ZodiacStatType,
+  ZodiacSign,
+  ZodiacElement,
+  ZodiacSeason,
+  ZodiacRarity,
+} from "./lib/states.ts";
+import {
+  pollFor,
+  range,
+  UnityDirection,
+  type Range,
+} from "./lib/utils.ts";
 
 
 declare const rev: Readonly<Rev & {
@@ -88,7 +106,24 @@ export default async function main() {
       return;
     }
 
-    await Action.main.unit[await config.uniteWith()]();
+    const direction = await config.uniteWith();
+
+    const z = (await States.nextUnityZodiacs())[UnityDirection[direction]];
+    console.log("+-------------------------------------------------");
+    console.log(`| Last unity elapsed: ${elapsed/1000}s`);
+    console.log(`| United with gold:   ${(await States.nextGold()).toString(4)}`);
+    console.log(`| United with zodiac: ${ZodiacSign[z.sign]} / ${ZodiacElement[z.Element]} / ${ZodiacSeason[z.Season]}`);
+    console.log(`|     level:   ${z.level}`);
+    console.log(`|     rarity:  ${ZodiacRarity[z.rarity]}${z.rarityPlus ? `+${z.rarityPlus}` : ""}`);
+    console.log(`|     score:   ${z.score.toString(4)}`);
+    console.log(`|     quality: ${z.quality.toString(4)}`);
+    console.log("|     stats:");
+    const typeLen = Math.max(...z.stats.map(stat => ZodiacStatType[stat.type].length));
+    for (const stat of z.stats)
+      console.log(`|         ${ZodiacStatType[stat.type].padEnd(typeLen)}: ${stat.value.toString(4)}`);
+    console.log("+-------------------------------------------------");
+
+    await Action.main.unit[direction]();
     attackMaintenance().catch(console.error);
     await rev.sleep(100);
     zodiacMaintenance().catch(console.error);
@@ -102,8 +137,6 @@ export default async function main() {
 
   // initialize states for new run
   if (await States.currentEP().then(v => v.isZero)) {
-    if (elapsed) console.log(`Last unity elapsed: ${elapsed/1000}s`);
-
     rev.global.unityStart = Date.now();
     rev.global.pauseDuration = 0;
     rev.global.pauseStart = 0;
