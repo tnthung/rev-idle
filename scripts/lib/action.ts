@@ -388,7 +388,7 @@ export class Action extends Function {
               },
               async merge(a: number, b: number, c: number) {
                 const MERGE_BUTTON = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_merging[1]/content[1]/btn_action[3]";
-                const RESULT_SLOT  = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_merging[1]/content[1]/ctn_result[4]/item_slot_zodiac_result[2]";
+                const CLOSE_BUTTON = "scene:-454/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_merging[1]/ctn_title[0]/btn_close[2]";
 
                 await Action.unity.astrology.planetShop.mergeMode();
                 await rev.transfer(ZODIAC_INV_SLOT_SHOP(a), ZODIAC_MERGE_SLOT(0));
@@ -396,57 +396,36 @@ export class Action extends Function {
                 await rev.transfer(ZODIAC_INV_SLOT_SHOP(c), ZODIAC_MERGE_SLOT(2));
                 await rev.sleep(100);
                 await rev.invoke(MERGE_BUTTON);
-                await rev.sleep(300);
-                await rev.transfer(RESULT_SLOT, ZODIAC_INV_SLOT_SHOP(a));
+                await rev.sleep(100);
+                await rev.invoke(CLOSE_BUTTON);
               },
               async enhance(n: number) {
                 const ENHANCE_SLOT   = "scene:-498/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_enchancing[2]/content[1]/item_slot_zodiac[1]";
                 const ENHANCE_BUTTON = "scene:-498/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_enchancing[2]/content[1]/btn_action[3]";
-                const RESULT_SLOT    = "scene:-498/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_enchancing[2]/content[1]/ctn_result[4]/item_slot_zodiac_result[2]";
+                const CLOSE_BUTTON   = "scene:-454/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_enchancing[2]/ctn_title[0]/btn_close[2]";
 
                 await Action.unity.astrology.planetShop.enhanceMode();
                 await rev.transfer(ZODIAC_INV_SLOT_SHOP(n), ENHANCE_SLOT);
                 await rev.sleep(100);
+                await rev.invoke(ENHANCE_BUTTON);
+                const succeeded = (await rev.slot(ENHANCE_SLOT)) == null;
+                await rev.invoke(CLOSE_BUTTON);
 
-                try {
-                  await rev.invoke(ENHANCE_BUTTON);
-                } catch {
-                  // mostly fails due to insufficient resources
-                  await rev.transfer(ENHANCE_SLOT, ZODIAC_INV_SLOT_SHOP(n)).catch(_ => {});
-                  return false;
-                }
-
-                await rev.sleep(300);
-
-                try {
-                  await rev.transfer(ENHANCE_SLOT, ZODIAC_INV_SLOT_SHOP(n));
-                  return false; // did not successfully enhance
-                } catch {} // should be successful enhanced here
-
-                await rev.transfer(RESULT_SLOT, ZODIAC_INV_SLOT_SHOP(n));
-                return true;
+                return succeeded;
               },
               async reforge(n: number) {
                 const REFORGE_SLOT   = "scene:-498/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_redistribution[3]/content[1]/item_slot_zodiac[1]";
                 const REFORGE_BUTTON = "scene:-498/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_redistribution[3]/content[1]/btn_action[3]";
-                const RESULT_SLOT    = "scene:-498/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_redistribution[3]/content[1]/ctn_result[4]/item_slot_zodiac_result[2]"
+                const CLOSE_BUTTON   = "scene:-454/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_redistribution[3]/ctn_title[0]/btn_close[2]";
 
                 await Action.unity.astrology.planetShop.reforgeMode();
                 await rev.transfer(ZODIAC_INV_SLOT_SHOP(n), REFORGE_SLOT);
                 await rev.sleep(100);
+                await rev.invoke(REFORGE_BUTTON);
+                const succeeded = (await rev.slot(REFORGE_SLOT)) == null;
+                await rev.invoke(CLOSE_BUTTON);
 
-                try {
-                  await rev.invoke(REFORGE_BUTTON);
-                } catch {
-                  // mostly fails due to insufficient resources
-                  await rev.transfer(REFORGE_SLOT, ZODIAC_INV_SLOT_SHOP(n)).catch(_ => {});
-                  return false;
-                }
-
-                await rev.sleep(300);
-
-                await rev.transfer(RESULT_SLOT, ZODIAC_INV_SLOT_SHOP(n));
-                return true;
+                return succeeded;
               },
               async sacrifice(n: number) {
                 const SACRIFICE_SLOT   = "scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/views[1]/view_sacrificing[4]/content[1]/item_slot_zodiac[1]";
