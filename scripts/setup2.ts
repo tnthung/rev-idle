@@ -61,6 +61,7 @@ async function shouldUniteByAttackETA(): ReturnType<Exclude<Config["shouldUnite"
   console.log(`ETA to finish level ${lastAtkLvl}: ${Math.round(eta.toNumber())}s`);
   const shouldUnite = eta.gte(ATTACK_ETA_CAP_S);
 
+  // update lastGold if we should unite
   if (shouldUnite)
     lastGold = await States.nextGold();
 
@@ -124,6 +125,7 @@ async function uniteWith(): ReturnType<Exclude<Config["uniteWith"], undefined>> 
       return idx2dir(choices.indexOf(choice) as UnityDirection);
   }
 
+  // if no other conditions are met, choose the zodiac with the highest score
   return idx2dir(choices.indexOf(choices.sort((a, b) => b.score.cmp(a.score))[0]) as UnityDirection);
 
 
