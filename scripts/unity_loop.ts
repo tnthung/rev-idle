@@ -73,7 +73,7 @@ export type Config = {
 
 let config: Config;
 async function loadConfig() {
-  config = (await import("./setup1.ts")).default;
+  config = (await import("./setup2.ts")).default;
 }
 
 
