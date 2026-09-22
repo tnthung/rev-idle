@@ -14,8 +14,9 @@ import {
 } from "./lib/utils.ts";
 
 
+const ZODIAC_SPARE_MIN   = 3;
+const ZODIAC_QUALITY_MIN = new BigNum(9200);
 const ATTACK_ETA_CAP_S   = new BigNum(60);
-const ZODIAC_QUALITY_MIN = new BigNum(30000);
 const RELIC_COST_CAP     = new BigNum(100);
 
 
@@ -144,9 +145,19 @@ async function uniteWith(): ReturnType<Exclude<Config["uniteWith"], undefined>> 
 
 
 async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnType<Exclude<Config["nextZodiacAction"], undefined>> {
+  if ((await States.zodiacInventorySlotCount() - Object.keys(inventory).length) < ZODIAC_SPARE_MIN) {
+    const minScoreZodiac = Object.entries(inventory).reduce(
+      (min, [slot, zodiac]) => (!min || zodiac.score.lt(min.zodiac.score)) ? { slot, zodiac }: min,
+      null as { slot: string, zodiac: UnityZodiac } | null);
+
+    if (minScoreZodiac)
+      return { type: "sell", slot: Number(minScoreZodiac.slot) };
+  }
+
+
   for (const [slot, zodiac] of Object.entries(inventory))
     if (zodiac.quality.lt(ZODIAC_QUALITY_MIN))
-      return { type: "sell", slot: Number(slot) };
+      return { type: "sacrifice", slot: Number(slot) };
 
   for (const bucket of Object.values(collectMergeBuckets(inventory))) {
     if (bucket.length < 3) continue;
