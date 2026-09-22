@@ -20,14 +20,14 @@ const ZODIAC_QUALITY_MIN = new BigNum(30000);
 const RELIC_COST_CAP     = new BigNum(100);
 
 
-export default { shouldUnite, uniteWith, nextZodiacAction, relicsToBuy } satisfies Config;
+export default { shouldUnite: shouldUniteByUnityLevel, uniteWith, nextZodiacAction, relicsToBuy } satisfies Config;
 
 
 let lastAtkLvl = 0;
 let lastAtkChk = 0;
 let lastAtkHp  = BigNum.ZERO;
 let lastGold   = BigNum.ZERO;
-async function shouldUnite(): ReturnType<Exclude<Config["shouldUnite"], undefined>> {
+async function shouldUniteByAttackETA(): ReturnType<Exclude<Config["shouldUnite"], undefined>> {
   // only check at most once per 5 seconds
   const now = Date.now();
   const elapsed = now - lastAtkChk;
@@ -65,6 +65,11 @@ async function shouldUnite(): ReturnType<Exclude<Config["shouldUnite"], undefine
     lastGold = await States.nextGold();
 
   return shouldUnite;
+}
+
+
+async function shouldUniteByUnityLevel(): ReturnType<Exclude<Config["shouldUnite"], undefined>> {
+  return await States.unityLevel() >= 112;
 }
 
 

@@ -51,6 +51,10 @@ export class States {
     return await rev.state<number>("dtpSpent");
   }
 
+  static async unityLevel() {
+    return await rev.state<number>("unityLevel");
+  }
+
   static async unityZodiacInventory(): Promise<Record<string, UnityZodiac>> {
     return Object.map(await rev.state<Record<string, UnityZodiacData>>("gameData.unity.inventory"),
       (key, value) => value && [key, new UnityZodiac(value)]);
