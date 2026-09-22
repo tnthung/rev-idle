@@ -2,7 +2,6 @@
 import type { Config, ZodiacSnapshot } from "./unity_loop.ts";
 
 import {
-  Planet,
   States,
   UnityZodiac,
   ZodiacElement,
@@ -70,6 +69,7 @@ async function shouldUniteByAttackETA(): ReturnType<Exclude<Config["shouldUnite"
 
 
 async function shouldUniteByUnityLevel(): ReturnType<Exclude<Config["shouldUnite"], undefined>> {
+  lastGold = await States.nextGold();
   return await States.unityLevel() >= 112;
 }
 
@@ -177,12 +177,11 @@ const RELIC_PRIORITY = [13, 17, 15, 16, 8, 12, 2, 6, 7, 0, 14, 11, 10, 9, 5, 4, 
 async function relicsToBuy(): ReturnType<Exclude<Config["relicsToBuy"], undefined>> {
   if (lastGold.isZero) return [];
 
-  const eta = (await Promise.all(RELIC_PRIORITY.map(rid =>
-      States.attackRelic(rid).then(r => r.totalCost.div(lastGold)))))
-    .map((eta, index) => ({ relicId: RELIC_PRIORITY[index], eta }))
-    .filter(({ eta }) => eta.lte(RELIC_COST_CAP));
-
-  return eta.map(({ relicId }) => relicId);
+  const [gold, relics] = await Promise.all([States.gold(), States.attackRelics()]);
+  return RELIC_PRIORITY
+    .map(rid => [rid, relics.at(rid)?.totalCost] as const)
+    .filter(([_, total]) => total?.div(lastGold).lte(RELIC_COST_CAP) || total?.lte(gold))
+    .map(([rid, _]) => rid);
 }
 
 
