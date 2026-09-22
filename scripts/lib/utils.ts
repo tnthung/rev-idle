@@ -242,6 +242,7 @@ export class BigNum {
 export function stringify(value: any, space?: number | string): string {
   return JSON.stringify(value, (key, val) => {
     if (val instanceof BigNum) return val.toString();
+    if (val instanceof BigInt) return val.toString();
     return val;
   }, space);
 }
