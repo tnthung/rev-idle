@@ -118,27 +118,26 @@ async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnT
     return { type: "merge", slots: slots.slice(0, 3) as [number, number, number] };
   }
 
-  const weakestMultsGainPlanet = Object.entries(planets)
-    .filter(([_, zodiac]) => zodiac.hasStat(ZodiacStatType.MultsGain))
-    .sort(([_, a], [__, b]) => a.score.cmp(b.score))[0]?.[0] as keyof typeof Planet | undefined;
-  if (weakestMultsGainPlanet)
-    for (const [slot, zodiac] of Object.entries(inventory)) {
-      const multsGain = zodiac.stats.find(s => s.type === ZodiacStatType.MultsGain);
-      if (multsGain && multsGain.value.lt(ZODIAC_QUALITY_MIN))
-        return { type: "equip", planet: weakestMultsGainPlanet, slot: Number(slot) };
-    }
-
-  const weakestGameSpeedPlanet = Object.entries(planets)
-    .filter(([_, zodiac]) => zodiac.hasStat(ZodiacStatType.GameSpeed))
-    .sort(([_, a], [__, b]) => a.score.cmp(b.score))[0]?.[0] as keyof typeof Planet | undefined;
-  if (weakestGameSpeedPlanet)
-    for (const [slot, zodiac] of Object.entries(inventory)) {
-      const gameSpeed = zodiac.stats.find(s => s.type === ZodiacStatType.GameSpeed);
-      if (gameSpeed && gameSpeed.value.lt(ZODIAC_QUALITY_MIN))
-        return { type: "equip", planet: weakestGameSpeedPlanet, slot: Number(slot) };
-    }
+  for (const r = replaceWeakest(ZodiacStatType.MultsGain); r;) return r;
+  for (const r = replaceWeakest(ZodiacStatType.GameSpeed); r;) return r;
 
   return null
+
+
+  function replaceWeakest(statType: ZodiacStatType) {
+    const weakestPlanet = Object.entries(planets)
+      .filter(([_, z]) => z.hasStat(statType))
+      .sort(([_, a], [__, b]) => a.score.cmp(b.score))
+      .at(0) as [keyof typeof Planet, UnityZodiac] | undefined;
+
+    if (!weakestPlanet)
+      return;
+
+    const [planet, zodiac] = weakestPlanet;
+    for (const [slot, invZodiac] of Object.entries(inventory))
+      if (invZodiac.statMap[statType]?.value.gt(zodiac.statMap[statType]!.value))
+        return { type: "equip", planet, slot: Number(slot) } as const;
+  }
 }
 
 
