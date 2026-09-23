@@ -30,6 +30,12 @@ public sealed class Plugin : BasePlugin
     {
         _logger = Log;
 
+        foreach (ILogListener listener in BepInEx.Logging.Logger.Listeners.ToArray())
+        {
+            BepInEx.Logging.Logger.Listeners.Remove(listener);
+            BepInEx.Logging.Logger.Listeners.Add(new FilteredLogListener(listener));
+        }
+
         string configuredPort = Config.Bind(
             "Network",
             "Port",
@@ -213,6 +219,33 @@ public sealed class Plugin : BasePlugin
 
     internal static ControlBridge? ControlBridge
         => _controlBridge;
+
+    private sealed class FilteredLogListener : ILogListener
+    {
+        // Add exact, case-sensitive source/message pairs here to suppress more messages.
+        private static readonly HashSet<(string Source, string Message)> SuppressedMessages = new()
+        {
+            ("Unity", "Coroutine couldn't be started because the the game object 'dilation' is inactive!")
+        };
+
+        private readonly ILogListener _listener;
+
+        public FilteredLogListener(ILogListener listener)
+        {
+            _listener = listener;
+        }
+
+        public LogLevel LogLevelFilter => _listener.LogLevelFilter;
+
+        public void LogEvent(object sender, LogEventArgs eventArgs)
+        {
+            if (eventArgs.Data is string message && SuppressedMessages.Contains((eventArgs.Source.SourceName, message)))
+                return;
+            _listener.LogEvent(sender, eventArgs);
+        }
+
+        public void Dispose() => _listener.Dispose();
+    }
 }
 
 internal static class ClientProcess

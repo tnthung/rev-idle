@@ -59,6 +59,8 @@ Port = 19841
 
 The plugin starts the game-root client automatically after binding the configured port. `--non-interactable` disables only console input; client hotkeys and mouse capture remain enabled.
 
+At startup, the plugin wraps the existing BepInEx log listeners to suppress the inactive Dilation coroutine message. Add exact, case-sensitive `(source, message)` pairs to `SuppressedMessages` in `src/Plugin.cs` to suppress additional messages, then rebuild, install, and restart the game. This filters BepInEx output; Unity's own log and listeners registered later are unaffected.
+
 Click, scroll, and drag commands use the same raw packet connection. They dispatch to Unity uGUI handlers without focusing the game window or moving the cursor.
 
 ## Injected script controls
