@@ -15,7 +15,8 @@ import {
 
 
 const ZODIAC_SPARE_MIN   = 3;
-const ZODIAC_QUALITY_MIN = new BigNum(9200);
+const UNITY_LEVEL_CAP    = 110;
+const ZODIAC_QUALITY_MIN = new BigNum(8000);
 const ATTACK_ETA_CAP_S   = new BigNum(60);
 const RELIC_COST_CAP     = new BigNum(100);
 
@@ -71,7 +72,7 @@ async function shouldUniteByAttackETA(): ReturnType<Exclude<Config["shouldUnite"
 
 async function shouldUniteByUnityLevel(): ReturnType<Exclude<Config["shouldUnite"], undefined>> {
   lastGold = await States.nextGold();
-  return await States.unityLevel() >= 112;
+  return await States.unityLevel() >= UNITY_LEVEL_CAP;
 }
 
 
