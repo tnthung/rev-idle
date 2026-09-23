@@ -120,6 +120,7 @@ export default async function main() {
     const z = (await States.nextUnityZodiacs())[UnityDirection[direction]];
     console.log("+-------------------------------------------------");
     console.log(`| Last unity elapsed: ${elapsed/1000}s`);
+    console.log(`| United with attack: ${(await States.attackLevel()).level}`);
     console.log(`| United with gold:   ${(await States.nextGold()).toString(4)}`);
     console.log(`| United with zodiac: ${ZodiacSign[z.sign]} / ${ZodiacElement[z.Element]} / ${ZodiacSeason[z.Season]}`);
     console.log(`|     level:   ${z.level}`);
