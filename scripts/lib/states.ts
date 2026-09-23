@@ -111,6 +111,11 @@ export class States {
     return new AttackLevel(await rev.state<AttackLevelData>("gameData.attacks.level"));
   }
 
+  static async attackRevolutionMults() {
+    return (await rev.state<{ IsActive: boolean; mult: string | number }[]>("gameData.attacks.revolutions"))
+      .map(ring => ring.IsActive ? new BigNum(ring.mult) : null);
+  }
+
   static async maxAttackLevelReached() {
     return Number(await rev.state<string | number>("gameData.attacks.maxLevelReached"));
   }
