@@ -277,7 +277,11 @@ async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnT
         };
       }
 
-    throw new Error(`Queued zodiac for ${target.planet} is unavailable; keeping the swap pending.`);
+    // Clear the state
+    console.log(`Queued zodiac for ${target.planet} is unavailable; clearing the queue.`);
+    state.queue.length = 0;
+    rev.global.setup2 = state;
+    return null;
   }
 
   if (!state.ready) {
