@@ -123,7 +123,7 @@ export default async function main() {
     console.log(`| United with attack: ${(await States.attackLevel()).level}`);
     console.log(`| United with gold:   ${(await States.nextGold()).toString(4)}`);
     console.log(`| United with zodiac: ${ZodiacSign[z.sign]} / ${ZodiacElement[z.Element]} / ${ZodiacSeason[z.Season]}`);
-    console.log(`|     level:   ${z.level}`);
+    console.log(`|     level:   ${Math.round(z.level.toNumber())}`);
     console.log(`|     rarity:  ${ZodiacRarity[z.rarity]}${z.rarityPlus ? `+${z.rarityPlus}` : ""}`);
     console.log(`|     score:   ${z.score.toString(4)}`);
     console.log(`|     quality: ${z.quality.toString(4)}`);
