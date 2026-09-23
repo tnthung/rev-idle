@@ -112,8 +112,14 @@ export class States {
   }
 
   static async attackRevolutionMults() {
-    return (await rev.state<{ IsActive: boolean; mult: string | number }[]>("gameData.attacks.revolutions"))
-      .map(ring => ring.IsActive ? new BigNum(ring.mult) : null);
+    const indexes = [0, 1, 2, 3, 4];
+    const values = await rev.state(...indexes.flatMap(index => [
+      `gameData.attacks.revolutions.${index}.IsActive`,
+      `gameData.attacks.revolutions.${index}.mult`,
+    ])) as Readonly<Record<string, boolean | string | number>>;
+    return indexes.map(index => values[`gameData.attacks.revolutions.${index}.IsActive`]
+      ? new BigNum(values[`gameData.attacks.revolutions.${index}.mult`] as string | number)
+      : null);
   }
 
   static async maxAttackLevelReached() {
