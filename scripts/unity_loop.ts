@@ -240,6 +240,12 @@ async function bootstrapEternity() {
     return true;
   }
 
+  // if currently in dilation, exit first and return for next check
+  if (await States.inDilation()) {
+    await Action.eternity.dilation.toggle().catch(() => {});
+    return false;
+  }
+
   console.log("Bootstrapping eternity...");
 
   // claim IP twice to bootstrap infinity
