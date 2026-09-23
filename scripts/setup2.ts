@@ -15,11 +15,12 @@ import {
 } from "./lib/utils.ts";
 
 
-const ZODIAC_SPARE_MIN   = 3;
-const UNITY_LEVEL_CAP    = 110;
-const ZODIAC_QUALITY_MIN = new BigNum(8000);
-const ATTACK_ETA_CAP_S   = new BigNum(60);
-const RELIC_COST_CAP     = new BigNum(5);
+const ZODIAC_SPARE_MIN         = 3;
+const UNITY_LEVEL_CAP          = 110;
+const ATTACK_CHECK_INTERVAL_MS = 5000;
+const ZODIAC_QUALITY_MIN       = new BigNum(8000);
+const ATTACK_ETA_CAP_S         = new BigNum(60);
+const RELIC_COST_CAP           = new BigNum(5);
 
 
 type Loadout = { planet: keyof ZodiacSnapshot["planets"]; zodiac: string }[];
@@ -120,7 +121,7 @@ async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnit
   if (previous
     && previous.pauseDuration === (rev.global.pauseDuration ?? 0)
     && now - previous.at >= 0
-    && now - previous.at < 5000)
+    && now - previous.at < ATTACK_CHECK_INTERVAL_MS)
       return false;
 
   state.sample = {
