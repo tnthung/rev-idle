@@ -134,6 +134,7 @@ export default async function main() {
     console.log("+-------------------------------------------------");
 
     await Action.main.unit[direction]();
+    rev.global.unityStart = Date.now();
     attackMaintenance().catch(console.error);
   }
 
@@ -145,7 +146,6 @@ export default async function main() {
 
   // initialize states for new run
   if (await States.currentEP().then(v => v.isZero)) {
-    rev.global.unityStart = Date.now();
     rev.global.pauseDuration = 0;
     rev.global.pauseStart = 0;
     states = {};
