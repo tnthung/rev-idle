@@ -11,6 +11,7 @@ import {
 import {
   BigNum,
   UnityDirection,
+  stringify,
 } from "./lib/utils.ts";
 
 
@@ -18,10 +19,27 @@ const ZODIAC_SPARE_MIN   = 3;
 const UNITY_LEVEL_CAP    = 110;
 const ZODIAC_QUALITY_MIN = new BigNum(8000);
 const ATTACK_ETA_CAP_S   = new BigNum(60);
-const RELIC_COST_CAP     = new BigNum(100);
+const RELIC_COST_CAP     = new BigNum(5);
 
 
-export default { shouldUnite: shouldUniteByUnityLevel, uniteWith, nextZodiacAction, relicsToBuy } satisfies Config;
+type Loadout = { planet: keyof ZodiacSnapshot["planets"]; zodiac: string }[];
+type SetupState = {
+  unities: string;
+  phase: "build" | "score" | "collect";
+  ready: boolean;
+  queue: Loadout;
+  sample?: { at: number; level: number; hp: string; pauseDuration: number };
+};
+
+declare const rev: Readonly<Rev & {
+  global: {
+    setup2?: SetupState;
+    pauseDuration?: number;
+  };
+}>;
+
+
+export default { shouldUnite: shouldUniteByZodiacPhase, uniteWith, nextZodiacAction, relicsToBuy } satisfies Config;
 
 
 let lastAtkLvl = 0;
@@ -76,121 +94,245 @@ async function shouldUniteByUnityLevel(): ReturnType<Exclude<Config["shouldUnite
 }
 
 
+async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnite"], undefined>> {
+  const state = rev.global.setup2;
+  if (!state
+    || !state.ready
+    || state.queue.length
+    || state.unities !== (await States.unities()).toString())
+      return false;
+
+  // Swapping zodiacs soft-resets Unity; allow the new build to recover first.
+  if (await States.spentDTP() < 65 || await States.unityLevel() < UNITY_LEVEL_CAP) {
+    delete state.sample;
+    rev.global.setup2 = state;
+    return false;
+  }
+
+  if (state.phase === "collect") {
+    lastGold = await States.nextGold();
+    return true;
+  }
+
+  const now = Date.now();
+  const attack = await States.attackLevel();
+  const previous = state.sample;
+  if (previous
+    && previous.pauseDuration === (rev.global.pauseDuration ?? 0)
+    && now - previous.at >= 0
+    && now - previous.at < 5000)
+      return false;
+
+  state.sample = {
+    at:            now,
+    level:         attack.level,
+    hp:            attack.currentHP.toString(),
+    pauseDuration: rev.global.pauseDuration ?? 0,
+  };
+
+  rev.global.setup2 = state;
+  if (!previous
+    || previous.level !== attack.level
+    || now <= previous.at
+    || previous.pauseDuration !== state.sample.pauseDuration
+    || attack.currentHP.sign() <= 0
+    || attack.currentHP.gt(new BigNum(previous.hp)))
+      return false;
+
+  const damage = new BigNum(previous.hp).sub(attack.currentHP);
+  const elapsed = new BigNum((now - previous.at) / 1000);
+  if (damage.sign() > 0 && attack.currentHP.mul(elapsed).div(damage).lt(ATTACK_ETA_CAP_S))
+    return false;
+
+  state.phase = state.phase === "build" ? "score" : "collect";
+  state.ready = false;
+  delete state.sample;
+  rev.global.setup2 = state;
+  console.log(`Switching zodiac loadout for ${state.phase}.`);
+  return false;
+}
+
+
 async function uniteWith(): ReturnType<Exclude<Config["uniteWith"], undefined>> {
-  const choices = await States.nextUnityZodiacs();
-
-  // find GameSpeed and MultsGain choices, if both missing return default choice
-  const gameSpeedChoice = choices.find(c => c.hasStat(ZodiacStatType.GameSpeed));
-  const multsGainChoice = choices.find(c => c.hasStat(ZodiacStatType.MultsGain));
-  if (!gameSpeedChoice && !multsGainChoice) return defaultChoice();
-
-  // get indexes of GameSpeed and MultsGain choices
-  const gameSpeedIdx = gameSpeedChoice && (choices.indexOf(gameSpeedChoice) as UnityDirection);
-  const multsGainIdx = multsGainChoice && (choices.indexOf(multsGainChoice) as UnityDirection);
-
-  // prioritize GameSpeed and MultsGain choices if opposite if missing
-  if (!gameSpeedIdx) return idx2dir(multsGainIdx!);
-  if (!multsGainIdx) return idx2dir(gameSpeedIdx!);
-
-  // check if the quality of the choices meets the minimum requirement, if none return default choice
-  const multsGainQualityValid = multsGainChoice.quality.gte(ZODIAC_QUALITY_MIN);
-  const gameSpeedQualityValid = gameSpeedChoice.quality.gte(ZODIAC_QUALITY_MIN);
-  if (!multsGainQualityValid && !gameSpeedQualityValid) return defaultChoice();
-
-  // prioritize GameSpeed and MultsGain choices if opposite quality is too low
-  if (!multsGainQualityValid) return idx2dir(gameSpeedIdx);
-  if (!gameSpeedQualityValid) return idx2dir(multsGainIdx);
-
-  // get current inventory and planets
-  const [planet, inventory] = await Promise.all([
-    States.planetZodiacInventory(),
+  const [choices, inventory, planets] = await Promise.all([
+    States.nextUnityZodiacs(),
     States.unityZodiacInventory(),
+    States.planetZodiacInventory(),
   ]);
 
-  // check if the weakest MultsGain zodiac can be replaced by the new choice
-  const weakestMultsGain = findWeakestZodiacOfType(ZodiacStatType.MultsGain, planet)
-  if (weakestMultsGain && compareZodiacStat(ZodiacStatType.MultsGain, multsGainChoice, weakestMultsGain[1]) > 0)
-    return idx2dir(multsGainIdx);
+  const reserved = new Set([
+    ...planLoadout({ inventory, planets }, "build"),
+    ...planLoadout({ inventory, planets }, "score"),
+  ].map(target => target.zodiac));
 
-  // check if the weakest GameSpeed zodiac can be replaced by the new choice
-  const weakestGameSpeed = findWeakestZodiacOfType(ZodiacStatType.GameSpeed, planet)
-  if (weakestGameSpeed && compareZodiacStat(ZodiacStatType.GameSpeed, gameSpeedChoice, weakestGameSpeed[1]) > 0)
-    return idx2dir(gameSpeedIdx);
+  // Keep the original choice array intact: its indexes are the Unity buttons.
+  const preferred = [...choices].sort((a, b) =>
+    Number(b.sign === ZodiacSign.Pisces) - Number(a.sign === ZodiacSign.Pisces) ||
+    b.score.cmp(a.score));
 
-  // collect the merge bucket
-  const mergeBuckets = collectMergeBuckets(inventory);
+  for (const choice of preferred) {
+    if (choice.quality.lt(ZODIAC_QUALITY_MIN) || reserved.has(zodiacKey(choice)))
+      continue;
 
-  // check if there are any mergeable zodiacs in the inventory
-  for (const choice of choices) {
-    const bucket = mergeBuckets[mergeKey(choice)];
-    if (bucket && (bucket.length % 3 === 2))
-      return idx2dir(choices.indexOf(choice) as UnityDirection);
+    const withChoice = { planets, inventory: { ...inventory, choice } };
+    if ([...planLoadout(withChoice, "build"), ...planLoadout(withChoice, "score")]
+      .some(target => target.zodiac === zodiacKey(choice)))
+        return UnityDirection[choices.indexOf(choice)] as keyof typeof UnityDirection;
   }
 
-  // if no other conditions are met, choose the zodiac with the highest score
-  return idx2dir(choices.indexOf(choices.sort((a, b) => b.score.cmp(a.score))[0]) as UnityDirection);
+  const mergeBuckets = collectMergeBuckets(Object.fromEntries(Object.entries(inventory)
+    .filter(([_, zodiac]) => !zodiac.locked && !reserved.has(zodiacKey(zodiac)))));
 
-
-  function idx2dir(index: UnityDirection) {
-    return UnityDirection[index] as keyof typeof UnityDirection;
-  }
-
-  function defaultChoice() {
-    return idx2dir(choices.indexOf(
-      choices.find(c => c.Element === ZodiacElement.Water) ??
-      choices.find(c => c.Element === ZodiacElement.Fire) ??
-      choices.sort((a, b) => b.score.cmp(a.score))[0]
-    ) as UnityDirection);
-  }
+  return UnityDirection[choices.indexOf(
+    preferred.find(choice => (mergeBuckets[mergeKey(choice)]?.length ?? 0) % 3 === 2) ??
+    preferred.find(choice => choice.Element === ZodiacElement.Water) ??
+    preferred.find(choice => choice.Element === ZodiacElement.Fire) ??
+    preferred[0]
+  )] as keyof typeof UnityDirection;
 }
 
 
 async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnType<Exclude<Config["nextZodiacAction"], undefined>> {
-  if ((await States.zodiacInventorySlotCount() - Object.keys(inventory).length) < ZODIAC_SPARE_MIN) {
-    const minScoreZodiac = Object.entries(inventory).reduce(
-      (min, [slot, zodiac]) => (!min || zodiac.score.lt(min.zodiac.score)) ? { slot, zodiac }: min,
-      null as { slot: string, zodiac: UnityZodiac } | null);
-
-    if (minScoreZodiac)
-      return { type: "sell", slot: Number(minScoreZodiac.slot) };
+  const unities = (await States.unities()).toString();
+  let state = rev.global.setup2;
+  if (!state || state.unities !== unities) {
+    state = { unities, phase: "build", ready: false, queue: [] };
+    rev.global.setup2 = state;
   }
 
+  if (!state.ready && !state.queue.length) {
+    state.queue = planLoadout({ inventory, planets }, state.phase);
+    rev.global.setup2 = state;
+  }
 
-  for (const [slot, zodiac] of Object.entries(inventory))
+  // Reserve both loadouts, including pieces that are currently in the inventory.
+  const reserved = new Set([
+    ...state.queue,
+    ...planLoadout({ inventory, planets }, "build"),
+    ...planLoadout({ inventory, planets }, "score"),
+  ].map(target => target.zodiac));
+
+  const disposable = Object.fromEntries(Object.entries(inventory).filter(([_, zodiac]) =>
+    !zodiac.IsEmpty && !zodiac.locked && !reserved.has(zodiacKey(zodiac))));
+
+  while (state.queue.length) {
+    const target = state.queue[0];
+    if (planets[target.planet] && zodiacKey(planets[target.planet]) === target.zodiac) {
+      // rev.global returns JSON copies. Persist only confirmed queue progress.
+      state.queue.shift();
+      rev.global.setup2 = state;
+      continue;
+    }
+
+    for (const [slot, zodiac] of Object.entries(inventory))
+      if (!zodiac.locked && zodiacKey(zodiac) === target.zodiac)
+        return { type: "equip", planet: target.planet, slot: Number(slot) };
+
+    for (const [planet, zodiac] of Object.entries(planets))
+      if (!zodiac.locked && zodiacKey(zodiac) === target.zodiac) {
+        const expendable = Object.entries(disposable).sort(([_, a], [__, b]) => a.score.cmp(b.score))[0];
+        return {
+          type: "takeOff", planet: planet as keyof typeof planets,
+          onFull: expendable ? { type: "sell", slot: Number(expendable[0]) } : undefined,
+        };
+      }
+
+    throw new Error(`Queued zodiac for ${target.planet} is unavailable; keeping the swap pending.`);
+  }
+
+  if (!state.ready) {
+    state.ready = true;
+    delete state.sample;
+    rev.global.setup2 = state;
+  }
+
+  if (state.phase === "collect")
+    return null;
+
+  if ((await States.zodiacInventorySlotCount() - Object.values(inventory).filter(z => !z.IsEmpty).length) < ZODIAC_SPARE_MIN) {
+    const expendable = Object.entries(disposable).sort(([_, a], [__, b]) => a.score.cmp(b.score))[0];
+    if (expendable) return { type: "sell", slot: Number(expendable[0]) };
+  }
+
+  for (const [slot, zodiac] of Object.entries(disposable))
     if (zodiac.quality.lt(ZODIAC_QUALITY_MIN))
       return { type: "sacrifice", slot: Number(slot) };
 
-  for (const bucket of Object.values(collectMergeBuckets(inventory))) {
+  for (const bucket of Object.values(collectMergeBuckets(disposable))) {
     if (bucket.length < 3) continue;
     return { type: "merge", slots: bucket.slice(0, 3)
-      .map(({ slot }) => Number(slot)) as any };
+      .map(({ slot }) => Number(slot)) as [number, number, number] };
   }
 
-  for (const r = replaceWeakest(ZodiacStatType.MultsGain); r;) return r;
-  for (const r = replaceWeakest(ZodiacStatType.GameSpeed); r;) return r;
-
-  return null
-
-
-  function replaceWeakest(statType: ZodiacStatType) {
-    for (const weakest = findWeakestZodiacOfType(statType, planets); weakest;) {
-      const [planet, zodiac] = weakest;
-      for (const [slot, invZodiac] of Object.entries(inventory))
-        if (compareZodiacStat(statType, invZodiac, zodiac) > 0)
-          return { type: "equip", planet, slot: Number(slot) } as const;
-      return;
-    }
-  }
+  return null;
 }
 
 
-const RELIC_PRIORITY = [13, 17, 15, 16, 8, 12, 2, 6, 7, 0, 14, 11, 10, 9, 5, 4, 3, 1, 18];
+function planLoadout({ inventory, planets }: ZodiacSnapshot, phase: SetupState["phase"]): Loadout {
+  const available = [...Object.values(planets), ...Object.values(inventory)]
+    .filter(zodiac => !zodiac.IsEmpty && !zodiac.locked);
+  const loadout: Loadout = [];
+
+  // Allocate Scorpio to Neptune first, then Pisces for collection or Aries for score.
+  for (const planet of (Object.keys(planets) as (keyof typeof planets)[])
+    .sort((a, b) => Number(b === "Neptune") - Number(a === "Neptune")))
+  {
+    if (planets[planet].locked) {
+      loadout.push({ planet, zodiac: zodiacKey(planets[planet]) });
+      continue;
+    }
+
+    const sign = planet === "Neptune" ? ZodiacSign.Scorpio :
+      phase === "score" ? ZodiacSign.Aries : ZodiacSign.Pisces;
+    available.sort((a, b) => {
+      const signOrder = Number(b.sign === sign) - Number(a.sign === sign);
+      if (signOrder) return signOrder;
+
+      for (const stat of phase === "score" && planet !== "Neptune"
+        ? [ZodiacStatType.MultsGain, ZodiacStatType.GameSpeed]
+        : planet === "Neptune"
+          ? [ZodiacStatType.GameSpeed, ZodiacStatType.LuckAdd]
+          : [ZodiacStatType.ZodiacQualityMult, ZodiacStatType.LuckAdd, ZodiacStatType.GameSpeed])
+      {
+        const diff = (b.statMap[stat] ?? BigNum.ZERO).cmp(a.statMap[stat] ?? BigNum.ZERO);
+        if (diff) return diff;
+      }
+
+      return b.score.cmp(a.score);
+    });
+
+    if (available.length)
+      loadout.push({ planet, zodiac: zodiacKey(available.shift()!) });
+  }
+
+  return loadout;
+}
+
+
+function zodiacKey(zodiac: UnityZodiac): string {
+  // Placement changes during a swap; the item's rolled attributes do not.
+  return stringify([
+    zodiac.sign, zodiac.rarity, zodiac.rarityPlus, zodiac.level, zodiac.quality,
+    zodiac.stats.map(stat => [stat.type, stat.value]),
+  ]);
+}
+
+
+// Zero-based indexes for the thread's relic numbers; keep the existing saving budget.
+const RELIC_PRIORITY = [13, 19, 20, 8, 15, 16, 17, 2, 12, 18, 6, 7, 0, 14, 11, 10, 9, 5, 4, 3, 1];
 
 async function relicsToBuy(): ReturnType<Exclude<Config["relicsToBuy"], undefined>> {
   if (lastGold.isZero) return [];
 
   const [gold, relics] = await Promise.all([States.gold(), States.attackRelics()]);
-  return RELIC_PRIORITY
+  const priority = [...RELIC_PRIORITY];
+  if (relics[20]?.amount.gte(new BigNum(100))) {
+    priority[RELIC_PRIORITY.indexOf(20)] = 16;
+    priority[RELIC_PRIORITY.indexOf(16)] = 20;
+  }
+
+  return priority
+    .filter(rid => relics[rid]?.unlocked)
     .map(rid => [rid, relics.at(rid)?.totalCost] as const)
     .filter(([_, total]) => total?.div(lastGold).lte(RELIC_COST_CAP) || total?.lte(gold))
     .map(([rid, _]) => rid);
@@ -214,18 +356,4 @@ function collectMergeBuckets(inventory: Record<string, UnityZodiac>) {
   }
 
   return mergeBuckets;
-}
-
-function findWeakestZodiacOfType<K extends string>(
-  statType:  ZodiacStatType,
-  inventory: Record<K, UnityZodiac>,
-) {
-  return Object.entries<UnityZodiac>(inventory)
-    .filter(([_, z]) => z.hasStat(statType))
-    .sort(([_, a], [__, b]) => compareZodiacStat(statType, a, b))
-    .at(0) as [K, UnityZodiac] | undefined;
-}
-
-function compareZodiacStat(statType: ZodiacStatType, a: UnityZodiac, b: UnityZodiac) {
-  return (b.statMap[statType] && a.statMap[statType]?.cmp(b.statMap[statType])) ?? 0
 }
