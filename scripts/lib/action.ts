@@ -500,7 +500,7 @@ export class Action extends Function {
           if (relic.totalCost.gt(gold)) break;
           console.log(`Buying relic ${index+1}`)
           await Action.attack.buyRelic(index);
-          await rev.sleep(1000);
+          await rev.sleep(2000);
         }
       },
     });
