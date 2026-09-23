@@ -216,6 +216,7 @@ async function zodiacMaintenance() {
 
     if (!action) break;
     await execute(action);
+    await rev.sleep(100);
   }
 }
 
