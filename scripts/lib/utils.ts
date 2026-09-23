@@ -23,12 +23,22 @@ declare global {
       fn: (key: string, value: any) => [string, any] | null,
     ): Record<string, any>;
   }
+
+  interface Object {
+    dbg<T>(this: T, message?: string): T;
+  }
 }
 
 Object.map = function(obj, fn) {
   return Object.fromEntries(Object.entries(obj)
     .map(([key, value]) => fn(key, value))
     .filter(entry => entry !== null));
+};
+
+Object.prototype.dbg = function(message?: string) {
+  if (message) console.log(`${message}:`, stringify(this, 2));
+  else         console.log(stringify(this, 2));
+  return this;
 };
 
 
