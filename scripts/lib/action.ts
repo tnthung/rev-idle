@@ -369,6 +369,7 @@ export class Action extends Function {
                 await rev.transfer(
                   ZODIAC_PLANET_SLOT(src  as keyof typeof Planet) || ZODIAC_INV_SLOT_PLANET(src  as number),
                   ZODIAC_PLANET_SLOT(dest as keyof typeof Planet) || ZODIAC_INV_SLOT_PLANET(dest as number));
+                await rev.sleep(300);
               },
               async takeOff(planet: keyof typeof Planet) {
                 const inv = await States.unityZodiacInventory();
