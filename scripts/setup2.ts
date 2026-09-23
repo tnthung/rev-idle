@@ -19,7 +19,8 @@ const ZODIAC_SPARE_MIN         = 3;
 const UNITY_LEVEL_CAP          = 110;
 const ATTACK_CHECK_INTERVAL_MS = 500;
 const ZODIAC_QUALITY_MIN       = new BigNum(8000);
-const ATTACK_ETA_CAP_S         = new BigNum(60);
+const ATTACK_FAST_ETA_CAP_S    = new BigNum(30);
+const ATTACK_SLOW_ETA_CAP_S    = new BigNum(180);
 const RELIC_COST_CAP           = new BigNum(5);
 
 
@@ -85,7 +86,7 @@ async function shouldUniteByAttackETA(): ReturnType<Exclude<Config["shouldUnite"
 
   // return whether ETA is above the cap
   console.log(`ETA to finish level ${lastAtkLvl}: ${Math.round(eta.toNumber())}s`);
-  const shouldUnite = eta.gte(ATTACK_ETA_CAP_S);
+  const shouldUnite = eta.gte(ATTACK_SLOW_ETA_CAP_S);
 
   // update lastGold if we should unite
   if (shouldUnite)
@@ -101,6 +102,7 @@ async function shouldUniteByUnityLevel(): ReturnType<Exclude<Config["shouldUnite
 }
 
 
+let slowAttack = false;
 async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnite"], undefined>> {
   const state = rev.global.setup2;
   if (!state
@@ -152,6 +154,7 @@ async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnit
       pauseDuration,
     };
 
+    slowAttack = false;
     rev.global.setup2 = state;
     return false;
   }
@@ -159,8 +162,10 @@ async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnit
   // keep waiting if some rings have not completed a revolution yet
   if (mults.some((mult, i) => mult?.lte(new BigNum(previous.mults[i]!))))
     // only continue waiting if the time elapsed since the level started is within the attack ETA cap
-    if (ATTACK_ETA_CAP_S.gte(new BigNum((now - previous.lastCheck) / 1000)))
+    if (ATTACK_SLOW_ETA_CAP_S.gte(new BigNum((now - previous.lastCheck) / 1000))) {
+      slowAttack = true;
       return false;
+    }
 
   // update last check timestamp
   const lastCheck = previous.lastCheck;
@@ -173,7 +178,9 @@ async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnit
   // calculate the damage dealt and the elapsed time since the last check
   const damage = new BigNum(lastHp).sub(attack.currentHP);
   const elapsed = new BigNum((now - lastCheck) / 1000);
-  if (damage.sign() > 0 && attack.currentHP.mul(elapsed).div(damage).lt(ATTACK_ETA_CAP_S))
+  const eta = attack.currentHP.mul(elapsed).div(damage);
+  if (slowAttack) console.log(`ETA for level ${previous.level}: ${eta.toNumber().toFixed(2)}s`);
+  if (damage.sign() > 0 && eta.lt(slowAttack ? ATTACK_SLOW_ETA_CAP_S : ATTACK_FAST_ETA_CAP_S))
     return false;
 
   // shift to the next phase
