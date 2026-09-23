@@ -73,8 +73,22 @@ export function ZODIAC_INV_SLOT_SHOP(n: number): string {
 export class Action extends Function {
   private parentAct?: Action;
   private runParent?: boolean;
-  private canSkip = false;
   private steps: ActionStep[] = [];
+
+  private get canSkipKey() {
+    const chain = [];
+    for (let action: Action | undefined = this; action; action = action.parentAct)
+      chain.push([action.steps, action.runParent]);
+    return `Action.canSkip:${JSON.stringify(chain)}`;
+  }
+
+  private get canSkip() {
+    return rev.global[this.canSkipKey] === true;
+  }
+
+  private set canSkip(value: boolean) {
+    rev.global[this.canSkipKey] = value;
+  }
 
   constructor() {
     super();
