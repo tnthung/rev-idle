@@ -1,4 +1,4 @@
-// cspell:ignore Mults
+// cspell:ignore Mult Mults loadouts
 import type { Config, ZodiacSnapshot } from "./unity_loop.ts";
 
 import {
