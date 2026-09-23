@@ -55,6 +55,10 @@ export class States {
     return await rev.state<number>("unityLevel");
   }
 
+  static async unities() {
+    return new BigNum(await rev.state<string | number>("gameData.unity.unities"));
+  }
+
   static async unityZodiacInventory(): Promise<Record<string, UnityZodiac>> {
     return Object.map(await rev.state<Record<string, UnityZodiacData>>("gameData.unity.inventory"),
       (key, value) => value && [key, new UnityZodiac(value)]);
