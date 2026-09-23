@@ -128,9 +128,9 @@ export default async function main() {
     console.log(`|     score:   ${z.score.toString(4)}`);
     console.log(`|     quality: ${z.quality.toString(4)}`);
     console.log("|     stats:");
-    const typeLen = Math.max(...z.stats.map(stat => ZodiacStatType[stat.type].length));
+    const typeLen = Math.max(...z.stats.map(stat => ZodiacStatType[stat.type].length)) + 1;
     for (const stat of z.stats)
-      console.log(`|         ${ZodiacStatType[stat.type].padEnd(typeLen)}: ${stat.value.toString(4)}`);
+      console.log(`|         ${(ZodiacStatType[stat.type] + ":").padEnd(typeLen)} ${stat.value.toString(4)}`);
     console.log("+-------------------------------------------------");
 
     await Action.main.unit[direction]();
