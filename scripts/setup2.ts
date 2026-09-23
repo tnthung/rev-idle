@@ -17,7 +17,7 @@ import {
 
 const ZODIAC_SPARE_MIN         = 3;
 const UNITY_LEVEL_CAP          = 110;
-const ATTACK_CHECK_INTERVAL_MS = 5000;
+const ATTACK_CHECK_INTERVAL_MS = 500;
 const ZODIAC_QUALITY_MIN       = new BigNum(8000);
 const ATTACK_ETA_CAP_S         = new BigNum(60);
 const RELIC_COST_CAP           = new BigNum(5);
@@ -29,7 +29,13 @@ type SetupState = {
   phase: "build" | "score" | "collect";
   ready: boolean;
   queue: Loadout;
-  sample?: { at: number; level: number; hp: string; pauseDuration: number };
+  sample?: {
+    lastCheck:     number;
+    level:         number;
+    hp:            string;
+    pauseDuration: number;
+    mults:         (string | null)[];
+  };
 };
 
 declare const rev: Readonly<Rev & {
@@ -116,35 +122,61 @@ async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnit
   }
 
   const now = Date.now();
-  const attack = await States.attackLevel();
   const previous = state.sample;
-  if (previous
-    && previous.pauseDuration === (rev.global.pauseDuration ?? 0)
-    && now - previous.at >= 0
-    && now - previous.at < ATTACK_CHECK_INTERVAL_MS)
-      return false;
 
-  state.sample = {
-    at:            now,
-    level:         attack.level,
-    hp:            attack.currentHP.toString(),
-    pauseDuration: rev.global.pauseDuration ?? 0,
-  };
+  // skip if the attack check interval has not passed yet
+  if (previous && (now - previous.lastCheck) < ATTACK_CHECK_INTERVAL_MS)
+    return false;
 
-  rev.global.setup2 = state;
+  const pauseDuration = rev.global.pauseDuration ?? 0;
+  const [mults, attack] = await Promise.all([
+    States.attackRevolutionMults(),
+    States.attackLevel()]);
+
+  // initialize the state baseline
   if (!previous
     || previous.level !== attack.level
-    || now <= previous.at
-    || previous.pauseDuration !== state.sample.pauseDuration
+    || !Number.isFinite(previous.lastCheck)
+    || now <= previous.lastCheck
+    || previous.pauseDuration !== pauseDuration
     || attack.currentHP.sign() <= 0
-    || attack.currentHP.gt(new BigNum(previous.hp)))
+    || attack.currentHP.gt(new BigNum(previous.hp))
+    || previous.mults?.length !== mults.length
+    || previous.mults?.some((mult, i) => mult == null && mults[i] != null)
+  ) {
+    state.sample = {
+      lastCheck:  now,
+      level:      attack.level,
+      hp:         attack.currentHP.toString(),
+      mults:      mults.map(mult => mult?.toString() ?? null),
+      pauseDuration,
+    };
+
+    rev.global.setup2 = state;
+    return false;
+  }
+
+  // keep waiting if some rings have not completed a revolution yet
+  if (mults.some((mult, i) => mult?.lte(new BigNum(previous.mults[i]!))))
+    // only continue waiting if the time elapsed since the level started is within the attack ETA cap
+    if (ATTACK_ETA_CAP_S.gte(new BigNum((now - previous.lastCheck) / 1000)))
       return false;
 
-  const damage = new BigNum(previous.hp).sub(attack.currentHP);
-  const elapsed = new BigNum((now - previous.at) / 1000);
+  // update last check timestamp
+  const lastCheck = previous.lastCheck;
+  const lastHp = previous.hp;
+  previous.lastCheck = now;
+  previous.hp = attack.currentHP.toString();
+  previous.mults = mults.map(mult => mult?.toString() ?? null);
+  rev.global.setup2 = state;
+
+  // calculate the damage dealt and the elapsed time since the last check
+  const damage = new BigNum(lastHp).sub(attack.currentHP);
+  const elapsed = new BigNum((now - lastCheck) / 1000);
   if (damage.sign() > 0 && attack.currentHP.mul(elapsed).div(damage).lt(ATTACK_ETA_CAP_S))
     return false;
 
+  // shift to the next phase
   state.phase = state.phase === "build" ? "score" : "collect";
   state.ready = false;
   delete state.sample;
