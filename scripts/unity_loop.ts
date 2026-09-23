@@ -46,6 +46,15 @@ export async function afterResume() {
 export async function afterLoad() {
   console.clear();
   Action.dismiss.loopDetached();
+  await loadConfig();
+
+  (async () => {
+    while (true) {
+      try { await zodiacMaintenance(); }
+      catch (e) { console.error(e); }
+      await rev.sleep(1000);
+    }
+  })().catch(e => console.error("Error in zodiac maintenance loop:", e));
 }
 
 
@@ -125,8 +134,6 @@ export default async function main() {
 
     await Action.main.unit[direction]();
     attackMaintenance().catch(console.error);
-    await rev.sleep(100);
-    zodiacMaintenance().catch(console.error);
   }
 
   // reset the game if the config indicates so
