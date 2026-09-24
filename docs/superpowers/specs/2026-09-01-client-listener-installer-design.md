@@ -42,7 +42,7 @@ If at least one but not all required BepInEx files exists, the script stops with
 
 ## Interop Generation
 
-The plugin build requires game-specific assemblies under `BepInEx/interop`. If the required assemblies already exist, the installer proceeds immediately. Otherwise it launches `Revolution Idle.exe`, waits up to five minutes for all required interop assemblies to appear, and reports that first-time generation may take several minutes.
+The plugin build requires game-specific assemblies under `BepInEx/interop`. If the required assemblies and BepInEx's `assembly-hash.txt` completion marker already exist, the installer proceeds immediately. Otherwise it launches `Revolution Idle.exe`, waits up to five minutes for the completion marker and all required interop assemblies to appear, and reports that first-time generation may take several minutes.
 
 The installer records the exact process it launches. Once interop generation succeeds or times out, it stops only that process if it is still running. It never stops a pre-existing Revolution Idle process. If the game is already running while interop files are missing, installation stops and asks the user to close the game before retrying.
 

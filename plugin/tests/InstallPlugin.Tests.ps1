@@ -74,6 +74,16 @@ try {
     }
     Assert-Equal "Complete" (Get-BepInExState $stateGame) "Get-BepInExState detects a complete runtime"
 
+    $interopGame = Join-Path $testRoot "interop-game"
+    foreach ($assembly in $InteropAssemblies) {
+        $assemblyPath = Join-Path $interopGame $assembly
+        New-Item -ItemType Directory -Path (Split-Path -Parent $assemblyPath) -Force | Out-Null
+        Copy-Item -LiteralPath ([System.Management.Automation.PSObject].Assembly.Location) -Destination $assemblyPath
+    }
+    Assert-Equal $false (Test-InteropReady $interopGame) "Test-InteropReady waits for BepInEx generation to finish"
+    New-Item -ItemType File -Path (Join-Path $interopGame "BepInEx\interop\assembly-hash.txt") | Out-Null
+    Assert-Equal $true (Test-InteropReady $interopGame) "Test-InteropReady accepts completed BepInEx generation"
+
     $fixture = Join-Path $testRoot "fixture"
     $fixtureCore = Join-Path $fixture "BepInEx\core"
     New-Item -ItemType Directory -Path $fixtureCore -Force | Out-Null
@@ -235,7 +245,7 @@ param([string]$GameDir)
     Assert-Equal $true (Test-Path -LiteralPath $generatedStateReference -PathType Leaf) "installer generates the state reference"
     Assert-Equal ([System.IO.Path]::GetFullPath($gameDir)) ([System.IO.File]::ReadAllText($generatedStateReference)) "installer passes the resolved game directory to the state generator"
 
-    Write-Output "15 installer tests passed."
+    Write-Output "17 installer tests passed."
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force

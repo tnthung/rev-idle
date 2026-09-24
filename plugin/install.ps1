@@ -225,7 +225,7 @@ function Install-BepInEx {
 function Test-InteropReady {
     param([string]$GameDirectory)
 
-    return @($InteropAssemblies | Where-Object {
+    return (Test-Path -LiteralPath (Join-Path $GameDirectory "BepInEx\interop\assembly-hash.txt") -PathType Leaf) -and @($InteropAssemblies | Where-Object {
         -not (Test-Path -LiteralPath (Join-Path $GameDirectory $_) -PathType Leaf)
     }).Count -eq 0
 }
