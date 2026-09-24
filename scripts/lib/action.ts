@@ -393,6 +393,7 @@ export class Action extends Function {
                   if (!inv[i]) {
                     await Action.unity.astrology.planet();
                     await rev.transfer(ZODIAC_PLANET_SLOT(planet), ZODIAC_INV_SLOT_PLANET(i));
+                    await rev.sleep(300);
                     return true;
                   }
 
