@@ -493,6 +493,7 @@ export class Action extends Function {
     .extend({
       async upgradeRings() {
         for (let i=1; i<6; i++) {
+          await rev.sleep(2000);
           await Action.attack[`buy${i as 1|2|3|4|5}`]();
           await rev.sleep(50);
           await Action.attack[`ascend${i as 1|2|3|4|5}`]();
@@ -506,6 +507,8 @@ export class Action extends Function {
       },
       async buyRelics(n: number[]) {
         for (const index of n) {
+          await rev.sleep(2000);
+
           const [gold, relic] = await Promise.all([
             States.currentGold(),
             States.attackRelic(index),
@@ -518,7 +521,6 @@ export class Action extends Function {
 
           console.log(`Buying relic ${index+1}`)
           await Action.attack.buyRelic(index);
-          await rev.sleep(2000);
         }
       },
     });
