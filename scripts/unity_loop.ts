@@ -231,7 +231,7 @@ async function bootstrapEternity() {
   states.eternityBootstrapped ??= false;
 
   // finish bootstrapping eternity if current EP exponent is greater than 150
-  if (await States.currentEP().then(v => v.exponent > 150n)) {
+  if (await States.currentEP().then(v => v.exponent > 50n)) {
     if (!states.eternityBootstrapped) {
       states.eternityBootstrapped = true;
       console.log(`Eternity bootstrapped.`);
