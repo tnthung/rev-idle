@@ -312,7 +312,7 @@ async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnT
 }
 
 
-function planLoadout({ inventory, planets }: ZodiacSnapshot, phase: SetupState["phase"]): Loadout {
+export function planLoadout({ inventory, planets }: ZodiacSnapshot, phase: SetupState["phase"]): Loadout {
   const available = [...Object.values(planets), ...Object.values(inventory)]
     .filter(zodiac => !zodiac.IsEmpty && !zodiac.locked);
   const loadout: Loadout = [];
