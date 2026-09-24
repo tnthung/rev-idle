@@ -228,7 +228,7 @@ export class Action extends Function {
       claimIP: new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_infinite_reset[4]"),
       claimEP: new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_eternate_reset[3]"),
       unit: new Action()
-        .invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_unite_reset[2]", 1000)
+        .invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/main[0]/content[0]/panel[0]/ctn_bottom[16]/btn_unite_reset[2]", 1500)
         .subLevel({
           left: new Action()
             .invoke("scene:-148/CANVAS[0]/safe_area[0]/front_views[3]/layer_1[0]/zodiac_choice[11]/content[0]/ctn_zodiac[5]/ctn_root[0]/item_zodiac_choice_item_left[3]/btn_astro[0]")

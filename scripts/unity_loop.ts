@@ -125,23 +125,30 @@ export default async function main() {
 
     const direction = await config.uniteWith();
 
+    let message = "";
     const z = (await States.nextUnityZodiacs())[UnityDirection[direction]];
-    console.log("+-------------------------------------------------");
-    console.log(`| Last unity elapsed: ${elapsed/1000}s`);
-    console.log(`| United with attack: ${(await States.attackLevel()).level}`);
-    console.log(`| United with gold:   ${(await States.nextGold()).toString(4)}`);
-    console.log(`| United with zodiac: ${ZodiacSign[z.sign]} / ${ZodiacElement[z.Element]} / ${ZodiacSeason[z.Season]}`);
-    console.log(`|     level:   ${Math.round(z.level.toNumber())}`);
-    console.log(`|     rarity:  ${ZodiacRarity[z.rarity]}${z.rarityPlus ? `+${z.rarityPlus}` : ""}`);
-    console.log(`|     score:   ${z.score.toString(4)}`);
-    console.log(`|     quality: ${z.quality.toString(4)}`);
-    console.log("|     stats:");
+    message += "+-------------------------------------------------\n";
+    message += `| Last unity elapsed: ${elapsed/1000}s\n`;
+    message += `| United with attack: ${(await States.attackLevel()).level}\n`;
+    message += `| United with gold:   ${(await States.nextGold()).toString(4)}\n`;
+    message += `| United with zodiac: ${ZodiacSign[z.sign]} / ${ZodiacElement[z.Element]} / ${ZodiacSeason[z.Season]}\n`;
+    message += `|     level:   ${Math.round(z.level.toNumber())}\n`;
+    message += `|     rarity:  ${ZodiacRarity[z.rarity]}${z.rarityPlus ? `+${z.rarityPlus}` : ""}\n`;
+    message += `|     score:   ${z.score.toString(4)}\n`;
+    message += `|     quality: ${z.quality.toString(4)}\n`;
+    message += "|     stats:\n";
     const typeLen = Math.max(...z.stats.map(stat => ZodiacStatType[stat.type].length)) + 1;
     for (const stat of z.stats)
-      console.log(`|         ${(ZodiacStatType[stat.type] + ":").padEnd(typeLen)} ${stat.value.toString(4)}`);
-    console.log("+-------------------------------------------------");
+      message += `|         ${(ZodiacStatType[stat.type] + ":").padEnd(typeLen)} ${stat.value.toString(4)}\n`;
+    message += "+-------------------------------------------------\n";
 
-    await Action.main.unit[direction]();
+    try { await Action.main.unit[direction](); }
+    catch (e) {
+      console.error(`Errored when uniting zodiac:\n${e}`);
+      return;
+    }
+
+    console.log(message);
     rev.global.unityStart = Date.now();
   }
 
