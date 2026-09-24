@@ -348,7 +348,7 @@ export default {
   },
 
   async relicsToBuy() {
-    const [relics, gold] = await Promise.all([States.attackRelics(), States.gold()]);
+    const [relics, gold] = await Promise.all([States.attackRelics(), States.currentGold()]);
     const byIndex = new Map(relics.map(relic => [relic.num, relic]));
     const pending = runtime.pendingRelic;
     if (pending) {

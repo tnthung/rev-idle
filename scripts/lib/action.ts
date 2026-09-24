@@ -493,7 +493,7 @@ export class Action extends Function {
       async buyRelics(n: number[]) {
         for (const index of n) {
           const [gold, relic] = await Promise.all([
-            States.gold(),
+            States.currentGold(),
             States.attackRelic(index),
           ]);
 

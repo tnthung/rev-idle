@@ -3,12 +3,37 @@ import { BigNum } from "./utils.ts";
 
 
 export class States {
+  static async unlockedAchievements() {
+    // The save uses zero-based IDs; expose the achievement numbers shown in game.
+    return (await rev.state<number[]>("gameData.unlockedAch")).map(id => id + 1);
+  }
+
+  static async infinities() {
+    return new BigNum(await rev.state<string | number>("gameData.infinity.infs"));
+  }
+
+  static async eternities() {
+    return new BigNum(await rev.state<string | number>("gameData.eternity.eters"));
+  }
+
+  static async unities() {
+    return new BigNum(await rev.state<string | number>("gameData.unity.unities"));
+  }
+
   static async currentIP() {
     return new BigNum(await rev.state<string | number>("IP"));
   }
 
   static async currentEP() {
     return new BigNum(await rev.state<string | number>("EP"));
+  }
+
+  static async currentDP() {
+    return new BigNum(await rev.state<string | number>("gameData.eternity.DP"));
+  }
+
+  static async currentGold() {
+    return new BigNum(await rev.state<string | number>("gameData.attacks.gold"));
   }
 
   static async nextIP() {
@@ -19,12 +44,12 @@ export class States {
     return new BigNum(await rev.state<string | number>("nextEP"));
   }
 
-  static async supernovaLevel() {
-    return await rev.state<number>("gameData.eternity.supernovaLv");
+  static async nextGold() {
+    return new BigNum(await rev.state<string | number>("gameData.attacks.goldOnUnity"));
   }
 
-  static async eternities() {
-    return new BigNum(await rev.state<string | number>("gameData.eternity.eters"));
+  static async supernovaLevel() {
+    return await rev.state<number>("gameData.eternity.supernovaLv");
   }
 
   static async totalAP() {
@@ -55,10 +80,6 @@ export class States {
     return await rev.state<number>("unityLevel");
   }
 
-  static async unities() {
-    return new BigNum(await rev.state<string | number>("gameData.unity.unities"));
-  }
-
   static async unityZodiacInventory(): Promise<Record<string, UnityZodiac>> {
     return Object.map(await rev.state<Record<string, UnityZodiacData>>("gameData.unity.inventory"),
       (key, value) => value && [key, new UnityZodiac(value)]);
@@ -67,14 +88,6 @@ export class States {
   static async planetZodiacInventory(): Promise<Record<keyof typeof Planet, UnityZodiac>> {
     return Object.map(await rev.state<Record<keyof typeof Planet, UnityZodiacData>>("gameData.unity.planetsInventory"),
       (key, value) => value && [key, new UnityZodiac(value)]);
-  }
-
-  static async gold() {
-    return new BigNum(await rev.state<string | number>("gameData.attacks.gold"));
-  }
-
-  static async nextGold() {
-    return new BigNum(await rev.state<string | number>("gameData.attacks.goldOnUnity"));
   }
 
   static async attackRelics() {

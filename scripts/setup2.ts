@@ -368,7 +368,7 @@ const RELIC_PRIORITY = [13, 19, 20, 8, 15, 16, 17, 2, 12, 18, 6, 7, 0, 14, 11, 1
 async function relicsToBuy(): ReturnType<Exclude<Config["relicsToBuy"], undefined>> {
   if (lastGold.isZero) return [];
 
-  const [gold, relics] = await Promise.all([States.gold(), States.attackRelics()]);
+  const [gold, relics] = await Promise.all([States.currentGold(), States.attackRelics()]);
   const priority = [...RELIC_PRIORITY];
   if (relics[20]?.amount.gte(new BigNum(100))) {
     priority[RELIC_PRIORITY.indexOf(20)] = 16;
