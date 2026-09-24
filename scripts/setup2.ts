@@ -3,6 +3,7 @@ import type { Config, ZodiacSnapshot } from "./unity_loop.ts";
 
 import {
   States,
+  Planet,
   UnityZodiac,
   ZodiacElement,
   ZodiacSign,
@@ -30,12 +31,13 @@ type SetupState = {
   phase: "build" | "score" | "collect";
   ready: boolean;
   queue: Loadout;
+  plan?: Loadout;
   sample?: {
     lastCheck:     number;
     level:         number;
     hp:            string;
     pauseDuration: number;
-    mults:         (string | null)[];
+    mults:         string[];
   };
 };
 
@@ -132,7 +134,7 @@ async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnit
 
   const pauseDuration = rev.global.pauseDuration ?? 0;
   const [mults, attack] = await Promise.all([
-    States.attackRevolutionMults(),
+    States.attackRevolutionMults() as Promise<BigNum[]>,
     States.attackLevel()]);
 
   // initialize the state baseline
@@ -143,14 +145,13 @@ async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnit
     || previous.pauseDuration !== pauseDuration
     || attack.currentHP.sign() <= 0
     || attack.currentHP.gt(new BigNum(previous.hp))
-    || previous.mults?.length !== mults.length
-    || previous.mults?.some((mult, i) => mult == null && mults[i] != null)
+    || previous.mults.some((mult, i) => mults[i].lt(new BigNum(mult)))
   ) {
     state.sample = {
-      lastCheck:  now,
-      level:      attack.level,
-      hp:         attack.currentHP.toString(),
-      mults:      mults.map(mult => mult?.toString() ?? null),
+      lastCheck: now,
+      level:     attack.level,
+      hp:        attack.currentHP.toString(),
+      mults:     mults.map(mult => mult.toString()),
       pauseDuration,
     };
 
@@ -159,8 +160,9 @@ async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnit
     return false;
   }
 
-  // keep waiting if some rings have not completed a revolution yet
-  if (mults.some((mult, i) => mult?.lte(new BigNum(previous.mults[i]!))))
+  // Keep the production timeout, but do not label its partial window a full-ring sample.
+  const complete = mults.every((mult, i) => mult.gt(new BigNum(previous.mults[i])));
+  if (!complete)
     // only continue waiting if the time elapsed since the level started is within the attack ETA cap
     if (ATTACK_SLOW_ETA_CAP_S.gte(new BigNum((now - previous.lastCheck) / 1000))) {
       slowAttack = true;
@@ -172,15 +174,15 @@ async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnit
   const lastHp = previous.hp;
   previous.lastCheck = now;
   previous.hp = attack.currentHP.toString();
-  previous.mults = mults.map(mult => mult?.toString() ?? null);
+  previous.mults = mults.map(mult => mult.toString());
   rev.global.setup2 = state;
 
   // calculate the damage dealt and the elapsed time since the last check
   const damage = new BigNum(lastHp).sub(attack.currentHP);
   const elapsed = new BigNum((now - lastCheck) / 1000);
-  const eta = attack.currentHP.mul(elapsed).div(damage);
-  if (slowAttack) console.log(`ETA for level ${previous.level}: ${eta.toNumber().toFixed(2)}s`);
-  if (damage.sign() > 0 && eta.lt(slowAttack ? ATTACK_SLOW_ETA_CAP_S : ATTACK_FAST_ETA_CAP_S))
+  const eta = damage.sign() > 0 ? attack.currentHP.mul(elapsed).div(damage) : null;
+  if (slowAttack) console.log(`ETA for level ${previous.level}: ${eta?.toNumber().toFixed(2)}s`);
+  if (eta?.lt(slowAttack ? ATTACK_SLOW_ETA_CAP_S : ATTACK_FAST_ETA_CAP_S))
     return false;
 
   // shift to the next phase
@@ -200,10 +202,7 @@ async function uniteWith(): ReturnType<Exclude<Config["uniteWith"], undefined>> 
     States.planetZodiacInventory(),
   ]);
 
-  const reserved = new Set([
-    ...planLoadout({ inventory, planets }, "build"),
-    ...planLoadout({ inventory, planets }, "score"),
-  ].map(target => target.zodiac));
+  const reserved = protectedZodiacs({ inventory, planets });
 
   // Keep the original choice array intact: its indexes are the Unity buttons.
   const preferred = [...choices].sort((a, b) =>
@@ -215,8 +214,7 @@ async function uniteWith(): ReturnType<Exclude<Config["uniteWith"], undefined>> 
       continue;
 
     const withChoice = { planets, inventory: { ...inventory, choice } };
-    if ([...planLoadout(withChoice, "build"), ...planLoadout(withChoice, "score")]
-      .some(target => target.zodiac === zodiacKey(choice)))
+    if (protectedZodiacs(withChoice).has(zodiacKey(choice)))
         return UnityDirection[choices.indexOf(choice)] as keyof typeof UnityDirection;
   }
 
@@ -241,16 +239,16 @@ async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnT
   }
 
   if (!state.ready && !state.queue.length) {
-    state.queue = planLoadout({ inventory, planets }, state.phase);
+    state.plan = planLoadout({ inventory, planets }, state.phase);
+    state.queue = [...state.plan];
     rev.global.setup2 = state;
   }
 
-  // Reserve both loadouts, including pieces that are currently in the inventory.
+  // Protect the frozen plan as well as all three phases.
   const reserved = new Set([
-    ...state.queue,
-    ...planLoadout({ inventory, planets }, "build"),
-    ...planLoadout({ inventory, planets }, "score"),
-  ].map(target => target.zodiac));
+    ...[...state.queue, ...(state.plan ?? [])].map(target => target.zodiac),
+    ...protectedZodiacs({ inventory, planets }),
+  ]);
 
   const disposable = Object.fromEntries(Object.entries(inventory).filter(([_, zodiac]) =>
     !zodiac.IsEmpty && !zodiac.locked && !reserved.has(zodiacKey(zodiac))));
@@ -316,33 +314,47 @@ export function planLoadout({ inventory, planets }: ZodiacSnapshot, phase: Setup
   const available = [...Object.values(planets), ...Object.values(inventory)]
     .filter(zodiac => !zodiac.IsEmpty && !zodiac.locked);
   const loadout: Loadout = [];
+  const special: Partial<Record<keyof typeof planets, ZodiacSign>> = phase === "collect"
+    ? {} : { Neptune: ZodiacSign.Scorpio };
 
-  // Allocate Scorpio to Neptune first, then Pisces for collection or Aries for score.
+  if (phase === "score") {
+    // Winter on Venus gives DU x1.05; Autumn on Jupiter gives DU x1.03.
+    special.Venus = ZodiacSign.Aquarius;
+    special.Jupiter = ZodiacSign.Libra;
+  }
+
+  // Reserve seasonal slots first. Scorpio's Autumn bonus on Neptune is speed x1.4.
   for (const planet of (Object.keys(planets) as (keyof typeof planets)[])
-    .sort((a, b) => Number(b === "Neptune") - Number(a === "Neptune")))
+    .sort((a, b) => Number(special[b] != null) - Number(special[a] != null) || Planet[a] - Planet[b]))
   {
     if (planets[planet].locked) {
       loadout.push({ planet, zodiac: zodiacKey(planets[planet]) });
       continue;
     }
 
-    const sign = planet === "Neptune" ? ZodiacSign.Scorpio :
-      phase === "score" ? ZodiacSign.Aries : ZodiacSign.Pisces;
+    const sign = special[planet] ?? (phase === "score" ? ZodiacSign.Aries : ZodiacSign.Pisces);
+    let stats = [ZodiacStatType.ZodiacQualityMult, ZodiacStatType.LuckAdd, ZodiacStatType.GameSpeed];
+    if (sign === ZodiacSign.Aquarius || sign === ZodiacSign.Libra)
+      stats = [ZodiacStatType.DPGain, ZodiacStatType.SupernovaReq, ZodiacStatType.LabMultPower];
+    else if (sign === ZodiacSign.Aries)
+      stats = [ZodiacStatType.MultsGain, ZodiacStatType.GameSpeed];
+    else if (sign === ZodiacSign.Scorpio)
+      stats = [ZodiacStatType.GameSpeed, ZodiacStatType.LuckAdd];
+    else if (phase === "build")
+      stats = [ZodiacStatType.GameSpeed, ZodiacStatType.ZodiacQualityMult, ZodiacStatType.LuckAdd];
+
     available.sort((a, b) => {
       const signOrder = Number(b.sign === sign) - Number(a.sign === sign);
       if (signOrder) return signOrder;
 
-      for (const stat of phase === "score" && planet !== "Neptune"
-        ? [ZodiacStatType.MultsGain, ZodiacStatType.GameSpeed]
-        : planet === "Neptune"
-          ? [ZodiacStatType.GameSpeed, ZodiacStatType.LuckAdd]
-          : [ZodiacStatType.ZodiacQualityMult, ZodiacStatType.LuckAdd, ZodiacStatType.GameSpeed])
-      {
-        const diff = (b.statMap[stat] ?? BigNum.ZERO).cmp(a.statMap[stat] ?? BigNum.ZERO);
+      for (const stat of stats) {
+        const diff = stat === ZodiacStatType.SupernovaReq
+          ? (a.statMap[stat] ?? BigNum.ONE).cmp(b.statMap[stat] ?? BigNum.ONE)
+          : (b.statMap[stat] ?? BigNum.ZERO).cmp(a.statMap[stat] ?? BigNum.ZERO);
         if (diff) return diff;
       }
 
-      return b.score.cmp(a.score);
+      return b.score.cmp(a.score) || zodiacKey(a).localeCompare(zodiacKey(b));
     });
 
     if (available.length)
@@ -350,6 +362,15 @@ export function planLoadout({ inventory, planets }: ZodiacSnapshot, phase: Setup
   }
 
   return loadout;
+}
+
+
+export function protectedZodiacs(snapshot: ZodiacSnapshot): Set<string> {
+  return new Set([
+    ...planLoadout(snapshot, "build"),
+    ...planLoadout(snapshot, "score"),
+    ...planLoadout(snapshot, "collect"),
+  ].map(target => target.zodiac));
 }
 
 

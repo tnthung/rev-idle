@@ -1,6 +1,6 @@
 // cspell:ignore Mult Mults
 import type { Config, ZodiacSnapshot } from "./unity_loop.ts";
-import { planLoadout as planAttackLoadout } from "./setup2.ts";
+import { protectedZodiacs } from "./setup2.ts";
 import { Action } from "./lib/action.ts";
 import { States, Planet, UnityZodiac, ZodiacElement, ZodiacRarity, ZodiacStatType } from "./lib/states.ts";
 import { BigNum, UnityDirection, stringify } from "./lib/utils.ts";
@@ -185,13 +185,12 @@ async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnT
     }
   }
 
-  // Keep elemental sets and both setup2 loadouts available for swapping.
+  // Keep elemental sets and setup2's three phase loadouts.
   const reserved = new Set([
-    ...state.queue,
-    ...GOALS.flatMap(goal => planLoadout({ inventory, planets }, goal.element)),
-    ...planAttackLoadout({ inventory, planets }, "build"),
-    ...planAttackLoadout({ inventory, planets }, "score"),
-  ].map(target => target.zodiac));
+    ...[...state.queue, ...GOALS.flatMap(goal => planLoadout({ inventory, planets }, goal.element))]
+      .map(target => target.zodiac),
+    ...protectedZodiacs({ inventory, planets }),
+  ]);
   const expendable = Object.entries(inventory)
     .filter(([_, zodiac]) => !zodiac.IsEmpty && !zodiac.locked && !reserved.has(zodiacKey(zodiac)))
     .sort(([_, a], [__, b]) => a.score.cmp(b.score))[0];
