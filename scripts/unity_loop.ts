@@ -46,6 +46,7 @@ export async function afterResume() {
 export async function afterLoad() {
   console.clear();
   Action.dismiss.loopDetached();
+  Action.eternity.dilationTree.loadout.confirmLoad.loopDetached();
   await loadConfig();
 
   (async () => {
