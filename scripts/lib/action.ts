@@ -514,10 +514,8 @@ export class Action extends Function {
             States.attackRelic(index),
           ]);
 
-          if (relic.totalCost.gt(gold)) {
-            console.log(`Not enough gold to buy relic ${index+1}`);
+          if (relic.totalCost.gt(gold))
             break;
-          }
 
           console.log(`Buying relic ${index+1}`)
           await Action.attack.buyRelic(index);
