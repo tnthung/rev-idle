@@ -22,7 +22,7 @@ const ATTACK_CHECK_INTERVAL_MS = 500;
 const ZODIAC_QUALITY_MIN       = new BigNum(8000);
 const ATTACK_FAST_ETA_CAP_S    = new BigNum(30);
 const ATTACK_SLOW_ETA_CAP_S    = new BigNum(180);
-const RELIC_COST_CAP           = new BigNum(5);
+const RELIC_COST_CAP           = new BigNum(2);
 
 
 type Loadout = { planet: keyof ZodiacSnapshot["planets"]; zodiac: string }[];
@@ -55,7 +55,6 @@ export default { shouldUnite: shouldUniteByZodiacPhase, uniteWith, nextZodiacAct
 let lastAtkLvl = 0;
 let lastAtkChk = 0;
 let lastAtkHp  = BigNum.ZERO;
-let lastGold   = BigNum.ZERO;
 async function shouldUniteByAttackETA(): ReturnType<Exclude<Config["shouldUnite"], undefined>> {
   // only check at most once per 5 seconds
   const now = Date.now();
@@ -90,16 +89,11 @@ async function shouldUniteByAttackETA(): ReturnType<Exclude<Config["shouldUnite"
   console.log(`ETA to finish level ${lastAtkLvl}: ${Math.round(eta.toNumber())}s`);
   const shouldUnite = eta.gte(ATTACK_SLOW_ETA_CAP_S);
 
-  // update lastGold if we should unite
-  if (shouldUnite)
-    lastGold = await States.nextGold();
-
   return shouldUnite;
 }
 
 
 async function shouldUniteByUnityLevel(): ReturnType<Exclude<Config["shouldUnite"], undefined>> {
-  lastGold = await States.nextGold();
   return await States.unityLevel() >= UNITY_LEVEL_CAP;
 }
 
@@ -120,10 +114,8 @@ async function shouldUniteByZodiacPhase(): ReturnType<Exclude<Config["shouldUnit
     return false;
   }
 
-  if (state.phase === "collect") {
-    lastGold = await States.nextGold();
+  if (state.phase === "collect")
     return true;
-  }
 
   const now = Date.now();
   const previous = state.sample;
@@ -387,9 +379,12 @@ function zodiacKey(zodiac: UnityZodiac): string {
 const RELIC_PRIORITY = [13, 19, 20, 8, 15, 16, 17, 2, 12, 18, 6, 7, 0, 14, 11, 10, 9, 5, 4, 3, 1];
 
 async function relicsToBuy(): ReturnType<Exclude<Config["relicsToBuy"], undefined>> {
-  if (lastGold.isZero) return [];
+  const [gold, next, relics] = await Promise.all([
+    States.currentGold(),
+    States.nextGold(),
+    States.attackRelics(),
+  ]);
 
-  const [gold, relics] = await Promise.all([States.currentGold(), States.attackRelics()]);
   const priority = [...RELIC_PRIORITY];
   if (relics[20]?.amount.gte(new BigNum(100))) {
     priority[RELIC_PRIORITY.indexOf(20)] = 16;
@@ -399,7 +394,7 @@ async function relicsToBuy(): ReturnType<Exclude<Config["relicsToBuy"], undefine
   return priority
     .filter(rid => relics[rid]?.unlocked)
     .map(rid => [rid, relics.at(rid)?.totalCost] as const)
-    .filter(([_, total]) => total?.div(lastGold).lte(RELIC_COST_CAP) || total?.lte(gold))
+    .filter(([_, total]) => total?.div(next).lte(RELIC_COST_CAP) || total?.lte(gold))
     .map(([rid, _]) => rid);
 }
 
