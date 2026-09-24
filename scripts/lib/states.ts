@@ -5,7 +5,7 @@ import { BigNum } from "./utils.ts";
 export class States {
   static async unlockedAchievements() {
     // The save uses zero-based IDs; expose the achievement numbers shown in game.
-    return (await rev.state<number[]>("gameData.unlockedAch")).map(id => id + 1);
+    return new Set((await rev.state<number[]>("gameData.unlockedAch")).map(id => id + 1));
   }
 
   static async infinities() {
