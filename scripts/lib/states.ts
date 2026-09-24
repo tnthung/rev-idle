@@ -135,6 +135,10 @@ export class States {
       : null);
   }
 
+  static async attackRevolutionCanBuy(n: number) {
+    return Boolean(await rev.state<boolean>(`gameData.attacks.revolutions.${n}.CanPurchase`));
+  }
+
   static async maxAttackLevelReached() {
     return Number(await rev.state<string | number>("gameData.attacks.maxLevelReached"));
   }

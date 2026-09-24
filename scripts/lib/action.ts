@@ -492,11 +492,14 @@ export class Action extends Function {
     })
     .extend({
       async upgradeRings() {
-        for (let i=1; i<6; i++) {
-          await rev.sleep(2000);
+        i: for (let i=5; i>0; i--) while (true) {
+          if (!(await States.attackRevolutionCanBuy(i-1)))
+            continue i;
+
+          console.log(`Upgrading attack ring ${i}`)
           await Action.attack[`buy${i as 1|2|3|4|5}`]();
-          await rev.sleep(50);
           await Action.attack[`ascend${i as 1|2|3|4|5}`]();
+          await rev.sleep(500);
         }
       },
       async buyRelic(n: number) {
@@ -506,19 +509,26 @@ export class Action extends Function {
           .catch(_ => {});
       },
       async buyRelics(n: number[]) {
-        for (const index of n) {
-          await rev.sleep(2000);
+        i: for (const index of n) {
+          let first = true;
 
-          const [gold, relic] = await Promise.all([
-            States.currentGold(),
-            States.attackRelic(index),
-          ]);
+          while (true) {
+            await rev.sleep(2000);
 
-          if (relic.totalCost.gt(gold))
-            break;
+            const [gold, relic] = await Promise.all([
+              States.currentGold(),
+              States.attackRelic(index),
+            ]);
 
-          console.log(`Buying relic ${index+1}`)
-          await Action.attack.buyRelic(index);
+            if (relic.totalCost.gt(gold)) {
+              if (first) break i;
+              continue i;
+            }
+
+            if (first) console.log(`Buying relic ${index+1}`)
+            await Action.attack.buyRelic(index);
+            first = false;
+          }
         }
       },
     });
