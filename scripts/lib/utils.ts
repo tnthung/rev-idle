@@ -250,9 +250,10 @@ export class BigNum {
 
 
 export function stringify(value: any, space?: number | string): string {
-  return JSON.stringify(value, (key, val) => {
+  return JSON.stringify(value, function replacer(key, val) {
     if (val instanceof BigNum) return val.toString();
     if (val instanceof BigInt) return val.toString();
+    if (val instanceof Set) return [...val];
     return val;
   }, space);
 }
