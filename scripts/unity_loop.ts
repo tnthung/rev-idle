@@ -55,6 +55,14 @@ export async function afterLoad() {
       await rev.sleep(1000);
     }
   })().catch(e => console.error("Error in zodiac maintenance loop:", e));
+
+  (async () => {
+    while (true) {
+      try { await attackMaintenance(); }
+      catch (e) { console.error(e); }
+      await rev.sleep(1000);
+    }
+  })().catch(e => console.error("Error in attack maintenance loop:", e));
 }
 
 
@@ -135,7 +143,6 @@ export default async function main() {
 
     await Action.main.unit[direction]();
     rev.global.unityStart = Date.now();
-    attackMaintenance().catch(console.error);
   }
 
   // reset the game if the config indicates so
