@@ -271,6 +271,15 @@ export class Action extends Function {
         .invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/tab_menu[1]/tab_dilation[5]")
         .subLevelIsolated({
           toggle: new Action().invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/btn_dilation[1]"),
+          upgrade1: new Action().invoke("scene:-498/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/ctn_upgrades[4]/item_dl_upgrade_0[0]/content[0]"),
+          upgrade2: new Action().invoke("scene:-498/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/ctn_upgrades[4]/item_dl_upgrade_1[1]/content[0]"),
+          upgrade3: new Action().invoke("scene:-498/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/ctn_upgrades[4]/item_dl_upgrade_2[2]/content[0]"),
+          upgrade4: new Action().invoke("scene:-498/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/ctn_upgrades[4]/item_dl_upgrade_3[3]/content[0]"),
+          upgrade5: new Action().invoke("scene:-498/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/ctn_upgrades[4]/item_dl_upgrade_4[4]/content[0]"),
+          upgrade6: new Action().invoke("scene:-498/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/ctn_upgrades[4]/item_dl_upgrade_5[5]/content[0]"),
+          upgrade7: new Action().invoke("scene:-498/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/ctn_upgrades[4]/item_dl_upgrade_6[6]/content[0]"),
+          upgrade8: new Action().invoke("scene:-498/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/ctn_upgrades[4]/item_dl_upgrade_7[7]/content[0]"),
+          upgrade9: new Action().invoke("scene:-498/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation[5]/content[0]/ctn_upgrades[4]/item_dl_upgrade_8[8]/content[0]"),
         }),
       dilationTree: new Action()
         .invoke("scene:-148/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/tab_menu[1]/tab_dilation_tree[6]")
@@ -351,6 +360,11 @@ export class Action extends Function {
             .subLevel({
               buy: new Action().invoke(BUY_DT_BUTTON),
             }),
+        })
+        .subLevelIsolated({
+          buyDTP: new Action()
+            .invokeSilent("scene:-498/CANVAS[0]/safe_area[0]/views[1]/eternity[2]/content[0]/panel[1]/views[0]/dilation_tree[6]/content[0]/ctn_buy_dtp[3]/btn_buy[1]")
+            .sleep(100),
         }),
     });
 
