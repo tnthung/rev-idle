@@ -24,4 +24,5 @@
 - [x] `beforeStop` hook: called before the script stops.
 - [x] Click on mask should bring the game to foreground.
 - [x] Support typescript.
-- [ ] Generate state manual when install.
+- [x] Generate state manual when install.
+- [ ] Custom UI injection with script.

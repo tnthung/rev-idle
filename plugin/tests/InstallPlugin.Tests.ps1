@@ -215,7 +215,27 @@ try {
     Assert-Equal $clientHash (Get-FileHash -Algorithm SHA256 -LiteralPath $installedClient).Hash "Install-ClientExe preserves bytes"
     Assert-Equal (Join-Path $gameDir "client.exe") $installedClient "Install-ClientExe installs in the game root"
 
-    Write-Output "14 installer tests passed."
+    $installFixtureRoot = Join-Path $testRoot "install-fixture"
+    $installFixturePlugin = Join-Path $installFixtureRoot "plugin"
+    New-Item -ItemType Directory -Path $installFixturePlugin -Force | Out-Null
+    Copy-Item -LiteralPath $installerPath -Destination (Join-Path $installFixturePlugin "install.ps1")
+    [System.IO.File]::WriteAllText((Join-Path $installFixturePlugin "generate-state-reference.ps1"), @'
+param([string]$GameDir)
+[System.IO.File]::WriteAllText((Join-Path $PSScriptRoot 'generated-state-reference.txt'), $GameDir)
+'@)
+    . (Join-Path $installFixturePlugin "install.ps1")
+    function Get-BepInExState { return "Complete" }
+    function Test-InteropReady { return $true }
+    function Select-TestTargetFramework { return "net8.0" }
+    function Invoke-CheckedProcess {}
+    function Install-PluginDll { return (Join-Path $gameDir "RevIdle.ScoreTelemetry.dll") }
+    function Install-ClientExe { return (Join-Path $gameDir "client.exe") }
+    Invoke-ScoreTelemetryInstall $gameDir
+    $generatedStateReference = Join-Path $installFixturePlugin "generated-state-reference.txt"
+    Assert-Equal $true (Test-Path -LiteralPath $generatedStateReference -PathType Leaf) "installer generates the state reference"
+    Assert-Equal ([System.IO.Path]::GetFullPath($gameDir)) ([System.IO.File]::ReadAllText($generatedStateReference)) "installer passes the resolved game directory to the state generator"
+
+    Write-Output "15 installer tests passed."
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
         Remove-Item -LiteralPath $testRoot -Recurse -Force

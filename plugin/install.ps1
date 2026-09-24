@@ -407,6 +407,8 @@ function Invoke-ScoreTelemetryInstall {
         Initialize-Interop $gameDirectory
     }
 
+    & (Join-Path $PSScriptRoot "generate-state-reference.ps1") -GameDir $gameDirectory
+
     $repositoryRoot = Split-Path -Parent $PSScriptRoot
     $testProject = Join-Path $repositoryRoot "plugin\tests\RevIdle.ScoreTelemetry.Tests.csproj"
     $pluginProject = Join-Path $repositoryRoot "plugin\src\RevolutionIdle.ScoreTelemetry.csproj"
