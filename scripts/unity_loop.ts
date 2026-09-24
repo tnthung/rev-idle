@@ -277,12 +277,12 @@ async function finishEternalChallenge() {
   // going through challenges
   let allComplete = true;
 
-  for (const level of range(0, 10)) {
+  for (const level of range(0, 10)) while (true) {
     // skip challenges that finishes all 5 levels
     const ec = await States.eternalChallenge(level);
-    if (ec.completeDiff >= 5) continue;
+    if (ec.completeDiff >= 5) break;
 
-    console.log(`Starting eternal challenge level ${ec.challengeLevel + 1}, tier ${ec.completeDiff}`);
+    console.log(`Starting eternal challenge level ${ec.challengeLevel + 1}, tier ${ec.completeDiff+1}`);
     allComplete = false;
 
     // make sure the selected EC is exited
@@ -308,7 +308,7 @@ async function finishEternalChallenge() {
     // if timeout, start the next EC
     if ((await States.eternalChallenge(level)).inChallenge) {
       await Action.eternity.challenges.toggle();
-      continue;
+      break;
     }
   }
 
