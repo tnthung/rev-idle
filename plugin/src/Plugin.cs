@@ -123,11 +123,11 @@ public sealed class Plugin : BasePlugin
             if (data is null)
                 throw new InvalidOperationException("State data is unavailable.");
 
-            StatePayloadStatus status = StatePayload.Encode(data, packet.Keys, out byte[] payload);
+            StatePayloadStatus status = StatePayload.Encode(data, packet.Keys, out byte[] payload, out string? failedPath);
             if (status == StatePayloadStatus.InvalidPath)
                 throw new InvalidOperationException("State path is invalid.");
             if (status == StatePayloadStatus.SerializationFailure)
-                throw new InvalidOperationException("State serialization failed.");
+                throw new InvalidOperationException($"State serialization failed for '{failedPath}'.");
 
             using JsonDocument document = JsonDocument.Parse(payload);
             JsonElement value = document.RootElement.Clone();

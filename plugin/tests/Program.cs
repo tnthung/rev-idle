@@ -33,6 +33,7 @@ BridgePacketPayloadsMatchSharedFixture();
 await BridgeStateHandlerPreservesMixedJsonAndSelectedKeys();
 await BridgeStateHandlerReportsMissingData();
 await BridgeStateHandlerReportsInvalidPath();
+await BridgeStateHandlerReportsSerializationFailurePath();
 await BridgeUiHandlersReportCorrelatedErrorsOnPumpThread();
 await BridgeSlotHandlerReturnsDataNullAndErrorsOnPumpThread();
 await BridgeInputHandlersRunOnPumpThread();
@@ -106,7 +107,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("113 tests passed.");
+System.Console.WriteLine("114 tests passed.");
 
 static void ClientProcessConsumesConsoleClearWithoutLoggingIt()
 {
@@ -279,6 +280,25 @@ static async Task BridgeStateHandlerReportsInvalidPath()
             $"{{\"uuid\":\"{uuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Missing\"]}}}}",
             null);
         AssertRemoteError(response, uuid, nameof(BridgeStateHandlerReportsInvalidPath), "State path is invalid.");
+    }
+}
+
+static async Task BridgeStateHandlerReportsSerializationFailurePath()
+{
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    Plugin.RegisterHandlers(server, () => new BridgeSerializationFailureFixture(), () => 0);
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        Guid uuid = Guid.NewGuid();
+        using JsonDocument response = await SendLiteralBridgeRequestAndPump(
+            server,
+            peer,
+            0,
+            $"{{\"uuid\":\"{uuid}\",\"type\":\"StateReq\",\"payload\":{{\"keys\":[\"gameData.Score\",\"gameData.Broken\"]}}}}",
+            null);
+        AssertRemoteError(response, uuid, nameof(BridgeStateHandlerReportsSerializationFailurePath), "State serialization failed for 'gameData.Broken'.");
     }
 }
 
@@ -2336,7 +2356,7 @@ static void StatePayloadSerializesCompleteGraph()
         Values = new[] { 1, 2 }
     };
 
-    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload);
+    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload, out _);
 
     Equal(StatePayloadStatus.Success, status, nameof(StatePayloadSerializesCompleteGraph));
     Equal("{\"gameData\":{\"Boolean\":true,\"Decimal\":12.5,\"Dictionary\":{\"2\":\"two\"},\"Double\":\"-Infinity\",\"Enum\":\"Second\",\"Float\":\"NaN\",\"LargeInteger\":\"9007199254740992\",\"List\":[3,4],\"Nested\":{\"Value\":\"nested\"},\"Null\":null,\"SafeInteger\":9007199254740991,\"Text\":\"value\",\"Values\":[1,2]}}", Encoding.UTF8.GetString(payload), nameof(StatePayloadSerializesCompleteGraph));
@@ -2357,7 +2377,7 @@ static void StatePayloadResolvesSelectedPaths()
     // "IP", "DT", "DTP", "DTPMax" go through ResolveAlias (which expands to a
     // gameData.-prefixed path); the rest are raw paths that must name the
     // gameData root explicitly themselves since there is no implicit root.
-    StatePayloadStatus status = StatePayload.Encode(data, new[] { "IP", "DT", "DTP", "DTPMax", "gameData.rows.1.Value", "gameData.numbers.2", "gameData.names.primary", "gameData.kinds.Second", "IP" }, out byte[] payload);
+    StatePayloadStatus status = StatePayload.Encode(data, new[] { "IP", "DT", "DTP", "DTPMax", "gameData.rows.1.Value", "gameData.numbers.2", "gameData.names.primary", "gameData.kinds.Second", "IP" }, out byte[] payload, out _);
 
     Equal(StatePayloadStatus.Success, status, nameof(StatePayloadResolvesSelectedPaths));
     Equal("{\"IP\":11,\"DT\":{\"Value\":\"tree\"},\"DTP\":5,\"DTPMax\":12,\"gameData.rows.1.Value\":\"one\",\"gameData.numbers.2\":\"number\",\"gameData.names.primary\":\"name\",\"gameData.kinds.Second\":\"enum\"}", Encoding.UTF8.GetString(payload), nameof(StatePayloadResolvesSelectedPaths));
@@ -2371,19 +2391,19 @@ static void StatePayloadDistinguishesInvalidPathsAndGetterFailures()
         numbers = new Dictionary<int, string> { [2] = "number" }
     };
 
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.unknown" }, out byte[] unknownPayload), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.unknown" }, out byte[] unknownPayload, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
     Equal(0, unknownPayload.Length, nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.rows.1.Value" }, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.numbers.3" }, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "" }, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.rows.1.Value" }, out _, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.numbers.3" }, out _, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "" }, out _, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
 
     // A throwing getter serializes as null for that one property rather than
     // failing the whole request: some real IL2CPP getters (GameData.DateOFFull,
     // a Nullable<DateTime> that was never set) always throw, and one such
     // property must not take down every other value in the same graph.
-    Equal(StatePayloadStatus.Success, StatePayload.Encode(new GetterFailureFixture(), new[] { "gameData" }, out byte[] canonicalPayload), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(new GetterFailureFixture(), new[] { "gameData" }, out byte[] canonicalPayload, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
     Equal("{\"gameData\":{\"Value\":null}}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
-    Equal(StatePayloadStatus.Success, StatePayload.Encode(new GetterFailureFixture(), new[] { "gameData.Value" }, out byte[] selectedPayload), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(new GetterFailureFixture(), new[] { "gameData.Value" }, out byte[] selectedPayload, out _), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
     Equal("{\"gameData.Value\":null}", Encoding.UTF8.GetString(selectedPayload), nameof(StatePayloadDistinguishesInvalidPathsAndGetterFailures));
 }
 
@@ -2396,7 +2416,7 @@ static void StatePayloadPreservesCollectionIndexesAcrossCycles()
     data.Items = new List<CycleNodeFixture> { shared, item, item };
     data.Second = shared;
 
-    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload);
+    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload, out _);
 
     Equal(StatePayloadStatus.Success, status, nameof(StatePayloadPreservesCollectionIndexesAcrossCycles));
     Equal("{\"gameData\":{\"First\":{\"Value\":\"shared\"},\"Items\":[null,{\"Value\":\"item\"},null]}}", Encoding.UTF8.GetString(payload), nameof(StatePayloadPreservesCollectionIndexesAcrossCycles));
@@ -2434,7 +2454,7 @@ static void StatePayloadSerializesGameSpecificScalars()
         Obscured = CreateObscuredInt()
     };
 
-    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload);
+    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload, out _);
 
     Equal(StatePayloadStatus.Success, status, nameof(StatePayloadSerializesGameSpecificScalars));
     Equal("{\"gameData\":{\"Big\":\"2.5e42\",\"Date\":\"2026-09-03T01:02:03.0000000Z\",\"Obscured\":17}}", Encoding.UTF8.GetString(payload), nameof(StatePayloadSerializesGameSpecificScalars));
@@ -2445,7 +2465,7 @@ static void StatePayloadKeepsSelectedKeysForSharedValues()
     var shared = new SerializerNestedFixture { Value = "shared" };
     var data = new SharedPathFixture { First = shared, Second = shared };
 
-    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData.First", "gameData.Second" }, out byte[] payload);
+    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData.First", "gameData.Second" }, out byte[] payload, out _);
 
     Equal(StatePayloadStatus.Success, status, nameof(StatePayloadKeepsSelectedKeysForSharedValues));
     Equal("{\"gameData.First\":{\"Value\":\"shared\"},\"gameData.Second\":{\"Value\":\"shared\"}}", Encoding.UTF8.GetString(payload), nameof(StatePayloadKeepsSelectedKeysForSharedValues));
@@ -2499,7 +2519,7 @@ static void StatePayloadSerializesIl2CppDatesAndNullables()
     (object date, object hasValue, object noValue) = CreateValues();
     var data = new Il2CppScalarFixture { Date = date, HasValue = hasValue, NoValue = noValue };
 
-    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload);
+    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload, out _);
 
     Equal(StatePayloadStatus.Success, status, nameof(StatePayloadSerializesIl2CppDatesAndNullables));
     Equal("{\"gameData\":{\"Date\":\"2026-09-03T01:02:03.0000000Z\",\"HasValue\":17,\"NoValue\":null}}", Encoding.UTF8.GetString(payload), nameof(StatePayloadSerializesIl2CppDatesAndNullables));
@@ -2510,13 +2530,13 @@ static void StatePayloadRejectsUnsupportedIl2CppObjectWrappers()
     object wrapper = Activator.CreateInstance(AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("Il2Cppmscorlib"), AssemblyBuilderAccess.Run).DefineDynamicModule("main").DefineType("Il2CppSystem.Object", TypeAttributes.Public | TypeAttributes.Class).CreateType())!;
     var data = new Il2CppObjectFixture { Value = wrapper };
 
-    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
+    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload, out _), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
     Equal(0, canonicalPayload.Length, nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
-    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, new[] { "gameData.Value" }, out byte[] selectedPayload), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
+    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, new[] { "gameData.Value" }, out byte[] selectedPayload, out _), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
     Equal(0, selectedPayload.Length, nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
 
     data = new Il2CppObjectFixture { Value = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Il2CppSystem.Object)) };
-    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, new[] { "gameData" }, out _), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
+    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, new[] { "gameData" }, out _, out _), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
 }
 
 static void StatePayloadUsesIl2CppCollectionAccessors()
@@ -2529,7 +2549,7 @@ static void StatePayloadUsesIl2CppCollectionAccessors()
         List = Create("Il2Cppmscorlib", "Il2CppSystem.Collections.Generic.List`1", typeof(ReflectedListFixture))
     };
 
-    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload);
+    StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload, out _);
 
     Equal(StatePayloadStatus.Success, status, nameof(StatePayloadUsesIl2CppCollectionAccessors));
     Equal("{\"gameData\":{\"Dictionary\":{\"2\":\"two\"},\"List\":[3,4]}}", Encoding.UTF8.GetString(payload), nameof(StatePayloadUsesIl2CppCollectionAccessors));
@@ -2539,9 +2559,9 @@ static void StatePayloadIncludesInheritedGameplayProperties()
 {
     var data = new InheritedFixtureRoot { Item = new InheritedFixtureDerived() };
 
-    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload, out _), nameof(StatePayloadIncludesInheritedGameplayProperties));
     Equal("{\"gameData\":{\"Item\":{\"Base\":\"base\",\"Derived\":\"derived\",\"Hidden\":\"derived hidden\"}}}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
-    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.Item.Base", "gameData.Item.Hidden" }, out byte[] selectedPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.Item.Base", "gameData.Item.Hidden" }, out byte[] selectedPayload, out _), nameof(StatePayloadIncludesInheritedGameplayProperties));
     Equal("{\"gameData.Item.Base\":\"base\",\"gameData.Item.Hidden\":\"derived hidden\"}", Encoding.UTF8.GetString(selectedPayload), nameof(StatePayloadIncludesInheritedGameplayProperties));
 }
 
@@ -2549,15 +2569,15 @@ static void StatePayloadSerializesUnityColorAsChannels()
 {
     var data = new ColorFixture { Color = default };
 
-    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload), nameof(StatePayloadSerializesUnityColorAsChannels));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload, out _), nameof(StatePayloadSerializesUnityColorAsChannels));
     Equal("{\"gameData\":{\"Color\":{\"r\":0,\"g\":0,\"b\":0,\"a\":0}}}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadSerializesUnityColorAsChannels));
-    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.Color" }, out byte[] selectedPayload), nameof(StatePayloadSerializesUnityColorAsChannels));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.Color" }, out byte[] selectedPayload, out _), nameof(StatePayloadSerializesUnityColorAsChannels));
     Equal("{\"gameData.Color\":{\"r\":0,\"g\":0,\"b\":0,\"a\":0}}", Encoding.UTF8.GetString(selectedPayload), nameof(StatePayloadSerializesUnityColorAsChannels));
 }
 
 static void StatePayloadRejectsRunawayValueTraversal()
 {
-    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(new SelfReturningValueFixture(), new[] { "gameData" }, out byte[] payload), nameof(StatePayloadRejectsRunawayValueTraversal));
+    Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(new SelfReturningValueFixture(), new[] { "gameData" }, out byte[] payload, out _), nameof(StatePayloadRejectsRunawayValueTraversal));
     Equal(0, payload.Length, nameof(StatePayloadRejectsRunawayValueTraversal));
 }
 
@@ -2565,10 +2585,10 @@ static void StatePayloadRejectsImplementationPropertyPaths()
 {
     var data = new TerminalPathFixture { Color = default, playerId = "player", rows = new List<int> { 1 } };
 
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.playerId.Length" }, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.rows.Count" }, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.rows.Capacity" }, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Color.gamma" }, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.playerId.Length" }, out _, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.rows.Count" }, out _, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.rows.Capacity" }, out _, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Color.gamma" }, out _, out _), nameof(StatePayloadRejectsImplementationPropertyPaths));
 }
 
 static void StatePayloadExcludesIl2CppDelegatesAndUnityEvents()
@@ -2598,10 +2618,10 @@ static void StatePayloadExcludesIl2CppDelegatesAndUnityEvents()
     itemType.DefineProperty("Value", PropertyAttributes.None, typeof(int), null).SetGetMethod(value);
     var data = new FilteredMemberRoot { Item = Activator.CreateInstance(itemType.CreateType())! };
 
-    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload, out _), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
     Equal("{\"gameData\":{\"Item\":{\"Value\":7}}}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Item.Event" }, out _), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Item.Provider" }, out _), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Item.Event" }, out _, out _), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Item.Provider" }, out _, out _), nameof(StatePayloadExcludesIl2CppDelegatesAndUnityEvents));
 }
 
 static void StatePayloadExcludesRuntimeTypesAtEveryBoundary()
@@ -2610,12 +2630,12 @@ static void StatePayloadExcludesRuntimeTypesAtEveryBoundary()
     object unityObject = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(UnityEngine.Object));
     var data = new ExcludedRuntimeFixture { Selected = callback, Unity = unityObject, Values = new[] { callback, unityObject } };
 
-    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
     Equal("{\"gameData\":{\"Values\":[null,null]}}", Encoding.UTF8.GetString(canonicalPayload), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Selected" }, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Unity" }, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Values.0" }, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
-    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Values.1" }, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Selected" }, out _, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Unity" }, out _, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Values.0" }, out _, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
+    Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Values.1" }, out _, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
 }
 
 static async Task<(TcpClient Client, WebSocket Socket)> ConnectRawClient(WsConnection server)
@@ -2772,6 +2792,12 @@ sealed class BridgeStateFixture
     public BridgeNestedStateFixture Nested { get; init; } = new();
     public object[] Items { get; init; } = new object[] { 1, "two", false };
     public string Text { get; init; } = "small";
+}
+
+sealed class BridgeSerializationFailureFixture
+{
+    public SelfReturningValueFixture Broken { get; init; }
+    public string Score { get; init; } = "1e3";
 }
 
 sealed class BridgeNestedStateFixture

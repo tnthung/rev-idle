@@ -20,10 +20,11 @@ internal static class StatePayload
     private const int MaxTraversalDepth = 64;
     private static readonly ConcurrentDictionary<Type, PropertyInfo[]> Properties = new();
 
-    public static bool TryEncode(GameData data, IReadOnlyList<string> keys, out byte[] payload) => Encode(data, keys, out payload) == StatePayloadStatus.Success;
+    public static bool TryEncode(GameData data, IReadOnlyList<string> keys, out byte[] payload) => Encode(data, keys, out payload, out _) == StatePayloadStatus.Success;
 
-    internal static StatePayloadStatus Encode(object data, IReadOnlyList<string> paths, out byte[] payload)
+    internal static StatePayloadStatus Encode(object data, IReadOnlyList<string> paths, out byte[] payload, out string? failedPath)
     {
+        failedPath = null;
         // There is no implicit or default root: every path must name one of
         // ExtraRoots' keys (GameData included) as its first segment, so a
         // keyless request has no root to resolve against and is rejected
@@ -39,6 +40,7 @@ internal static class StatePayload
             HashSet<string> seenPaths = new(StringComparer.Ordinal);
             foreach (string path in paths)
             {
+                failedPath = path;
                 if (!seenPaths.Add(path))
                     continue;
                 if (!TryResolve(data, path, out object? value))
@@ -55,12 +57,14 @@ internal static class StatePayload
                 writer.WriteStartObject();
                 foreach ((string path, object? value) in values)
                 {
+                    failedPath = path;
                     writer.WritePropertyName(path);
                     WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0);
                 }
                 writer.WriteEndObject();
             }
             payload = stream.ToArray();
+            failedPath = null;
             return StatePayloadStatus.Success;
         }
         catch
