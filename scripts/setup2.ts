@@ -278,7 +278,7 @@ async function nextZodiacAction({ inventory, planets }: ZodiacSnapshot): ReturnT
       }
 
     // Clear the state
-    console.log(`Queued zodiac for ${target.planet} is unavailable; clearing the queue.`);
+    console.error(`Queued zodiac for ${target.planet} is unavailable; clearing the queue.`);
     state.queue.length = 0;
     rev.global.setup2 = state;
     return null;
