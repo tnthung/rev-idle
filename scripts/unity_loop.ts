@@ -237,8 +237,14 @@ async function zodiacMaintenance() {
 
 
 async function attackMaintenance() {
-  await Action.attack.upgradeRings();
-  await Action.attack.buyRelics(await config.relicsToBuy?.() ?? []);
+  const relicsToBuy = (await config.relicsToBuy?.() ?? [])[Symbol.iterator]();
+
+  while (true) {
+    await Action.attack.upgradeRings();
+    const nextRelic = relicsToBuy.next();
+    if (nextRelic.done) break;
+    await Action.attack.buyRelics([nextRelic.value]);
+  }
 }
 
 

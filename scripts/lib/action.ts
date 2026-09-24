@@ -481,7 +481,7 @@ export class Action extends Function {
 
   static attack = new Action()
     .invoke("scene:-454/CANVAS[0]/safe_area[0]/sidebar[2]/landscape[0]/tab_landscape_attacks[5]")
-    .subLevelIsolated({
+    .subLevel({
       buy1: new Action().invokeSilent(`scene:-284/CANVAS[0]/safe_area[0]/views[1]/attacks[4]/content[0]/panel[0]/buyables[2]/buy_attacks_item_0[0]/content[0]/btn_buy[1]`),
       buy2: new Action().invokeSilent(`scene:-284/CANVAS[0]/safe_area[0]/views[1]/attacks[4]/content[0]/panel[0]/buyables[2]/buy_attacks_item_1[1]/content[0]/btn_buy[1]`),
       buy3: new Action().invokeSilent(`scene:-284/CANVAS[0]/safe_area[0]/views[1]/attacks[4]/content[0]/panel[0]/buyables[2]/buy_attacks_item_2[2]/content[0]/btn_buy[1]`),
@@ -528,7 +528,7 @@ export class Action extends Function {
               continue i;
             }
 
-            if (first) console.log(`Buying relic ${index+1}`)
+            console.log(`Buying relic ${index+1}`)
             await Action.attack.buyRelic(index);
             first = false;
           }
