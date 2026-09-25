@@ -214,8 +214,13 @@ pub(super) fn create_rev<'js>(
     parse: Function<'js>,
     freeze: Function<'js>,
     stop_request: Rc<Cell<bool>>,
+    screen_ownership: Rc<super::ownership::ScreenOwnershipState>,
 ) -> rquickjs::Result<Object<'js>> {
     let rev = Object::new(ctx.clone())?;
+    rev.set(
+        "screenOwnership",
+        Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>| screen_ownership.clone().acquire(ctx)))?,
+    )?;
     rev.set(
         "read_file",
         Function::new(ctx.clone(), |ctx: Ctx<'js>, path: String| {

@@ -132,6 +132,155 @@ fn recording_controls() -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screen_ownership_using_serializes_waiters_and_releases_on_exit() {
+    let session = ScriptSession::new_with_connection(
+        r#"
+            export default async function() {
+                const order: number[] = [];
+                async function work(id: number) {
+                    using so = await rev.screenOwnership();
+                    order.push(id);
+                    await rev.sleep(1);
+                    order.push(-id);
+                    if (id === 2) throw new Error("expected");
+                }
+                await Promise.all([work(1), work(2).catch(() => {}), work(3)]);
+                if (order.join() !== "1,-1,2,-2,3,-3") throw new Error(order.join());
+                using so = await rev.screenOwnership();
+                so.release();
+                so.release();
+                using next = await rev.screenOwnership();
+            }
+        "#,
+        "screen-ownership.ts",
+        crate::bridge::WsConnection::disconnected_for_test(),
+    ).await.unwrap();
+    let (controls, _) = recording_controls();
+    tokio::time::timeout(Duration::from_secs(2), session.invoke((), controls)).await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screen_ownership_drop_releases_an_unreferenced_token() {
+    let session = ScriptSession::new(r#"
+        export default async function() {
+            await (async () => { const so = await rev.screenOwnership(); })();
+            using next = await rev.screenOwnership();
+        }
+    "#).await.unwrap();
+    let (controls, _) = recording_controls();
+    tokio::time::timeout(Duration::from_secs(2), session.invoke((), controls)).await.unwrap().unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screen_ownership_using_survives_a_suspended_invocation() {
+    static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+    let lock_state = LockState { enabled: &LOCK_ENABLED };
+    let (state_updates, _) = watch::channel(StateUpdate::new(true, true, false, false, false));
+    let session = ScriptSession::new(r#"
+        export default async function() {
+            using so = await rev.screenOwnership();
+            rev.click(1, 1);
+            await rev.sleep(30);
+            rev.click(3, 3);
+        }
+        export async function afterResume() {
+            using so = await rev.screenOwnership();
+            rev.click(2, 2);
+        }
+    "#).await.unwrap();
+    session.screen_ownership.attach(lock_state, state_updates);
+    let (controls, events) = recording_controls();
+    {
+        let invocation = session.invoke((), controls.clone());
+        tokio::pin!(invocation);
+        tokio::select! {
+            biased;
+            result = &mut invocation => panic!("invocation finished before suspension: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+        assert_eq!(*events.borrow(), vec![HostEvent::Click(1, 1, Button::Left)]);
+    }
+    session.screen_ownership.set_paused(true);
+    assert!(!lock_state.is_enabled());
+    session.screen_ownership.set_paused(false);
+    assert!(lock_state.is_enabled());
+    tokio::time::timeout(Duration::from_secs(2), session.run_after_resume(controls)).await.unwrap().unwrap();
+    assert_eq!(*events.borrow(), vec![
+        HostEvent::Click(1, 1, Button::Left),
+        HostEvent::Click(3, 3, Button::Left),
+        HostEvent::Click(2, 2, Button::Left),
+    ]);
+    assert!(!lock_state.is_enabled());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screen_ownership_tracks_pause_resume_and_stop_during_an_invocation() {
+    static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+    let lock_state = LockState { enabled: &LOCK_ENABLED };
+    let path = std::env::temp_dir().join(format!("rev-idle-screen-ownership-{}.js", std::process::id()));
+    std::fs::write(&path, r#"
+        let owner;
+        export default async function() {
+            owner ??= await rev.screenOwnership();
+            await rev.sleep(5000);
+        }
+        export async function beforeStop() {
+            let rejected = false;
+            try { await rev.screenOwnership(); } catch (_) { rejected = true; }
+            if (!rejected) throw new Error("stopped session granted ownership");
+            rev.click(9, 9);
+        }
+    "#).unwrap();
+    let (command_tx, command_rx) = mpsc::channel(8);
+    let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (state_tx, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    let (controls, events) = recording_controls();
+    let pause_gate = controls.actions_paused.clone();
+    tokio::task::LocalSet::new().run_until(async {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx, state_tx, pause_rx, Some(path.clone()), controls, lock_state, Duration::from_millis(5),
+        ));
+        for (phase, locked, command) in [
+            (ScriptPhase::Running, true, Some(ScriptCommand::Pause)),
+            (ScriptPhase::Paused, false, Some(ScriptCommand::Resume)),
+            (ScriptPhase::Running, true, None),
+        ] {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if state_rx.borrow().phase == phase && state_rx.borrow().locked == locked { break; }
+                    state_rx.changed().await.unwrap();
+                }
+            }).await.unwrap();
+            assert_eq!(lock_state.is_enabled(), locked);
+            if let Some(command) = command { command_tx.send(command).await.unwrap(); }
+        }
+        for paused in [true, false] {
+            pause_tx.send_replace(pause_gate.set_paused(paused));
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if state_rx.borrow().phase == if paused { ScriptPhase::Paused } else { ScriptPhase::Running }
+                        && state_rx.borrow().locked == !paused { break; }
+                    state_rx.changed().await.unwrap();
+                }
+            }).await.unwrap();
+            assert_eq!(lock_state.is_enabled(), !paused);
+        }
+        command_tx.send(ScriptCommand::Stop).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if state_rx.borrow().phase == ScriptPhase::Stopped && !state_rx.borrow().locked { break; }
+                state_rx.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        assert!(!lock_state.is_enabled());
+        assert_eq!(*events.borrow(), vec![HostEvent::Click(9, 9, Button::Left)]);
+        command_tx.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), runner).await.unwrap().unwrap().unwrap();
+    }).await;
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rev_file_io_reads_missing_files_and_overwrites_text() {
     let path = std::env::temp_dir().join(format!("rev_file_io_{}.txt", std::process::id()));
     let session = ScriptSession::new(&format!(r#"export default (() => {{

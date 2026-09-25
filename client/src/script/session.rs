@@ -11,11 +11,13 @@ use rquickjs::{
     AsyncContext,
     AsyncRuntime,
     CaughtError,
+    Class,
     Error,
     Function,
     FromJs,
     Object,
     Persistent,
+    Symbol,
     Value,
 };
 use std::{
@@ -91,6 +93,13 @@ pub(super) struct ScriptSession {
     context: AsyncContext,
     _runtime: AsyncRuntime,
     connection: WsConnection,
+    pub(super) screen_ownership: Rc<super::ownership::ScreenOwnershipState>,
+}
+
+impl Drop for ScriptSession {
+    fn drop(&mut self) {
+        self.screen_ownership.close();
+    }
 }
 
 impl ScriptSession {
@@ -143,6 +152,11 @@ impl ScriptSession {
 
                     let parse: Function = ctx.eval("JSON.parse")?;
                     let freeze: Function = ctx.eval("Object.freeze")?;
+                    let ownership_prototype = Class::<super::ownership::ScreenOwnership>::prototype(&ctx)?.unwrap();
+                    ownership_prototype.set(
+                        ctx.eval::<Symbol, _>("Symbol.dispose")?,
+                        ownership_prototype.get::<_, Function>("release")?,
+                    )?;
 
                     let (module, promise) = modules.load(&ctx, &name, None)?.eval()?;
                     promise.into_future::<()>().await?;
@@ -194,6 +208,7 @@ impl ScriptSession {
             context,
             _runtime: runtime,
             connection,
+            screen_ownership: Rc::default(),
         })
     }
 
@@ -222,6 +237,7 @@ impl ScriptSession {
                         parse,
                         freeze,
                         Rc::new(Cell::new(false)),
+                        self.screen_ownership.clone(),
                     )?;
                     ctx.globals().set("rev", rev)?;
                     let hook: Function = hook.restore(&ctx)?;
@@ -249,6 +265,7 @@ impl ScriptSession {
     }
 
     pub(super) async fn run_before_stop(&self, controls: HostControls) -> Result<(), String> {
+        self.screen_ownership.close();
         self.run_hook(&self.before_stop, controls).await
     }
 
@@ -290,6 +307,7 @@ impl ScriptSession {
                         parse.clone(),
                         freeze.clone(),
                         stop_request,
+                        self.screen_ownership.clone(),
                     )?;
                     ctx.globals().set("rev", rev)?;
                     let result: MaybePromise = script.call(())?;

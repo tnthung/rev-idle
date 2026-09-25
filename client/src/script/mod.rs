@@ -2,6 +2,7 @@ mod loader;
 mod history;
 mod bindings;
 mod session;
+mod ownership;
 mod lifecycle;
 
 #[cfg(test)]

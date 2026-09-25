@@ -125,6 +125,7 @@ A pause can also cancel an in-flight invocation. Module state remains loaded and
 | `rev.drag(x1: number, y1: number, x2: number, y2: number)` | `void` | Sends a background drag. |
 | `rev.press(key: string)` | `void` | Sends one supported key to the game. Input is case-insensitive. |
 | `rev.resize(width: number, height: number)` | `void` | Sets the game client-area dimensions. |
+| `rev.screenOwnership()` | `Promise<ScreenOwnership>` | Waits for and acquires this script session's cooperative screen-input ownership. |
 | `rev.read_clipboard()` | `string` | Reads Windows Unicode text. |
 | `rev.write_clipboard(text: string)` | `void` | Replaces Windows clipboard text. |
 | `rev.read_file(path: string)` | `string \| null` | Synchronously reads UTF-8 text; returns `null` only when missing. |
@@ -175,6 +176,22 @@ Coordinates are signed client-area pixels: `(0, 0)` is the top left. All coordin
 `invoke` rejects an empty path and asks the plugin to run a button's click handler or a checkbox's pointer-click handler. Checkboxes must be active and interactable; open the Automation tab before invoking its checkboxes. Capture recognizes checkbox paths and copies them to the clipboard. `transfer` rejects empty paths and asks the plugin to execute the source drag and destination drop handlers. Successful dispatch does not guarantee the game accepted the resulting action; query state when confirmation matters.
 
 `slot` accepts the same exact hierarchy paths as `transfer`. It returns the slot's item data using the state serializer, or `null` when empty. Empty, missing, or unsupported paths reject. Slots must already be instantiated and initialized; inactive slots can be read. Like `state`, slot reads remain available while actions are paused. Narrow the `unknown` result to the item type expected by your script.
+
+### Screen ownership
+
+`rev.screenOwnership()` waits in FIFO order for this session's cooperative, non-reentrant screen mutex and resolves to a `ScreenOwnership` token. Use the token with JavaScript's explicit resource management so scope cleanup is automatic:
+
+```typescript
+import { Action } from "./lib/action.ts";
+
+export default async function() {
+  using so = await rev.screenOwnership();
+  await Action.main();
+  await Action.infinity();
+}
+```
+
+While an ownership token is alive and unreleased, and the script is active rather than paused, lock mode is forced for that session. Existing `rev` input functions are unchanged; a workflow must opt in, and nested helpers should not reacquire ownership. `release()` is idempotent, and `Symbol.dispose` performs the same release. Native Rust drop or garbage collection can release a forgotten token, but the timing is not guaranteed. Pausing temporarily unlocks player input while retaining the reservation; resuming re-locks it when the session still owns the token. Releasing a token preserves any existing manual lock. Stop or reload invalidates ownership and cancels waiters. `rev.stop()` still requests termination after the current invocation.
 
 ### Files, shell, and clipboard
 

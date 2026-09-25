@@ -206,6 +206,7 @@ pub(super) async fn run_with_controls_and_lifecycle(
     let mut session = match current_path.clone() {
         Some(path) => match load_path(&path, connection.clone()).await {
             Ok((session, absolute_path)) => {
+                session.screen_ownership.attach(lock_state, state_updates.clone());
                 connection_events = Some(connection.connection_events());
                 connected = *connection_generation.borrow() != 0;
                 if let Err(error) = session.run_after_load(controls.clone()).await {
@@ -245,6 +246,9 @@ pub(super) async fn run_with_controls_and_lifecycle(
         session.is_some(),
         &mut paused,
     );
+    if let Some(active) = session.as_ref() {
+        active.screen_ownership.set_paused(paused);
+    }
     let mut hotkey_channel_open = true;
     // A non-stop command pulled off `commands` while an invocation was in
     // flight (see below) can't be pushed back onto the mpsc channel, so it
@@ -452,6 +456,7 @@ pub(super) async fn run_with_controls_and_lifecycle(
                     if let Some(path) = current_path.clone() {
                         match load_path(&path, connection.clone()).await {
                             Ok((loaded, absolute_path)) => {
+                                loaded.screen_ownership.attach(lock_state, state_updates.clone());
                                 connection_events = Some(connection.connection_events());
                                 connected = *connection_generation.borrow() != 0;
                                 if let Err(error) = loaded.run_after_load(controls.clone()).await {
@@ -469,11 +474,11 @@ pub(super) async fn run_with_controls_and_lifecycle(
                                 {
                                     history::save_history(path, &script_history);
                                 }
+                                if lock_after_load {
+                                    loaded.screen_ownership.set_manual_lock();
+                                }
                                 session = Some(loaded);
                                 script_running.store(true, Ordering::Release);
-                                if lock_after_load {
-                                    lock_state.set_enabled(true);
-                                }
                                 println!("running {}", absolute_path.display());
                             }
                             Err(error) => {
@@ -515,6 +520,7 @@ pub(super) async fn run_with_controls_and_lifecycle(
                     if let Some(path) = current_path.clone() {
                         match load_path(&path, connection.clone()).await {
                             Ok((loaded, absolute_path)) => {
+                                loaded.screen_ownership.attach(lock_state, state_updates.clone());
                                 connection_events = Some(connection.connection_events());
                                 connected = *connection_generation.borrow() != 0;
                                 if let Err(error) = loaded.run_after_load(controls.clone()).await {
@@ -532,11 +538,11 @@ pub(super) async fn run_with_controls_and_lifecycle(
                                 {
                                     history::save_history(path, &script_history);
                                 }
+                                if lock_after_load {
+                                    loaded.screen_ownership.set_manual_lock();
+                                }
                                 session = Some(loaded);
                                 script_running.store(true, Ordering::Release);
-                                if lock_after_load {
-                                    lock_state.set_enabled(true);
-                                }
                                 println!("reloaded {}", absolute_path.display());
                             }
                             Err(error) => {
@@ -564,6 +570,9 @@ pub(super) async fn run_with_controls_and_lifecycle(
                     }
                 }
                 ScriptCommand::Pause => {
+                    if let Some(active) = session.as_ref() {
+                        active.screen_ownership.set_paused(true);
+                    }
                     lock_state.set_enabled(false);
                     if session.is_none() {
                         controls.actions_paused.set_paused(false);
@@ -590,8 +599,11 @@ pub(super) async fn run_with_controls_and_lifecycle(
                         println!("script is stopped; use reload or load");
                     } else if paused {
                         capture_state.set_enabled(false);
-                        if lock_after_resume {
-                            lock_state.set_enabled(true);
+                        if let Some(active) = session.as_ref() {
+                            if lock_after_resume {
+                                active.screen_ownership.set_manual_lock();
+                            }
+                            active.screen_ownership.set_paused(false);
                         }
                         controls.actions_paused.set_paused(false);
                         paused = false;
@@ -602,10 +614,13 @@ pub(super) async fn run_with_controls_and_lifecycle(
                             eprintln!("afterResume hook failed: {error}");
                         }
                     } else {
-                        controls.actions_paused.set_paused(false);
-                        if lock_after_resume {
-                            lock_state.set_enabled(true);
+                        if let Some(active) = session.as_ref() {
+                            if lock_after_resume {
+                                active.screen_ownership.set_manual_lock();
+                            }
+                            active.screen_ownership.set_paused(false);
                         }
+                        controls.actions_paused.set_paused(false);
                         println!("script is already running");
                     }
                 }
@@ -652,7 +667,11 @@ pub(super) async fn run_with_controls_and_lifecycle(
                     capture_state.set_enabled(false);
                 }
                 ScriptCommand::Lock => {
-                    lock_state.set_enabled(true);
+                    if let Some(active) = session.as_ref() {
+                        active.screen_ownership.set_manual_lock();
+                    } else {
+                        lock_state.set_enabled(true);
+                    }
                 }
                 ScriptCommand::Exit => {
                     drop(connection_events.take());
@@ -971,7 +990,9 @@ async fn apply_hotkey_update_and_report(
     ) {
         return;
     }
-    if *lifecycle_paused {
+    if let Some(active) = session {
+        active.screen_ownership.set_paused(*lifecycle_paused);
+    } else if *lifecycle_paused {
         lock_state.set_enabled(false);
     }
 
