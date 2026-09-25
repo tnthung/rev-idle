@@ -4,3 +4,4 @@ client/target/
 plugin/**/bin/
 plugin/**/obj/
 plugin/.vs/
+scripts/
