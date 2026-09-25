@@ -19,11 +19,12 @@ export class DilationTree {
 
   static async current() {
     const current = await rev.state<{
+      center: { level: number },
       top: { level: number }[],
       mid: { level: number }[],
-      bot: { level: number, prev: { level: number } }[],
+      bot: { level: number }[],
     }>("gameData.eternity.dilationTree");
-    return new DilationTree().ctr(current.bot[0].prev.level)
+    return new DilationTree().ctr(current.center.level)
       .top(current.top[0].level, current.top[1].level, current.top[2].level, current.top[3].level)
       .mid(current.mid[0].level, current.mid[1].level, current.mid[2].level, current.mid[3].level)
       .bot(current.bot[0].level, current.bot[1].level, current.bot[2].level, current.bot[3].level);

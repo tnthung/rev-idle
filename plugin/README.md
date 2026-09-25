@@ -109,7 +109,7 @@ const ep = await rev.state("EP"); // "0e0", not { EP: "0e0" }
 
 Each call fetches fresh values on demand over the WebSocket bridge. The returned object is frozen. Bridge or response errors reject the promise.
 
-The complete nested state is documented in the generated [state path reference](STATE_KEYS.md). It includes every reachable gameplay property, collection element/value types, and all compatibility aliases. For finding which path(s) reach a given type, open [STATE_GRAPH.html](STATE_GRAPH.html) directly in a browser: search a type, field name, or alias to see every route from `GameData` that reaches it. Regenerate both after an interop assembly change:
+Expected returned fields are documented in the generated [state field reference](STATE_KEYS.md), a best-effort static model that omits likely ancestor/back-references and retains nested children, collection types, and compatibility aliases. Open [STATE_GRAPH.html](STATE_GRAPH.html) directly in a browser to search fields and paths in that model. Regenerate both after an interop assembly change:
 
 ```powershell
 .\plugin\generate-state-reference.ps1

@@ -1,13 +1,31 @@
-# Complete state path reference
+# Returned state field reference
 
 Generated deterministically from `BepInEx/interop/Assembly-CSharp.dll` by `generate-state-reference.ps1`.
-Reachable gameplay types: **140**. Properties: **1596**.
+Reachable gameplay types: **140**. Properties: **1559**.
 
 ## Path grammar and JSON behavior
 
 There is no implicit or default root. Every path is case-sensitive public property names separated by `.`, and the first segment must always name one of the root keys below -- `gameData` included, the same as any `*Controller` root. Numeric segments index arrays/lists; dictionary segments resolve string, integer, or enum keys. Collections are documented below each property. A keyless request is rejected; selected requests return a flat object keyed by the requested path.
 
 JSON follows the serializer policy: BigDouble and large integers are strings; safe integers, finite floating-point values, booleans, strings, enums, dates, arrays/lists, dictionaries, and gameplay objects use their native JSON forms. Non-finite floating-point values are `"NaN"`, `"Infinity"`, or `"-Infinity"`; repeated collection objects serialize as `null` to preserve indexes.
+
+## Nested object references
+
+The tables and graph are a best-effort static model of returned fields, including scalar values, collections, and nested objects. For each gameplay type, the generator follows its first shortest route from `gameData` and omits plain object fields whose types are already exposed by earlier layers. Collections remain fields; their element types seed the next layer to hide likely sibling/back-references. Enum fields remain scalar values. Controller roots keep their directly exposed fields.
+
+The runtime serializer uses actual object identity (native pointers for IL2CPP), not types. It omits references to earlier path ancestors or their immediate members, discovering all immediate children before expanding any child. The static model can hide distinct objects of the same type or retain references that share an instance. Different request paths, nulls, and repeated references can also change the returned shape; this is not a live snapshot or a guarantee for every instance.
+
+Discovering or filtering a reference does not mark it as serialized, so a deeper back-reference cannot consume a direct member that appears later alphabetically. Filtered object properties are omitted; filtered array/list entries and dictionary values become `null` to preserve indexes and keys. Same-layer repeated references retain first-occurrence serialization. An explicitly selected value is always eligible for serialization, but its children still follow these rules.
+
+| Request | Nested response behavior |
+| --- | --- |
+| `gameData.attacks.relics.<n>` | Keeps relic values such as `amount` and `totalCost`; omits `Attacks`, `Minerals`, `Singularity`, and other references to systems exposed by `gameData`. |
+| `gameData.eternity.dilationTree` or `DT` | Read `center.level` directly. A branch upgrade pointing to that center through `prev` omits the back-reference. |
+| `gameData.unity.NextZodiacs.<n>` | Keeps `Element`, nested `stats`, and other children that do not refer to earlier layers. |
+
+Explicit paths and aliases are unchanged by this documentation projection. For example, `gameData.attacks.relics.<n>.Minerals` and `gameData.eternity.dilationTree.bot.0.prev.level` can still be requested explicitly even though those back-references are excluded from the field tables and graph.
+
+Composite requests inspect immediate reference-valued members of their path ancestors, including sibling collection entries, without expanding those sibling subtrees. This adds discovery work for indexed object requests; scalar leaf requests skip discovery. An unreadable ancestor collection can still fail a composite request, so this filtering does not guarantee that serialization errors disappear.
 
 ## Compatibility aliases
 
@@ -147,14 +165,14 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `Controller` (root key `controller`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Settings` | `SettingsData` |   |
 | `lastTimeUpdateLeaderboard` | `System.Single` |   |
 
 ### `AttacksController` (root key `attacksController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Attacks` | `AttacksData` |   |
 | `Elements` | `ElementsData` |   |
@@ -168,7 +186,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `AutomationController` (root key `automationController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Attacks` | `AttacksData` |   |
 | `Automation` | `AutomationData` |   |
@@ -184,7 +202,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `ElementsController` (root key `elementsController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Attacks` | `AttacksData` |   |
 | `Elements` | `ElementsData` |   |
@@ -195,7 +213,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `EternityController` (root key `eternityController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Attacks` | `AttacksData` |   |
 | `Automation` | `AutomationData` |   |
@@ -215,7 +233,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `GameController` (root key `gameController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Attacks` | `AttacksData` |   |
 | `Automation` | `AutomationData` |   |
@@ -233,7 +251,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `InfinityController` (root key `infinityController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Attacks` | `AttacksData` |   |
 | `Automation` | `AutomationData` |   |
@@ -254,7 +272,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `MacroController` (root key `macroController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `AUTO_START_DELAY` | `System.Int32` |   |
 | `HasInstance` | `System.Boolean` |   |
@@ -264,7 +282,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `MineralsController` (root key `mineralsController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Attacks` | `AttacksData` |   |
 | `Automation` | `AutomationData` |   |
@@ -278,7 +296,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `PlagueController` (root key `plagueController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Attacks` | `AttacksData` |   |
 | `Minerals` | `MineralsData` |   |
@@ -289,7 +307,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SaveController` (root key `saveController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CurrentDate` | `Nullable<Il2CppSystem.DateTime>` |   |
 | `HasInstance` | `System.Boolean` |   |
@@ -313,7 +331,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SingularityController` (root key `singularityController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Attacks` | `AttacksData` |   |
 | `Elements` | `ElementsData` |   |
@@ -328,7 +346,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotController` (root key `tarotController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Attacks` | `AttacksData` |   |
 | `Elements` | `ElementsData` |   |
@@ -341,7 +359,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `UnityController` (root key `unityController`)
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `AttacksData` | `AttacksData` |   |
 | `ElementsData` | `ElementsData` |   |
@@ -358,7 +376,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `AnalyticsMetaData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `buyRevo` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `exitCount` | `System.Int32` |   |
@@ -367,36 +385,70 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `AstroElementType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Undefined` | `-1` |
+| `Fire` | `0` |
+| `Earth` | `1` |
+| `Wind` | `2` |
+| `Water` | `3` |
+| `Light` | `4` |
 
 ### `AstroPlanetType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Sun` | `0` |
+| `Mercury` | `1` |
+| `Venus` | `2` |
+| `Moon` | `3` |
+| `Mars` | `4` |
+| `Jupiter` | `5` |
+| `Saturn` | `6` |
+| `Uranus` | `7` |
+| `Neptune` | `8` |
+| `Pluto` | `9` |
+| `Chiron` | `10` |
+| `Fortune` | `11` |
 
 ### `AstroSeasonType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Spring` | `0` |
+| `Summer` | `1` |
+| `Autumn` | `2` |
+| `Winter` | `3` |
+| `Weather` | `4` |
 
 ### `AstroSignType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Undefined` | `-1` |
+| `Aries` | `0` |
+| `Taurus` | `1` |
+| `Gemini` | `2` |
+| `Cancer` | `3` |
+| `Leo` | `4` |
+| `Virgo` | `5` |
+| `Libra` | `6` |
+| `Scorpio` | `7` |
+| `Sagittarius` | `8` |
+| `Capricorn` | `9` |
+| `Aquarius` | `10` |
+| `Pisces` | `11` |
+| `Multisign` | `12` |
 
 ### `AttacksData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
-| `EternityData` | `EternityData` |   |
 | `HPtoGoldDivider` | `BigDouble` |   |
 | `HPtoGoldPower` | `BigDouble` |   |
-| `InfinityData` | `InfinityData` |   |
 | `PrestigeUnlocked` | `System.Boolean` |   |
 | `RelicsCount` | `System.Int32` |   |
 | `RelicsUnlocked` | `System.Boolean` |   |
-| `UnityData` | `UnityData` |   |
 | `ascendPower` | `BigDouble` |   |
 | `atkMultsMult` | `BigDouble` |   |
 | `atkOtherMult` | `BigDouble` |   |
@@ -431,7 +483,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `AttacksLevel`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `currentHP` | `BigDouble` |   |
 | `goldGain` | `BigDouble` |   |
@@ -441,16 +493,12 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `AttacksRevolution`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
 | `CanAscend` | `System.Boolean` |   |
 | `CanPurchase` | `System.Boolean` |   |
 | `IsActive` | `System.Boolean` |   |
 | `IsUnlocked` | `System.Boolean` |   |
-| `Plague` | `PlagueData` |   |
-| `Singularity` | `SingularityData` |   |
-| `Tarot` | `TarotData` |   |
 | `amount` | `System.Int64` |   |
 | `ascCooldown` | `System.Boolean` |   |
 | `ascendPower` | `BigDouble` |   |
@@ -471,7 +519,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `AttacksRevolutionBuyable`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `allCost` | `BigDouble` |   |
 | `amount` | `System.Int32` |   |
@@ -485,7 +533,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `AutoDisolveERObject`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `enabled` | `System.Boolean` |   |
 | `maxLevel` | `Nullable<BigDouble>` |   |
@@ -495,7 +543,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `AutomationData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `ActivePromotion` | `PromoteObject` |   |
 | `HasAutoAP` | `System.Boolean` |   |
@@ -512,6 +560,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `HasAutoBuySMP` | `System.Boolean` |   |
 | `HasAutoCraftER` | `System.Boolean` |   |
 | `HasAutoDeleteMin` | `System.Boolean` |   |
+| `HasAutoDeleteSingZodiac` | `System.Boolean` |   |
 | `HasAutoDilationUpgrade` | `System.Boolean` |   |
 | `HasAutoDisolveER` | `System.Boolean` |   |
 | `HasAutoEternity` | `System.Boolean` |   |
@@ -527,6 +576,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `HasAutoMinPolishUpgrade` | `System.Boolean` |   |
 | `HasAutoMinUpgrade` | `System.Boolean` |   |
 | `HasAutoPrestige` | `System.Boolean` |   |
+| `HasAutoPrestigeAttacks` | `System.Boolean` |   |
 | `HasAutoPromote` | `System.Boolean` |   |
 | `HasAutoRP` | `System.Boolean` |   |
 | `HasAutoSellSacrificeZodiac` | `System.Boolean` |   |
@@ -555,6 +605,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `autoBuyTarotUpgrades` | `System.Boolean` |   |
 | `autoCraftER` | `System.Boolean` |   |
 | `autoDelMin` | `System.Boolean` |   |
+| `autoDelSingZodiac` | `System.Boolean` |   |
 | `autoDisolveER` | `System.Boolean` |   |
 | `autoEternity` | `System.Boolean` |   |
 | `autoFlushArtifacts` | `System.Boolean` |   |
@@ -563,6 +614,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `autoInfinityIP` | `System.Boolean` |   |
 | `autoMinMerge` | `System.Boolean` |   |
 | `autoPrestige` | `System.Boolean` |   |
+| `autoPrestigeAttacks` | `System.Boolean` |   |
 | `autoPromote` | `System.Boolean` |   |
 | `autoRP` | `System.Boolean` |   |
 | `autoSacrificeZodiac` | `System.Boolean` |   |
@@ -586,6 +638,8 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `craftERMinPlP` | `Nullable<BigDouble>` |   |
 | `delMinFromCurMaxLvl` | `Nullable<BigDouble>` |   |
 | `delMinMaxLvl` | `Nullable<BigDouble>` |   |
+| `delSingZodiacMaxLvl` | `Nullable<BigDouble>` |   |
+| `delSingZodiacRarity` | `List<ZodiacRarityType>` | list/array of ZodiacRarityType append `.<numeric-index>` |
 | `dilUp` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `disolveER` | `List<AutoDisolveERObject>` | list/array of AutoDisolveERObject append `.<numeric-index>` |
 | `etrEpGain` | `BigDouble` |   |
@@ -595,14 +649,18 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `infTimeWait` | `System.Double` |   |
 | `ipMultGain` | `BigDouble` |   |
 | `labUp` | `List<System.Boolean>` | list/array of System.Boolean append `.<numeric-index>` |
+| `lastPrestigeTimeAttacks` | `BigDouble` |   |
 | `lockNewZodiac` | `System.Boolean` |   |
 | `minPolish` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `minUpgrades` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `moonRunes` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `polishEnhance` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `prestigeMinExpGain` | `System.Double` |   |
+| `prestigeMinExpGainAttacks` | `System.Double` |   |
 | `prestigeMinMultGain` | `BigDouble` |   |
+| `prestigeMinMultGainAttacks` | `BigDouble` |   |
 | `prestigeMinTime` | `System.Double` |   |
+| `prestigeMinTimeAttacks` | `System.Double` |   |
 | `promotions` | `List<PromoteObject>` | list/array of PromoteObject append `.<numeric-index>` |
 | `relics` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
 | `relicsOrder` | `List<System.Int32>` | list/array of System.Int32 append `.<numeric-index>` |
@@ -643,14 +701,14 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `BigDouble`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Exponent` | `System.Double` |   |
 | `Mantissa` | `System.Double` |   |
 
 ### `Block`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `BodyColor` | `UnityEngine.Color` |   |
 | `Depth` | `System.Int32` |   |
@@ -671,7 +729,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `BlockField`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `BigRange` | `Nullable<ValueTuple<BigDouble, BigDouble>>` |   |
 | `KeyDrpPlaceholder` | `System.String` |   |
@@ -689,27 +747,97 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `BlockFieldType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Input` | `0` |
+| `Toggle` | `1` |
+| `Dropdown` | `2` |
+| `MultiSelectDropdown` | `3` |
+| `TextArea` | `4` |
+| `Slider` | `5` |
 
 ### `BlockStateType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Stopped` | `0` |
+| `Waiting` | `1` |
+| `Pending` | `2` |
+| `Complete` | `3` |
+| `Rejected` | `4` |
+| `Broken` | `5` |
+| `Failed` | `6` |
+| `Canceled` | `7` |
 
 ### `BlockType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `WaitUntil` | `0` |
+| `RepeatUntil` | `1` |
+| `Repeat` | `2` |
+| `Dilate` | `3` |
+| `Infinite` | `4` |
+| `Eternate` | `5` |
+| `EnterIC` | `6` |
+| `ExitIC` | `7` |
+| `EnterEC` | `8` |
+| `ExitEC` | `9` |
+| `LoadDT` | `10` |
+| `Respec` | `11` |
+| `MoveTo` | `12` |
+| `Stop` | `13` |
+| `Pause` | `14` |
+| `Leave` | `15` |
+| `If` | `16` |
+| `Else` | `17` |
+| `ElseIf` | `18` |
+| `TimeFlux` | `19` |
+| `TimeWrap` | `20` |
+| `AlertMessage` | `21` |
+| `WaitForSeconds` | `22` |
+| `DailyReward` | `23` |
+| `PlaySound` | `24` |
+| `Break` | `25` |
+| `Prestige` | `26` |
+| `Promote` | `27` |
+| `Redirection` | `28` |
+| `Restart` | `29` |
+| `BreakInfinity` | `30` |
+| `DTU` | `31` |
+| `GoToMacro` | `32` |
+| `Skin` | `33` |
+| `LoadPlanets` | `34` |
+| `RefinePrestige` | `35` |
+| `PolishPrestige` | `36` |
+| `UseArcan` | `37` |
+| `GenerateElement` | `38` |
+| `DeleteBlackGem` | `39` |
+| `TarotSpawn` | `40` |
+| `EnterTC` | `41` |
+| `ExitTC` | `42` |
+| `DeleteSM` | `43` |
+| `FlushSM` | `44` |
+| `EnterPlagueStage` | `45` |
+| `CraftER` | `46` |
+| `ExitPlagueStage` | `47` |
+| `BuySingTreeNode` | `48` |
+| `Singularize` | `49` |
 
 ### `BuffMathType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Addition` | `0` |
+| `Multiplication` | `1` |
+| `Power` | `2` |
+| `Tetration` | `3` |
+| `Substraction` | `4` |
+| `Division` | `5` |
 
 ### `BuffPenalty`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `GetBPText` | `System.String` |   |
 | `atomsNeeded` | `BigDouble` |   |
@@ -721,12 +849,14 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `BuffPenaltyType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Buff` | `0` |
+| `Penalty` | `1` |
 
 ### `Buyable`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `allCost` | `BigDouble` |   |
 | `amount` | `System.Double` |   |
@@ -739,22 +869,19 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `CommonMineral`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
 | `Desc` | `System.String` |   |
 | `Id` | `System.Int32` |   |
 | `KeyDesc` | `System.String` |   |
 | `KeyName` | `System.String` |   |
-| `Minerals` | `MineralsData` |   |
 | `Name` | `System.String` |   |
-| `Tarot` | `TarotData` |   |
 | `income` | `BigDouble` |   |
 | `level` | `BigDouble` |   |
 
 ### `DTPScaling`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `cur` | `BigDouble` |   |
 | `exp` | `System.Double` |   |
@@ -763,19 +890,25 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `DevilDebuff`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `None` | `0` |
+| `ShadowSelf` | `1` |
+| `Attachment` | `2` |
+| `Addiction` | `3` |
+| `Restriction` | `4` |
+| `SecretGarden` | `5` |
 
 ### `DilUpgradeCost`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `cur` | `BigDouble` |   |
 | `inc` | `BigDouble` |   |
 
 ### `DilationTree`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `TotalDTP` | `System.Int32` |   |
 | `bot` | `List<DilationTreeUpgrade>` | list/array of DilationTreeUpgrade append `.<numeric-index>` |
@@ -785,14 +918,14 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `DilationTreeLoadout`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `name` | `System.String` |   |
 | `value` | `System.String` |   |
 
 ### `DilationTreeUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CanBuy` | `System.Boolean` |   |
 | `KeyDesc` | `System.String` |   |
@@ -807,11 +940,10 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `level` | `System.Int32` |   |
 | `maxLevel` | `System.Int32` |   |
 | `num` | `System.Int32` |   |
-| `prev` | `DilationTreeUpgrade` |   |
 
 ### `DilationUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `buyAmmo` | `System.Int32` |   |
 | `buyAmount` | `BigDouble` |   |
@@ -827,7 +959,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `Element`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `BindedLoadout` | `PlanetLoadoutSlot` |   |
 | `amount` | `BigDouble` |   |
@@ -840,7 +972,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `ElementFactor`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `id` | `System.Int32` |   |
 | `type` | `ElementFactorType` |   |
@@ -849,12 +981,24 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `ElementFactorType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Score` | `0` |
+| `Exp` | `1` |
+| `AscPower` | `2` |
+| `Inf` | `3` |
+| `GenExp` | `4` |
+| `IP` | `5` |
+| `Eter` | `6` |
+| `Supernova` | `7` |
+| `EP` | `8` |
+| `Luck` | `9` |
+| `Quality` | `10` |
+| `Ach29Rewd` | `11` |
 
 ### `ElementNode`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CanBuy` | `System.Boolean` |   |
 | `Next` | `List<ElementNode>` | list/array of ElementNode append `.<numeric-index>` |
@@ -870,7 +1014,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `ElementsData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `BindLoadoutUnlocked` | `System.Boolean` |   |
 | `ElementTreeUnlocked` | `System.Boolean` |   |
@@ -891,7 +1035,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `EndoplasmicReticulum`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `baseInfectivity` | `BigDouble` |   |
 | `baseSpreadPower` | `BigDouble` |   |
@@ -906,7 +1050,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `EndoplasmicReticulumUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CanBuy` | `System.Boolean` |   |
 | `KeyDesc` | `System.String` |   |
@@ -922,7 +1066,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `EternityChallenge`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `KeyName` | `System.String` |   |
 | `Unlocked` | `System.Boolean` |   |
@@ -938,7 +1082,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `EternityData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `AP` | `BigDouble` |   |
 | `APAmmoEP` | `System.Int32` |   |
@@ -1041,7 +1185,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `EternityStat`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `ep` | `BigDouble` |   |
 | `ip` | `BigDouble` |   |
@@ -1050,12 +1194,17 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `EtrDilTreeAxis`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `UNKNOWN` | `-1` |
+| `CENTER` | `0` |
+| `MIDDLE` | `1` |
+| `TOP` | `2` |
+| `BOTTOM` | `3` |
 
 ### `ExpFactor`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Unlocked` | `System.Boolean` |   |
 | `factor` | `BigDouble` |   |
@@ -1063,18 +1212,33 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `ExpFactorType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Trials` | `0` |
+| `Unities` | `1` |
+| `EP` | `2` |
+| `Score` | `3` |
+| `Supernova` | `4` |
+| `PlanetShop` | `5` |
+| `EternityCount` | `6` |
+| `DTPCount` | `7` |
+| `IP` | `8` |
+| `DP` | `9` |
+| `LabLevel` | `10` |
+| `Relic8` | `11` |
+| `AP` | `12` |
+| `Luck` | `13` |
+| `VP` | `14` |
 
 ### `GameBananaData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `click` | `BigDouble` |   |
 
 ### `GameData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `AchievementBonus` | `BigDouble` |   |
 | `AchievementBonus2` | `BigDouble` |   |
@@ -1208,10 +1372,8 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `Generator`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Infinity` | `InfinityData` |   |
-| `Unity` | `UnityData` |   |
 | `allCost` | `BigDouble` |   |
 | `amount` | `System.Double` |   |
 | `baseCost` | `BigDouble` |   |
@@ -1226,7 +1388,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `InfinityChallenge`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `KeyDesc` | `System.String` |   |
 | `KeyName` | `System.String` |   |
@@ -1239,7 +1401,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `InfinityData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CanBreak` | `System.Boolean` |   |
 | `ChallengeTotalTime` | `System.Double` |   |
@@ -1277,14 +1439,14 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `InfinityStat`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `ip` | `BigDouble` |   |
 | `time` | `BigDouble` |   |
 
 ### `InventoryData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `BoostArtifactLocalSpeed` | `System.Double` |   |
 | `BoostAscPower` | `System.Double` |   |
@@ -1412,14 +1574,14 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `LabPtsScaling`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `power` | `BigDouble` |   |
 | `start` | `System.Int32` |   |
 
 ### `LabUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `KeyName` | `System.String` |   |
 | `buyAmmo` | `System.Int32` |   |
@@ -1433,7 +1595,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `LeaderboardData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `leaderboards` | `Dictionary<LeaderboardType, NakamaLeaderboard>` | dictionary keyed by LeaderboardType, values NakamaLeaderboard append `.<string|integer|enum-key>` |
 | `maxAnimals` | `BigDouble` |   |
@@ -1460,12 +1622,16 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `LeaderboardType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `General` | `0` |
+| `Infinity` | `1` |
+| `Eternity` | `2` |
+| `Unity` | `3` |
 
 ### `MacroData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Blocks` | `List<Block>` | list/array of Block append `.<numeric-index>` |
 | `Slot` | `MacroSlot` |   |
@@ -1475,12 +1641,15 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `MacroLoopMode`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Once` | `0` |
+| `Loop` | `1` |
+| `PingPong` | `2` |
 
 ### `MacroSettingData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Mute` | `System.Boolean` |   |
 | `Volume` | `System.Single` |   |
@@ -1493,7 +1662,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `MacroSlot`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `blocks` | `List<Block>` | list/array of Block append `.<numeric-index>` |
 | `logs` | `System.Boolean` |   |
@@ -1503,34 +1672,40 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `MineralUpgradeType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `MaxLevel` | `0` |
+| `GridHeight` | `1` |
+| `GridWidth` | `2` |
+| `FallSpeed` | `3` |
+| `LuckBonus` | `4` |
+| `QualityBonus` | `5` |
+| `GoldGain` | `6` |
+| `CommonExponentMult` | `7` |
+| `MagnetChance` | `8` |
+| `ChanceX2Magnets` | `9` |
+| `VPGain` | `10` |
+| `PPGain` | `11` |
+| `SpawnPlusOne` | `12` |
+| `MergePlusTwo` | `13` |
+| `MoreMagnets` | `14` |
 
 ### `MineralsData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `AllSpecialsSacrificed` | `System.Boolean` |   |
-| `Attacks` | `AttacksData` |   |
-| `AttacksData` | `AttacksData` |   |
-| `AutomationData` | `AutomationData` |   |
 | `CanSpawnCommon` | `System.Boolean` |   |
 | `CanSpawnSpecial` | `System.Boolean` |   |
-| `EternityData` | `EternityData` |   |
-| `InfinityData` | `InfinityData` |   |
-| `Minerals` | `MineralsData` |   |
 | `PolishEnchanceUnlocked` | `System.Boolean` |   |
 | `PolishUnlocked` | `System.Boolean` |   |
 | `RefineTreeUnlocked` | `System.Boolean` |   |
 | `RunesUpgradesUnlocked` | `System.Boolean` |   |
 | `SMPboost` | `BigDouble` |   |
 | `SacrificeSMUnlocked` | `System.Boolean` |   |
-| `Singularity` | `SingularityData` |   |
 | `SpecialGridUnlocked` | `System.Boolean` |   |
 | `SpecialMineralsProgressionUnlocked` | `System.Boolean` |   |
 | `SpecialMineralsSacrificeUnlocked` | `System.Boolean` |   |
-| `Tarot` | `TarotData` |   |
-| `UnityData` | `UnityData` |   |
 | `Unlocked` | `System.Boolean` |   |
 | `VPIncome` | `BigDouble` |   |
 | `VPRewardAscPower` | `BigDouble` |   |
@@ -1591,6 +1766,8 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `refineNodes` | `Dictionary<System.Int32, RefineNode>` | dictionary keyed by System.Int32, values RefineNode append `.<string|integer|enum-key>` |
 | `refinePoints` | `BigDouble` |   |
 | `refinePointsNext` | `BigDouble` |   |
+| `sa10035Progress` | `List<SpecialMineralType>` | list/array of SpecialMineralType append `.<numeric-index>` |
+| `sa10035path` | `List<SpecialMineralType>` | list/array of SpecialMineralType append `.<numeric-index>` |
 | `sacriDust` | `BigDouble` |   |
 | `sacriDustBaseGainMult` | `BigDouble` |   |
 | `sacriDustGainMult` | `BigDouble` |   |
@@ -1619,12 +1796,9 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `MineralsUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Maxed` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
-| `Singularity` | `SingularityData` |   |
-| `Tarot` | `TarotData` |   |
 | `Unlocked` | `System.Boolean` |   |
 | `buyAmount` | `BigDouble` |   |
 | `canBuy` | `System.Boolean` |   |
@@ -1638,7 +1812,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `NakamaLeaderboard`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Enabled` | `System.Boolean` |   |
 | `HasRank` | `System.Boolean` |   |
@@ -1652,7 +1826,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `PlagueData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CureNerf` | `BigDouble` |   |
 | `CureProgress` | `BigDouble` |   |
@@ -1704,26 +1878,36 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `PlagueEndoRarity`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `F` | `0` |
+| `D` | `1` |
+| `C` | `2` |
+| `B` | `3` |
+| `A` | `4` |
+| `S` | `5` |
 
 ### `PlagueEndoType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Outbreak` | `0` |
+| `Virulent` | `1` |
+| `Latent` | `2` |
+| `Strain` | `3` |
+| `Decay` | `4` |
 
 ### `PlagueGlobalStage`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Selected` | `PlagueStage` |   |
 | `selectedId` | `System.Int32` |   |
 | `stages` | `List<PlagueStage>` | list/array of PlagueStage append `.<numeric-index>` |
 | `type` | `PlagueStageType` |   |
 
 ### `PlagueStage`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `KeyName` | `System.String` |   |
 | `basePopulation` | `BigDouble` |   |
@@ -1735,16 +1919,23 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `infectedPeak` | `BigDouble` |   |
 | `progressThis` | `BigDouble` |   |
 | `reward` | `BigDouble` |   |
+| `simulationStep` | `BigDouble` |   |
 | `type` | `PlagueStageType` |   |
 
 ### `PlagueStageType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Houses` | `0` |
+| `Towns` | `1` |
+| `Islands` | `2` |
+| `Countries` | `3` |
+| `Planets` | `4` |
+| `Universes` | `5` |
 
 ### `PlagueStat`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `effect` | `BigDouble` |   |
 | `type` | `PlagueStatType` |   |
@@ -1752,15 +1943,20 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `PlagueStatType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `MaxStage` | `0` |
+| `MaxInfected` | `1` |
+| `TotalInfected` | `2` |
+| `MaxPlP` | `3` |
+| `MaxPlG` | `4` |
+| `UniInfected` | `5` |
 
 ### `PlagueVirus`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Endo` | `EndoplasmicReticulum` |   |
-| `Plague` | `PlagueData` |   |
 | `equipedId` | `System.Int32` |   |
 | `name` | `System.String` |   |
 | `statInfectivity` | `BigDouble` |   |
@@ -1769,7 +1965,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `PlanetLoadoutSlot`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `folded` | `System.Boolean` |   |
 | `name` | `System.String` |   |
@@ -1777,33 +1973,55 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `PlanetLoadoutSlotElement`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `sign` | `AstroSignType` |   |
 | `stats` | `List<ZodiacStats>` | list/array of ZodiacStats append `.<numeric-index>` |
 
 ### `PlanetShopDonutType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `GameSpeed` | `0` |
+| `Luck` | `1` |
+| `Quality` | `2` |
+| `ZodiacExpFactor` | `3` |
 
 ### `PlanetShopSpaceshipType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Rocket` | `0` |
+| `Spaceship` | `1` |
+| `Comet` | `2` |
+| `UFO` | `3` |
+| `DeathStar` | `4` |
+| `Glowsphere` | `5` |
+| `SpaceCreature` | `6` |
 
 ### `PlanetStatType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Undefined` | `-1` |
+| `ZodiacQualityMult` | `0` |
+| `LuckMult` | `1` |
+| `UnityRewards` | `2` |
+| `EternityRewards` | `3` |
+| `EternityGain` | `4` |
+| `InfinityGain` | `5` |
+| `DPMult` | `6` |
+| `StarCost` | `7` |
+| `GameSpeed` | `8` |
+| `LapSpeed` | `9` |
+| `SupernovaRewards` | `10` |
+| `DilationUpgradesPower` | `11` |
 
 ### `PolishEnchanceUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CanBuy` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
-| `Tarot` | `TarotData` |   |
 | `buyAmount` | `BigDouble` |   |
 | `cost` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
@@ -1813,11 +2031,9 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `PolishUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CanBuy` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
-| `Tarot` | `TarotData` |   |
 | `buyAmount` | `BigDouble` |   |
 | `cost` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
@@ -1828,12 +2044,17 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `PolishUpgradeType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Sword` | `0` |
+| `Axe` | `1` |
+| `Spear` | `2` |
+| `Bow` | `3` |
+| `Knuckles` | `4` |
 
 ### `ProfileData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `notifications` | `Dictionary<System.String, System.Int32>` | dictionary keyed by System.String, values System.Int32 append `.<string|integer|enum-key>` |
 | `reviewAskCount` | `System.Int32` |   |
@@ -1842,7 +2063,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `PromoteObject`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `id` | `System.Int32` |   |
 | `levelGain` | `System.Int32` |   |
@@ -1850,7 +2071,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `Promotion`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Available` | `System.Boolean` |   |
 | `Locked` | `System.Boolean` |   |
@@ -1866,7 +2087,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `RPUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `KeyDesc` | `System.String` |   |
 | `KeyName` | `System.String` |   |
@@ -1877,7 +2098,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `RefineNode`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Bought` | `System.Boolean` |   |
 | `CanBuy` | `System.Boolean` |   |
@@ -1895,15 +2116,9 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `Relic`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
-| `Elements` | `ElementsData` |   |
-| `Minerals` | `MineralsData` |   |
 | `ReqLevel` | `BigDouble` |   |
-| `Singularity` | `SingularityData` |   |
-| `Tarot` | `TarotData` |   |
-| `Unity` | `UnityData` |   |
 | `amount` | `BigDouble` |   |
 | `baseCost` | `BigDouble` |   |
 | `buyAmount` | `BigDouble` |   |
@@ -1919,7 +2134,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `Revolution`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `amount` | `System.Double` |   |
 | `ascension` | `System.Int64` |   |
@@ -1939,22 +2154,40 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `RevolutionSkin`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Ring` | `0` |
+| `Orbital` | `1` |
+| `Alpha` | `2` |
+| `Bar` | `3` |
+| `Cosmos` | `4` |
+| `Clock` | `5` |
+| `Sun` | `6` |
+| `Pendulum` | `7` |
+| `Retro` | `8` |
+| `Hamster` | `9` |
+| `DragonEye` | `10` |
+| `Matrix` | `11` |
+| `Abyss` | `12` |
+| `Washing` | `13` |
+| `BlackHole` | `14` |
+| `Banana` | `15` |
+| `SolarSystem` | `16` |
+| `Atom` | `17` |
 
 ### `RuneType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Sun` | `0` |
+| `Moon` | `1` |
 
 ### `RuneUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
 | `CanBuy` | `System.Boolean` |   |
 | `Inventory` | `InventoryData` |   |
-| `Minerals` | `MineralsData` |   |
 | `buyAmount` | `BigDouble` |   |
 | `cost` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
@@ -1965,12 +2198,16 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `RuneUpgradeType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Rate` | `0` |
+| `NodeBonus` | `1` |
+| `MagnetBonus` | `2` |
+| `Bulk` | `3` |
 
 ### `SacriStat`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `score` | `BigDouble` |   |
 | `showable` | `System.Boolean` |   |
@@ -1979,11 +2216,10 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `ShopSlotData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Cost` | `System.Int32` |   |
 | `CurrentValue` | `System.Int32` |   |
-| `Inventory` | `InventoryData` |   |
 | `KeyName` | `System.String` |   |
 | `NextValue` | `System.Int32` |   |
 | `ReachMaxStep` | `System.Boolean` |   |
@@ -1995,7 +2231,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SingEffect`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `effect` | `BigDouble` |   |
 | `initValue` | `BigDouble` |   |
@@ -2005,17 +2241,29 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SingEffectSubtype`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `GoldGainPow` | `0` |
+| `SpreadSpeedMult` | `1` |
+| `AtomsGainPow` | `2` |
+| `BlackGemMult` | `3` |
+| `GoldenResourcesMult` | `4` |
+| `RefinePoints` | `5` |
+| `LuckPow` | `6` |
+| `FirstSingLevelMult` | `7` |
+| `SecondSingLevelMult` | `8` |
 
 ### `SingEffectType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Sing` | `0` |
+| `Atoms` | `1` |
+| `SingMult` | `2` |
 
 ### `SingFactor`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Unlocked` | `System.Boolean` |   |
 | `baseValue` | `BigDouble` |   |
@@ -2024,12 +2272,31 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SingFactorType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `VesselLast` | `0` |
+| `TarotLevels` | `1` |
+| `PlagueMult` | `2` |
+| `ERStats` | `3` |
+| `ElementsMult` | `4` |
+| `Relic38` | `5` |
+| `Relic67` | `6` |
+| `LogPow` | `7` |
+| `Atoms` | `8` |
+| `TreeNode` | `9` |
+| `Singularities` | `10` |
+| `RN125` | `11` |
+| `SingZodiacs` | `12` |
+| `SingMult` | `13` |
+| `TarotSwordChal` | `14` |
+| `TarotWandChal` | `15` |
+| `TarotPentacleChal` | `16` |
+| `TarotCupChal` | `17` |
+| `ShopBoost` | `18` |
 
 ### `SingMilestone`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Unlocked` | `System.Boolean` |   |
 | `id` | `System.Int32` |   |
@@ -2039,18 +2306,21 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SingMilestoneType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Sing` | `0` |
+| `Atoms` | `1` |
+| `Prog` | `2` |
 
 ### `SingularHouse`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `sign` | `AstroSignType` |   |
 
 ### `SingularZodiac`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `ActiveStats` | `List<SingularZodiacStatType>` | list/array of SingularZodiacStatType append `.<numeric-index>` |
 | `Element` | `AstroElementType` |   |
@@ -2064,12 +2334,25 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SingularZodiacStatType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Undefined` | `-1` |
+| `FireFactor` | `0` |
+| `SacriPointsGainPow` | `1` |
+| `AttackExponentMult` | `2` |
+| `EarthFactor` | `3` |
+| `PlPPerPlGMult` | `4` |
+| `GoldenResourcesGain` | `5` |
+| `WindFactor` | `6` |
+| `VEOnDissolveMult` | `7` |
+| `BlackGemEffectPow` | `8` |
+| `WaterFactor` | `9` |
+| `BaseSpreadMult` | `10` |
+| `SingularityMultBoost` | `11` |
 
 ### `SingularityData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `BuffPenaltyCount` | `System.Int32` |   |
 | `EffectsUnlocked` | `System.Boolean` |   |
@@ -2098,7 +2381,8 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `localSpeedPow` | `BigDouble` |   |
 | `luck` | `BigDouble` |   |
 | `luckConversionRate` | `BigDouble` |   |
-| `maxAtoms` | `BigDouble` |   |
+| `pityCounter` | `Dictionary<AstroSignType, System.Boolean>` | dictionary keyed by AstroSignType, values System.Boolean append `.<string|integer|enum-key>` |
+| `pityCounterEst` | `System.Int32` |   |
 | `singBonusesAtoms` | `Dictionary<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
 | `singBonusesAtomsActive` | `Dictionary<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
 | `singBonusesSing` | `Dictionary<SingEffectSubtype, SingEffect>` | dictionary keyed by SingEffectSubtype, values SingEffect append `.<string|integer|enum-key>` |
@@ -2122,12 +2406,25 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SingularityTreeBonusType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `TreeFactor` | `0` |
+| `GoldGainPow` | `1` |
+| `Pen308Nerf` | `2` |
+| `Pen500Nerf` | `3` |
+| `RfpPow` | `4` |
+| `GoldenRes` | `5` |
+| `PlagueStats` | `6` |
+| `PlagueGens` | `7` |
+| `TotalNextNerf` | `8` |
+| `Pen1000Nerf` | `9` |
+| `FirstLevelMult` | `10` |
+| `SecondLevelMult` | `11` |
+| `TotalEfficiency` | `12` |
 
 ### `SingularityTreeNode`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CanAscend` | `System.Boolean` |   |
 | `CanBuy` | `System.Boolean` |   |
@@ -2148,13 +2445,10 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SpecialMineral`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Inventory` | `InventoryData` |   |
-| `Minerals` | `MineralsData` |   |
 | `Name` | `System.String` |   |
-| `Singularity` | `SingularityData` |   |
-| `Tarot` | `TarotData` |   |
 | `baseEffect` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
 | `level` | `BigDouble` |   |
@@ -2162,12 +2456,9 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SpecialMineralProgression`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
-| `Attacks` | `AttacksData` |   |
 | `CanBuy` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
-| `Tarot` | `TarotData` |   |
 | `baseLevel` | `BigDouble` |   |
 | `buyAmount` | `BigDouble` |   |
 | `cost` | `BigDouble` |   |
@@ -2179,15 +2470,12 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SpecialMineralSacrifice`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Inventory` | `InventoryData` |   |
 | `MaxLevel` | `System.Boolean` |   |
-| `Minerals` | `MineralsData` |   |
 | `Name` | `System.String` |   |
 | `Sacrificed` | `System.Boolean` |   |
-| `Singularity` | `SingularityData` |   |
-| `Tarot` | `TarotData` |   |
 | `baseEffect` | `BigDouble` |   |
 | `effect` | `BigDouble` |   |
 | `effect2` | `BigDouble` |   |
@@ -2198,17 +2486,35 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `SpecialMineralType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Red` | `0` |
+| `Blue` | `1` |
+| `Green` | `2` |
+| `Pink` | `3` |
+| `Yellow` | `4` |
+| `Orange` | `5` |
+| `Darkpurple` | `6` |
+| `Lightblue` | `7` |
+| `White` | `8` |
+| `Black` | `9` |
 
 ### `SpecialPackType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Starter1` | `0` |
+| `Infinity1` | `1` |
+| `Eternity1` | `2` |
+| `Astrology1` | `3` |
+| `Minerals1` | `4` |
+| `Tarot1` | `5` |
+| `Plague1` | `6` |
+| `Singularity1` | `7` |
 
 ### `StarUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `amount` | `BigDouble` |   |
 | `baseCost` | `BigDouble` |   |
@@ -2218,7 +2524,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `StardustUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `amount` | `BigDouble` |   |
 | `baseCost` | `BigDouble` |   |
@@ -2229,17 +2535,25 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `StartFromEnum`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Manual` | `0` |
+| `Automation` | `1` |
+| `Macro` | `2` |
 
 ### `StatsBuffPenType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `AtomsGain` | `0` |
+| `GoldenResource` | `1` |
+| `SpreadPower` | `2` |
+| `Relic50` | `3` |
+| `SacriDust` | `4` |
 
 ### `TarotArtifact`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CanFlush` | `System.Boolean` |   |
 | `CooldownPercent` | `BigDouble` |   |
@@ -2262,7 +2576,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotArtifactPart`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `CanUpgrade` | `System.Boolean` |   |
 | `GoldResource` | `BigDouble&` |   |
@@ -2277,7 +2591,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotCard`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `BackgroundColor` | `UnityEngine.Color` |   |
 | `IsActive` | `System.Boolean` |   |
@@ -2302,7 +2616,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotCards`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `suitArcan` | `TarotSuit` |   |
 | `suitCup` | `TarotSuit` |   |
@@ -2312,7 +2626,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotChallenge`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `ComingSoon` | `System.Boolean` |   |
 | `IsTheTowerLocked` | `System.Boolean` |   |
@@ -2332,10 +2646,9 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotChallengeSuit`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `InChallenge` | `System.Boolean` |   |
-| `SelectedChallenge` | `TarotChallenge` |   |
 | `challenges` | `List<TarotChallenge>` | list/array of TarotChallenge append `.<numeric-index>` |
 | `selectedId` | `System.Int32` |   |
 | `suitEffect` | `BigDouble` |   |
@@ -2343,7 +2656,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotChallenges`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `PendingChallenge` | `TarotChallenge` |   |
 | `SelectedType` | `TarotSuitType` |   |
@@ -2365,7 +2678,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `TarotArtifactsUnlocked` | `System.Boolean` |   |
 | `TarotChallengesUnlocked` | `System.Boolean` |   |
@@ -2406,6 +2719,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `resetResources` | `System.Boolean` |   |
 | `sacriDustBonus` | `BigDouble` |   |
 | `starLuckMult` | `BigDouble` |   |
+| `starLuckMultPrev` | `BigDouble` |   |
 | `strengthExp` | `BigDouble` |   |
 | `swords` | `BigDouble` |   |
 | `totalCards` | `BigDouble` |   |
@@ -2416,11 +2730,10 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotSuit`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `LockedCardCount` | `System.Int32` |   |
 | `MaxCardCount` | `System.Int32` |   |
-| `Tarot` | `TarotData` |   |
 | `UnlockedCardsCount` | `System.Int32` |   |
 | `cards` | `List<TarotCard>` | list/array of TarotCard append `.<numeric-index>` |
 | `chance` | `System.Double` |   |
@@ -2430,19 +2743,24 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotSuitType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Sword` | `0` |
+| `Wand` | `1` |
+| `Pentacle` | `2` |
+| `Cup` | `3` |
+| `Arcan` | `4` |
 
 ### `TarotSuitUpgrades`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `type` | `TarotSuitType` |   |
 | `upgrades` | `List<TarotUpgrade>` | list/array of TarotUpgrade append `.<numeric-index>` |
 
 ### `TarotUpgrade`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Bought` | `System.Boolean` |   |
 | `CanBuy` | `System.Boolean` |   |
@@ -2458,7 +2776,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `TarotUpgrades`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `suitCup` | `TarotSuitUpgrades` |   |
 | `suitPentacle` | `TarotSuitUpgrades` |   |
@@ -2467,17 +2785,24 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `ThemeType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Halloween` | `0` |
+| `Christmas` | `1` |
 
 ### `TrialType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Easy` | `0` |
+| `Medium` | `1` |
+| `Hard` | `2` |
+| `Insane` | `3` |
+| `Bonus` | `4` |
 
 ### `UnityBonuses`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `DPGain` | `BigDouble` |   |
 | `EPGain` | `BigDouble` |   |
@@ -2486,7 +2811,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `UnityData`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `AllTrials` | `IEnumerable<UnityTrial>` |   |
 | `BonusTrials` | `List<UnityTrial>` | list/array of UnityTrial append `.<numeric-index>` |
@@ -2499,7 +2824,6 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 | `PlanetLoadoutUnlocked` | `System.Boolean` |   |
 | `PlanetShopUnlocked` | `System.Boolean` |   |
 | `SacrificeUnlocked` | `System.Boolean` |   |
-| `TarotData` | `TarotData` |   |
 | `TrialCountCompleted` | `System.Int32` |   |
 | `TrialCountPending` | `System.Int32` |   |
 | `TrialsUnlocked` | `System.Boolean` |   |
@@ -2551,7 +2875,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `UnityPlanet`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `bonusType` | `PlanetStatType` |   |
 | `bonusValue` | `BigDouble` |   |
@@ -2560,7 +2884,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `UnityPlanetShopDonut`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Cost` | `BigDouble` |   |
 | `Effect` | `BigDouble` |   |
@@ -2575,7 +2899,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `UnityPlanetShopSpaceship`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `cost` | `BigDouble` |   |
 | `ownded` | `System.Boolean` |   |
@@ -2583,7 +2907,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `UnityStat`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `ep` | `BigDouble` |   |
 | `level` | `BigDouble` |   |
@@ -2595,7 +2919,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `UnityTrial`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `GroupUnlocked` | `System.Boolean` |   |
 | `Unlocked` | `System.Boolean` |   |
@@ -2607,7 +2931,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `UnityZodiac`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Element` | `AstroElementType` |   |
 | `IsEmpty` | `System.Boolean` |   |
@@ -2626,7 +2950,7 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `ZodiacConfiguration`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `Amount` | `System.Int32` |   |
 | `amount` | `System.Int32` |   |
@@ -2637,17 +2961,59 @@ JSON follows the serializer policy: BigDouble and large integers are strings; sa
 
 ### `ZodiacRarityType`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Temperate` | `-1` |
+| `Garbage` | `0` |
+| `Common` | `1` |
+| `Uncommon` | `2` |
+| `Rare` | `3` |
+| `Epic` | `4` |
+| `Legendary` | `5` |
+| `Mythic` | `6` |
+| `Godly` | `7` |
+| `Divine` | `8` |
+| `Immortal` | `9` |
+| `Ethereal` | `10` |
+| `Amazing` | `11` |
+| `Prime` | `12` |
+| `Rainbow` | `13` |
+| `Galactic` | `14` |
+| `Ultima` | `15` |
 
 ### `ZodiacStat`
 
-| Property | CLR type | Collection path extension |
+| Field | CLR type | Collection path extension |
 | --- | --- | --- |
 | `type` | `ZodiacStats` |   |
 | `value` | `BigDouble` |   |
 
 ### `ZodiacStats`
 
-| Property | CLR type | Collection path extension |
-| --- | --- | --- |
+| Variant | Value |
+| --- | --- |
+| `Undefined` | `-1` |
+| `MultsGain` | `0` |
+| `PromPower` | `1` |
+| `CommonExponent` | `2` |
+| `AscensionPower` | `3` |
+| `LapsSpeed` | `4` |
+| `SlowdownPower` | `5` |
+| `IPGain` | `6` |
+| `InfinityGain` | `7` |
+| `GenExponent` | `8` |
+| `MultPerBoughtGen` | `9` |
+| `StarBase` | `10` |
+| `StardustExponent` | `11` |
+| `EternityGain` | `12` |
+| `EPGain` | `13` |
+| `LabMultPower` | `14` |
+| `SupernovaReq` | `15` |
+| `DPGain` | `16` |
+| `FreeLabLevels` | `17` |
+| `DTPCost` | `18` |
+| `CenterDTUEff` | `19` |
+| `Ach29Reward` | `20` |
+| `GameSpeed` | `21` |
+| `LuckAdd` | `22` |
+| `ZodiacQualityMult` | `23` |

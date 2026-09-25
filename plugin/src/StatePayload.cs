@@ -19,6 +19,7 @@ internal static class StatePayload
     private const long MaxSafeInteger = 9007199254740991;
     private const int MaxTraversalDepth = 64;
     private static readonly ConcurrentDictionary<Type, PropertyInfo[]> Properties = new();
+    private static readonly ConcurrentDictionary<Type, bool> LeafTypes = new();
 
     public static bool TryEncode(GameData data, IReadOnlyList<string> keys, out byte[] payload) => Encode(data, keys, out payload, out _) == StatePayloadStatus.Success;
 
@@ -36,30 +37,30 @@ internal static class StatePayload
         }
         try
         {
-            List<(string Path, object? Value)> values = new(paths.Count);
+            List<(string Path, object? Value, List<(object Value, string Segment, object? Child)> Ancestors)> values = new(paths.Count);
             HashSet<string> seenPaths = new(StringComparer.Ordinal);
             foreach (string path in paths)
             {
                 failedPath = path;
                 if (!seenPaths.Add(path))
                     continue;
-                if (!TryResolve(data, path, out object? value))
+                if (!TryResolve(data, path, out object? value, out var ancestors))
                 {
                     payload = Array.Empty<byte>();
                     return StatePayloadStatus.InvalidPath;
                 }
-                values.Add((path, value));
+                values.Add((path, value, ancestors));
             }
 
             using MemoryStream stream = new();
             using (var writer = new Utf8JsonWriter(stream))
             {
                 writer.WriteStartObject();
-                foreach ((string path, object? value) in values)
+                foreach (var (path, value, ancestors) in values)
                 {
                     failedPath = path;
                     writer.WritePropertyName(path);
-                    WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0);
+                    WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0, ancestors: ancestors);
                 }
                 writer.WriteEndObject();
             }
@@ -83,8 +84,9 @@ internal static class StatePayload
         return document.RootElement.Clone();
     }
 
-    private static bool TryResolve(object data, string path, out object? value)
+    private static bool TryResolve(object data, string path, out object? value, out List<(object Value, string Segment, object? Child)> ancestors)
     {
+        ancestors = new();
         if (path.Length == 0)
         {
             value = null;
@@ -106,6 +108,7 @@ internal static class StatePayload
 
             if (TryGetDictionaryValue(value, segment, out object? dictionaryValue, out bool dictionary))
             {
+                ancestors.Add((value, segment, dictionaryValue));
                 value = dictionaryValue;
                 continue;
             }
@@ -116,6 +119,7 @@ internal static class StatePayload
             {
                 if (!TryGetCollectionValue(value, index, out object? collectionValue))
                     return false;
+                ancestors.Add((value, segment, collectionValue));
                 value = collectionValue;
                 continue;
             }
@@ -123,21 +127,15 @@ internal static class StatePayload
             Type type = value.GetType();
             if (value is IList
                 || IsReflectedCollection(type)
-                || type.IsPrimitive
-                || type.IsEnum
-                || type == typeof(decimal)
-                || value is string or DateTime or DateTimeOffset
-                || type.FullName == "BigDouble" && type.Assembly.GetName().Name == "Assembly-CSharp"
-                || type.Assembly.GetName().Name == "ACTk.Runtime" && type.Namespace == "CodeStage.AntiCheat.ObscuredTypes"
-                || type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName is "Il2CppSystem.DateTime" or "Il2CppSystem.DateTimeOffset" or "Il2CppSystem.Object"
-                || type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName?.StartsWith("Il2CppSystem.Nullable`1", StringComparison.Ordinal) == true
-                || type.Assembly.GetName().Name == "UnityEngine.CoreModule" && type.FullName == "UnityEngine.Color")
+                || IsLeafType(type))
                 return false;
 
             PropertyInfo? property = GetProperties(type).FirstOrDefault(property => property.Name == segment);
             if (property is null)
                 return false;
-            value = TryGetPropertyValue(property, value);
+            object? propertyValue = TryGetPropertyValue(property, value);
+            ancestors.Add((value, segment, propertyValue));
+            value = propertyValue;
         }
         return value is null || !IsExcludedType(value.GetType());
     }
@@ -292,7 +290,7 @@ internal static class StatePayload
         _ => path
     };
 
-    private static void WriteValue(Utf8JsonWriter writer, object? value, HashSet<object> references, HashSet<nint> pointers, bool collectionElement, int depth)
+    private static void WriteValue(Utf8JsonWriter writer, object? value, HashSet<object> references, HashSet<nint> pointers, bool collectionElement, int depth, ReferenceLayer? layer = null, IReadOnlyList<(object Value, string Segment, object? Child)>? ancestors = null)
     {
         if (depth > MaxTraversalDepth)
             throw new InvalidOperationException("State traversal exceeded the maximum depth.");
@@ -319,7 +317,7 @@ internal static class StatePayload
         }
         if (type.Assembly.GetName().Name == "ACTk.Runtime" && type.Namespace == "CodeStage.AntiCheat.ObscuredTypes")
         {
-            WriteValue(writer, type.GetMethod("GetDecrypted", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null)!.Invoke(value, null), references, pointers, collectionElement, depth + 1);
+            WriteValue(writer, type.GetMethod("GetDecrypted", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null)!.Invoke(value, null), references, pointers, collectionElement, depth + 1, layer, ancestors);
             return;
         }
         if (type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName == "Il2CppSystem.Object")
@@ -353,7 +351,7 @@ internal static class StatePayload
                 ("UnityEngine", "Color") => wrapper.Unbox<UnityEngine.Color>(),
                 _ => throw new InvalidOperationException($"Unsupported IL2CPP object value {objectNamespace}.{objectName}.")
             };
-            WriteValue(writer, unboxed, references, pointers, collectionElement, depth + 1);
+            WriteValue(writer, unboxed, references, pointers, collectionElement, depth + 1, layer, ancestors);
             return;
         }
         if (type.Assembly.GetName().Name == "UnityEngine.CoreModule" && type.FullName == "UnityEngine.Color")
@@ -385,7 +383,7 @@ internal static class StatePayload
         if (type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName?.StartsWith("Il2CppSystem.Nullable`1", StringComparison.Ordinal) == true)
         {
             if ((bool)type.GetProperty("HasValue")!.GetValue(value)!)
-                WriteValue(writer, type.GetProperty("Value")!.GetValue(value), references, pointers, collectionElement, depth + 1);
+                WriteValue(writer, type.GetProperty("Value")!.GetValue(value), references, pointers, collectionElement, depth + 1, layer, ancestors);
             else
                 writer.WriteNullValue();
             return;
@@ -430,64 +428,126 @@ internal static class StatePayload
             return;
         }
 
+        // Scalar requests return above without inspecting any ancestor members.
+        if (ancestors is not null)
+            foreach (var ancestor in ancestors)
+                layer = new ReferenceLayer(layer, ancestor.Value, GetMembers(ancestor.Value, true, ancestor.Segment, ancestor.Child));
+
+        bool dictionary = value is IDictionary || IsReflectedDictionary(type);
+        bool array = !dictionary && (value is IEnumerable || IsReflectedCollection(type));
+        List<(string? Name, object? Value)> members = GetMembers(value);
+        // Discover every sibling before descending; discovery is separate from
+        // the visited sets so bot[0].prev cannot consume tree.center.
+        ReferenceLayer children = new(layer, value, members);
+        if (array)
+            writer.WriteStartArray();
+        else
+            writer.WriteStartObject();
+        foreach ((string? name, object? member) in members)
+        {
+            bool omitted = member is not null && (IsExcludedType(member.GetType())
+                || IsTrackable(member.GetType()) && !IsLeafType(member.GetType())
+                    && (layer?.Contains(member) == true || IsVisited(member, references, pointers)));
+            if (omitted && !array && !dictionary)
+                continue;
+            if (!array)
+                writer.WritePropertyName(name!);
+            if (omitted)
+                writer.WriteNullValue();
+            else
+                WriteValue(writer, member, references, pointers, array || dictionary, depth + 1, children);
+        }
+        if (array)
+            writer.WriteEndArray();
+        else
+            writer.WriteEndObject();
+    }
+
+    private static List<(string? Name, object? Value)> GetMembers(object value, bool referencesOnly = false, string? selectedProperty = null, object? selectedValue = null)
+    {
+        Type type = value.GetType();
+        List<(string? Name, object? Value)> members = new();
         if (value is IDictionary dictionary)
         {
-            writer.WriteStartObject();
             foreach (DictionaryEntry entry in dictionary)
-            {
-                writer.WritePropertyName(FormatDictionaryKey(entry.Key));
-                WriteValue(writer, entry.Value, references, pointers, true, depth + 1);
-            }
-            writer.WriteEndObject();
-            return;
+                members.Add((FormatDictionaryKey(entry.Key), entry.Value));
+            return members;
         }
         if (IsReflectedDictionary(type))
         {
-            writer.WriteStartObject();
             object enumerator = type.GetMethod("GetEnumerator", BindingFlags.Public | BindingFlags.Instance)!.Invoke(value, null)!;
             MethodInfo moveNext = enumerator.GetType().GetMethod("MoveNext", BindingFlags.Public | BindingFlags.Instance)!;
             PropertyInfo current = enumerator.GetType().GetProperty("Current", BindingFlags.Public | BindingFlags.Instance)!;
             while ((bool)moveNext.Invoke(enumerator, null)!)
             {
                 object pair = current.GetValue(enumerator)!;
-                writer.WritePropertyName(FormatDictionaryKey(pair.GetType().GetProperty("Key")!.GetValue(pair)!));
-                WriteValue(writer, pair.GetType().GetProperty("Value")!.GetValue(pair), references, pointers, true, depth + 1);
+                members.Add((FormatDictionaryKey(pair.GetType().GetProperty("Key")!.GetValue(pair)!), pair.GetType().GetProperty("Value")!.GetValue(pair)));
             }
-            writer.WriteEndObject();
-            return;
+            return members;
         }
         if (IsReflectedCollection(type))
         {
-            writer.WriteStartArray();
             int count = GetCollectionCount(value);
             PropertyInfo item = GetCollectionItem(type);
             for (int index = 0; index < count; index++)
-                WriteValue(writer, item.GetValue(value, new object[] { index }), references, pointers, true, depth + 1);
-            writer.WriteEndArray();
-            return;
+                members.Add((null, item.GetValue(value, new object[] { index })));
+            return members;
         }
         if (value is IEnumerable enumerable)
         {
-            writer.WriteStartArray();
             foreach (object? item in enumerable)
-                WriteValue(writer, item, references, pointers, true, depth + 1);
-            writer.WriteEndArray();
-            return;
+                members.Add((null, item));
+            return members;
         }
 
-        writer.WriteStartObject();
         foreach (PropertyInfo property in GetProperties(type))
-        {
-            object? propertyValue = TryGetPropertyValue(property, value);
-            if (IsExcludedType(propertyValue?.GetType()))
-                continue;
-            if (propertyValue is not null && IsTrackable(propertyValue.GetType()) && IsVisited(propertyValue, references, pointers))
-                continue;
-            writer.WritePropertyName(property.Name);
-            WriteValue(writer, propertyValue, references, pointers, false, depth + 1);
-        }
-        writer.WriteEndObject();
+            if (!referencesOnly || IsTrackable(property.PropertyType) && !IsLeafType(property.PropertyType))
+                members.Add((property.Name, property.Name == selectedProperty ? selectedValue : TryGetPropertyValue(property, value)));
+        return members;
     }
+
+    private sealed class ReferenceLayer
+    {
+        private readonly ReferenceLayer? previous;
+        private readonly HashSet<object> references = new(ReferenceEqualityComparer.Instance);
+        private readonly HashSet<nint> pointers = new();
+
+        public ReferenceLayer(ReferenceLayer? previous, object value, List<(string? Name, object? Value)> members)
+        {
+            this.previous = previous;
+            TryVisit(value, references, pointers);
+            foreach (var member in members)
+                if (member.Value is not null && IsTrackable(member.Value.GetType()) && !IsLeafType(member.Value.GetType()) && !IsExcludedType(member.Value.GetType()))
+                    TryVisit(member.Value, references, pointers);
+        }
+
+        public bool Contains(object value)
+        {
+            if (TryGetPointer(value, out nint pointer))
+            {
+                for (ReferenceLayer? layer = this; layer is not null; layer = layer.previous)
+                    if (layer.pointers.Contains(pointer))
+                        return true;
+            }
+            else
+                for (ReferenceLayer? layer = this; layer is not null; layer = layer.previous)
+                    if (layer.references.Contains(value))
+                        return true;
+            return false;
+        }
+    }
+
+    private static bool IsLeafType(Type type) => LeafTypes.GetOrAdd(type, type =>
+    {
+        if (type.IsPrimitive || type.IsEnum || type == typeof(decimal) || type == typeof(string) || type == typeof(DateTime) || type == typeof(DateTimeOffset))
+            return true;
+        string? assembly = type.Assembly.GetName().Name;
+        return assembly == "Assembly-CSharp" && type.FullName == "BigDouble"
+            || assembly == "ACTk.Runtime" && type.Namespace == "CodeStage.AntiCheat.ObscuredTypes"
+            || assembly == "Il2Cppmscorlib" && type.FullName is "Il2CppSystem.DateTime" or "Il2CppSystem.DateTimeOffset" or "Il2CppSystem.Object"
+            || assembly == "Il2Cppmscorlib" && type.FullName?.StartsWith("Il2CppSystem.Nullable`1", StringComparison.Ordinal) == true
+            || assembly == "UnityEngine.CoreModule" && type.FullName == "UnityEngine.Color";
+    });
 
     private static bool TryWriteNumber(Utf8JsonWriter writer, object value)
     {

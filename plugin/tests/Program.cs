@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
@@ -9,6 +10,12 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using RevIdle.ScoreTelemetry;
+
+if (args.Contains("--state-benchmark", StringComparer.Ordinal))
+{
+    StatePayloadBenchmark();
+    Environment.Exit(0);
+}
 
 StatePayloadFormatsBigDoubleValues();
 ClientProcessBuildsNonInteractableLaunchArguments();
@@ -29,6 +36,12 @@ StatePayloadRejectsRunawayValueTraversal();
 StatePayloadRejectsImplementationPropertyPaths();
 StatePayloadExcludesIl2CppDelegatesAndUnityEvents();
 StatePayloadExcludesRuntimeTypesAtEveryBoundary();
+StatePayloadFiltersEarlierLayerReferences();
+StatePayloadKeepsLaterLayerChildrenAndDistinctSameTypeObjects();
+StatePayloadPreservesDilationTreeCenterAfterBottomBackReference();
+StatePayloadPreservesNestedUnityZodiacData();
+StatePayloadAvoidsUnrelatedReadsForLeafRequests();
+StatePayloadFiltersEarlierLayersByNativeIdentity();
 BridgePacketPayloadsMatchSharedFixture();
 await BridgeStateHandlerPreservesMixedJsonAndSelectedKeys();
 await BridgeStateHandlerReportsMissingData();
@@ -107,7 +120,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("114 tests passed.");
+System.Console.WriteLine("120 tests passed.");
 
 static void ClientProcessConsumesConsoleClearWithoutLoggingIt()
 {
@@ -2638,6 +2651,195 @@ static void StatePayloadExcludesRuntimeTypesAtEveryBoundary()
     Equal(StatePayloadStatus.InvalidPath, StatePayload.Encode(data, new[] { "gameData.Values.1" }, out _, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));
 }
 
+static void StatePayloadFiltersEarlierLayerReferences()
+{
+    var data = new LayeredStateFixture();
+    data.attacks.relics.Add(new LayeredRelicFixture
+    {
+        Attacks = data.attacks,
+        Minerals = data.minerals,
+        Singularity = data.singularity,
+        amount = 15,
+        totalCost = 42
+    });
+    data.attacks.relics.Add(new LayeredRelicFixture
+    {
+        Attacks = data.attacks,
+        Minerals = data.minerals,
+        Singularity = data.singularity,
+        Name = "second",
+        amount = 16,
+        totalCost = 43
+    });
+
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.attacks.relics.0" }, out byte[] payload, out _), nameof(StatePayloadFiltersEarlierLayerReferences));
+    Equal("{\"gameData.attacks.relics.0\":{\"Name\":\"\",\"amount\":15,\"totalCost\":42}}", Encoding.UTF8.GetString(payload), nameof(StatePayloadFiltersEarlierLayerReferences));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.attacks.relics.0.Attacks" }, out byte[] selectedPayload, out _), nameof(StatePayloadFiltersEarlierLayerReferences));
+    Equal("{\"gameData.attacks.relics.0.Attacks\":{\"Name\":\"attacks\"}}", Encoding.UTF8.GetString(selectedPayload), nameof(StatePayloadFiltersEarlierLayerReferences));
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.attacks.relics" }, out byte[] collectionPayload, out _), nameof(StatePayloadFiltersEarlierLayerReferences));
+    Equal("{\"gameData.attacks.relics\":[{\"Name\":\"\",\"amount\":15,\"totalCost\":42},{\"Name\":\"second\",\"amount\":16,\"totalCost\":43}]}", Encoding.UTF8.GetString(collectionPayload), nameof(StatePayloadFiltersEarlierLayerReferences));
+
+    var root = new Dictionary<string, object>();
+    root["items"] = new[] { new Dictionary<string, object> { ["Root"] = root, ["Value"] = 1 } };
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(root, new[] { "gameData.items.0" }, out byte[] rootPayload, out _), nameof(StatePayloadFiltersEarlierLayerReferences));
+    Equal("{\"gameData.items.0\":{\"Root\":null,\"Value\":1}}", Encoding.UTF8.GetString(rootPayload), nameof(StatePayloadFiltersEarlierLayerReferences));
+
+    var sibling = new Dictionary<string, object> { ["Value"] = 2 };
+    root["items"] = new[] { new Dictionary<string, object> { ["Peer"] = sibling, ["Value"] = 1 }, sibling };
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(root, new[] { "gameData.items.0", "gameData.items" }, out byte[] siblingPayload, out _), nameof(StatePayloadFiltersEarlierLayerReferences));
+    Equal("{\"gameData.items.0\":{\"Peer\":null,\"Value\":1},\"gameData.items\":[{\"Peer\":null,\"Value\":1},{\"Value\":2}]}", Encoding.UTF8.GetString(siblingPayload), nameof(StatePayloadFiltersEarlierLayerReferences));
+}
+
+static void StatePayloadKeepsLaterLayerChildrenAndDistinctSameTypeObjects()
+{
+    var data = new LayeredStateFixture
+    {
+        children = new List<LayeredChildFixture>
+        {
+            new() { Value = "first" },
+            new() { Value = "second" }
+        }
+    };
+
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.children" }, out byte[] payload, out _), nameof(StatePayloadKeepsLaterLayerChildrenAndDistinctSameTypeObjects));
+    Equal("{\"gameData.children\":[{\"Value\":\"first\"},{\"Value\":\"second\"}]}", Encoding.UTF8.GetString(payload), nameof(StatePayloadKeepsLaterLayerChildrenAndDistinctSameTypeObjects));
+}
+
+static void StatePayloadPreservesDilationTreeCenterAfterBottomBackReference()
+{
+    var data = new DilationTreeFixture
+    {
+        eternity = new DilationEternityFixture
+        {
+            dilationTree = new DilationTreeContainerFixture
+            {
+                bot = new List<DilationBottomFixture>(),
+                center = new DilationCenterFixture { level = 2 }
+            }
+        }
+    };
+    DilationBottomFixture bottom = new() { level = 1, prev = data.eternity.dilationTree.center };
+    data.eternity.dilationTree.bot.Add(bottom);
+
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.eternity.dilationTree" }, out byte[] payload, out _), nameof(StatePayloadPreservesDilationTreeCenterAfterBottomBackReference));
+    Equal("{\"gameData.eternity.dilationTree\":{\"bot\":[{\"level\":1}],\"center\":{\"level\":2}}}", Encoding.UTF8.GetString(payload), nameof(StatePayloadPreservesDilationTreeCenterAfterBottomBackReference));
+}
+
+static void StatePayloadPreservesNestedUnityZodiacData()
+{
+    var data = new UnityStateFixture
+    {
+        unity = new UnityFixture
+        {
+            NextZodiacs = new List<UnityZodiacFixture>
+            {
+                new()
+                {
+                    Element = UnityElementFixture.Fire,
+                    stats = new UnityZodiacStatsFixture { level = 7 },
+                    Elements = new UnityElementsFixture { Name = "fire" }
+                }
+            }
+        }
+    };
+
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.unity.NextZodiacs.0" }, out byte[] payload, out _), nameof(StatePayloadPreservesNestedUnityZodiacData));
+    Equal("{\"gameData.unity.NextZodiacs.0\":{\"Element\":\"Fire\",\"Elements\":{\"Name\":\"fire\"},\"stats\":{\"level\":7}}}", Encoding.UTF8.GetString(payload), nameof(StatePayloadPreservesNestedUnityZodiacData));
+}
+
+static void StatePayloadAvoidsUnrelatedReadsForLeafRequests()
+{
+    LeafReadFixture data = new();
+
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData.child.Value" }, out byte[] payload, out _), nameof(StatePayloadAvoidsUnrelatedReadsForLeafRequests));
+    Equal("{\"gameData.child.Value\":\"child\"}", Encoding.UTF8.GetString(payload), nameof(StatePayloadAvoidsUnrelatedReadsForLeafRequests));
+    Equal(0, data.UnrelatedReads, nameof(StatePayloadAvoidsUnrelatedReadsForLeafRequests));
+    Equal(1, data.ChildReads, nameof(StatePayloadAvoidsUnrelatedReadsForLeafRequests));
+    Equal(1, data.ValueReads, nameof(StatePayloadAvoidsUnrelatedReadsForLeafRequests));
+
+    LeafReadFixture parentData = new();
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(parentData, new[] { "gameData.child" }, out byte[] parentPayload, out _), nameof(StatePayloadAvoidsUnrelatedReadsForLeafRequests));
+    Equal("{\"gameData.child\":{\"Value\":\"child\"}}", Encoding.UTF8.GetString(parentPayload), nameof(StatePayloadAvoidsUnrelatedReadsForLeafRequests));
+    Equal(0, parentData.UnrelatedReads, nameof(StatePayloadAvoidsUnrelatedReadsForLeafRequests));
+    Equal(1, parentData.ChildReads, nameof(StatePayloadAvoidsUnrelatedReadsForLeafRequests));
+    Equal(1, parentData.ValueReads, nameof(StatePayloadAvoidsUnrelatedReadsForLeafRequests));
+}
+
+static void StatePayloadBenchmark()
+{
+    LayeredStateFixture data = new();
+    for (int index = 0; index < 80; index++)
+        data.attacks.relics.Add(new LayeredRelicFixture { Attacks = data.attacks, Minerals = data.minerals, Singularity = data.singularity, amount = index, totalCost = index + 1 });
+    DilationCenterFixture center = new() { level = 2 };
+    DilationTreeFixture tree = new()
+    {
+        eternity = new DilationEternityFixture
+        {
+            dilationTree = new DilationTreeContainerFixture
+            {
+                bot = new List<DilationBottomFixture> { new() { level = 1, prev = center } },
+                center = center
+            }
+        }
+    };
+
+    (string Name, object Data, string[] Paths)[] cases =
+    {
+        ("scalar leaf", data, new[] { "gameData.attacks.relics.0.amount" }),
+        ("one relic with backrefs", data, new[] { "gameData.attacks.relics.0" }),
+        ("all 80 relics", data, new[] { "gameData.attacks.relics" }),
+        ("DTP-like tree", tree, new[] { "gameData.eternity.dilationTree" })
+    };
+
+    foreach ((string name, object benchmarkData, string[] paths) in cases)
+    {
+        for (int warmup = 0; warmup < 200; warmup++)
+            StatePayload.Encode(benchmarkData, paths, out _, out _);
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        int payloadSize = 0;
+        const int iterations = 2000;
+        StatePayloadStatus status = StatePayloadStatus.Success;
+        for (int iteration = 0; iteration < iterations; iteration++)
+        {
+            status = StatePayload.Encode(benchmarkData, paths, out byte[] payload, out _);
+            if (status != StatePayloadStatus.Success)
+                throw new InvalidOperationException($"{name} benchmark failed: {status}");
+            payloadSize = payload.Length;
+        }
+        stopwatch.Stop();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        System.Console.WriteLine($"{name}: status={status}, mean_us={stopwatch.Elapsed.TotalMilliseconds * 1000 / iterations:F2}, allocated_bytes_per_request={allocated / iterations}, payload_bytes={payloadSize}");
+    }
+}
+
+static void StatePayloadFiltersEarlierLayersByNativeIdentity()
+{
+    ModuleBuilder module = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("LayerIdentityFixture"), AssemblyBuilderAccess.Run).DefineDynamicModule("main");
+    TypeBuilder baseType = module.DefineType("Il2CppInterop.Runtime.InteropTypes.Il2CppObjectBase", TypeAttributes.Public | TypeAttributes.Class);
+    MethodBuilder pointer = baseType.DefineMethod("get_Pointer", MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig, typeof(nint), Type.EmptyTypes);
+    pointer.GetILGenerator().Emit(OpCodes.Ldc_I4, 42);
+    pointer.GetILGenerator().Emit(OpCodes.Conv_I);
+    pointer.GetILGenerator().Emit(OpCodes.Ret);
+    baseType.DefineProperty("Pointer", PropertyAttributes.None, typeof(nint), null).SetGetMethod(pointer);
+    TypeBuilder nodeType = module.DefineType("NativeLayerNode", TypeAttributes.Public | TypeAttributes.Class, baseType.CreateType());
+    MethodBuilder level = nodeType.DefineMethod("get_level", MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig, typeof(int), Type.EmptyTypes);
+    level.GetILGenerator().Emit(OpCodes.Ldc_I4, 2);
+    level.GetILGenerator().Emit(OpCodes.Ret);
+    nodeType.DefineProperty("level", PropertyAttributes.None, typeof(int), null).SetGetMethod(level);
+    Type node = nodeType.CreateType();
+    var data = new Dictionary<string, object>
+    {
+        ["bot"] = new[] { new Dictionary<string, object> { ["prev"] = Activator.CreateInstance(node)! } },
+        ["center"] = Activator.CreateInstance(node)!
+    };
+
+    Equal("{\"bot\":[{\"prev\":null}],\"center\":{\"level\":2}}", StatePayload.EncodeValue(data).GetRawText(), nameof(StatePayloadFiltersEarlierLayersByNativeIdentity));
+}
+
 static async Task<(TcpClient Client, WebSocket Socket)> ConnectRawClient(WsConnection server)
 {
     TcpClient client = new();
@@ -2966,4 +3168,150 @@ sealed class ExcludedRuntimeFixture
     public object Selected { get; init; } = new();
     public object Unity { get; init; } = new();
     public object[] Values { get; init; } = Array.Empty<object>();
+}
+
+sealed class LayeredStateFixture
+{
+    public LayeredAttackFixture attacks { get; init; } = new();
+    public List<LayeredChildFixture> children { get; init; } = new();
+    public LayeredMineralsFixture minerals { get; init; } = new();
+    public LayeredSingularityFixture singularity { get; init; } = new();
+}
+
+sealed class LayeredAttackFixture
+{
+    public string Name { get; init; } = "attacks";
+    public List<LayeredRelicFixture> relics { get; init; } = new();
+}
+
+sealed class LayeredRelicFixture
+{
+    public LayeredAttackFixture? Attacks { get; init; }
+    public LayeredMineralsFixture? Minerals { get; init; }
+    public LayeredSingularityFixture? Singularity { get; init; }
+    public string Name { get; init; } = "";
+    public int amount { get; init; }
+    public int totalCost { get; init; }
+}
+
+sealed class LayeredMineralsFixture
+{
+    public string Name { get; init; } = "minerals";
+}
+
+sealed class LayeredSingularityFixture
+{
+    public string Name { get; init; } = "singularity";
+}
+
+sealed class LayeredChildFixture
+{
+    public string Value { get; init; } = "";
+}
+
+sealed class DilationTreeFixture
+{
+    public DilationEternityFixture eternity { get; init; } = new();
+}
+
+sealed class DilationEternityFixture
+{
+    public DilationTreeContainerFixture dilationTree { get; init; } = new();
+}
+
+sealed class DilationTreeContainerFixture
+{
+    public List<DilationBottomFixture> bot { get; init; } = new();
+    public DilationCenterFixture? center { get; init; }
+}
+
+sealed class DilationBottomFixture
+{
+    public int level { get; init; }
+    public DilationCenterFixture? prev { get; init; }
+}
+
+sealed class DilationCenterFixture
+{
+    public int level { get; init; }
+}
+
+sealed class UnityStateFixture
+{
+    public UnityFixture unity { get; init; } = new();
+}
+
+sealed class UnityFixture
+{
+    public List<UnityZodiacFixture> NextZodiacs { get; init; } = new();
+}
+
+enum UnityElementFixture
+{
+    Fire,
+    Water
+}
+
+sealed class UnityZodiacFixture
+{
+    public UnityElementFixture Element { get; init; }
+    public UnityElementsFixture? Elements { get; init; }
+    public UnityZodiacStatsFixture? stats { get; init; }
+}
+
+sealed class UnityElementsFixture
+{
+    public string Name { get; init; } = "";
+}
+
+sealed class UnityZodiacStatsFixture
+{
+    public int level { get; init; }
+}
+
+sealed class LeafReadFixture
+{
+    private int unrelatedReads;
+    private int childReads;
+
+    public LeafChildFixture child
+    {
+        get
+        {
+            childReads++;
+            return new LeafChildFixture(this);
+        }
+    }
+
+    public string unrelated
+    {
+        get
+        {
+            unrelatedReads++;
+            return "unrelated";
+        }
+    }
+
+    public int UnrelatedReads => unrelatedReads;
+    public int ChildReads => childReads;
+    public int ValueReads { get; internal set; }
+}
+
+sealed class LeafChildFixture
+{
+    private readonly LeafReadFixture owner;
+
+    public LeafChildFixture(LeafReadFixture owner)
+    {
+        this.owner = owner;
+    }
+
+    public string Value
+    {
+        get
+        {
+            owner.ValueReads++;
+            return "child";
+        }
+    }
 }

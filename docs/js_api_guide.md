@@ -2,7 +2,7 @@
 
 This guide documents the JavaScript surface available to scripts: the QuickJS runtime, the host-provided `rev` and `console` globals, entry-module lifecycle hooks, and every export from `scripts/lib`.
 
-Scripts may be JavaScript (`.js`) or TypeScript (`.ts`) ES modules. Signatures in this guide use TypeScript notation. Game state paths are cataloged separately in [STATE_KEYS.md](../plugin/STATE_KEYS.md) and the searchable [state graph](../plugin/STATE_GRAPH.html).
+Scripts may be JavaScript (`.js`) or TypeScript (`.ts`) ES modules. Signatures in this guide use TypeScript notation. Expected returned state fields and paths are cataloged separately in [STATE_KEYS.md](../plugin/STATE_KEYS.md) and the searchable [state graph](../plugin/STATE_GRAPH.html), using a best-effort static model.
 
 ## Script shape and scope
 
@@ -146,6 +146,8 @@ console.log(ep, values.IP, values["gameData.eternity.dtpSpent"]);
 ```
 
 One key returns the selected scalar, object, array, or `null` directly. Two or more keys return a flat object keyed by the exact requested paths. Each request is a fresh WebSocket request to the plugin and rejects when disconnected, after the two-second response timeout, for an invalid path, or on serialization/protocol failure.
+
+Nested values use [earlier-layer reference filtering](../plugin/STATE_KEYS.md#nested-object-references). For example, a dilation tree response exposes `center.level` directly, and branch upgrades omit `prev` references to that center. Explicit request paths and aliases remain valid; the state manual describes which references are omitted from broader responses.
 
 The returned JSON represents game values as follows:
 

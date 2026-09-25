@@ -98,11 +98,11 @@ function Get-GraphNodeTypes([Mono.Cecil.TypeReference]$reference) {
     if ($reference -is [Mono.Cecil.ArrayType]) { return @(Get-GraphNodeTypes $reference.ElementType) }
     if ($reference.IsGenericInstance) {
         $found = [System.Collections.Generic.List[object]]::new()
-        foreach ($argument in $reference.GenericArguments) { foreach ($type in @(Get-GraphNodeTypes $argument)) { if ($null -ne $type -and -not ($found | Where-Object FullName -eq $type.FullName)) { [void]$found.Add($type) } } }
+        foreach ($argument in $(if ($reference.Name.StartsWith('Dictionary')) { $reference.GenericArguments[1] } else { $reference.GenericArguments })) { foreach ($type in @(Get-GraphNodeTypes $argument)) { if ($null -ne $type -and -not ($found | Where-Object FullName -eq $type.FullName)) { [void]$found.Add($type) } } }
         return @($found)
     }
     $definition = Get-TypeDefinition $reference
-    if ($null -ne $definition -and $definition.Module.Assembly.Name.Name -eq 'Assembly-CSharp' -and $definition.Name -notin $primitiveNodeTypes) { return @($definition) }
+    if ($null -ne $definition -and $definition.Module.Assembly.Name.Name -eq 'Assembly-CSharp' -and -not $definition.IsEnum -and $definition.Name -notin $primitiveNodeTypes) { return @($definition) }
     return @()
 }
 
@@ -126,14 +126,34 @@ $gameData = @($module.Types | Where-Object FullName -eq 'GameData')[0]
 if ($null -eq $gameData) { throw 'GameData was not found in Assembly-CSharp.dll.' }
 $reachable = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
 $pending = [System.Collections.Generic.Queue[object]]::new()
-$pending.Enqueue($gameData)
+$pending.Enqueue([pscustomobject]@{ Type = $gameData; EarlierTypes = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal) })
+# Approximate identity using the first breadth-first GameData route to each
+# type. Only plain object references are pruned: collections and scalar values
+# remain fields, even when their contents may be filtered at runtime.
 while ($pending.Count -gt 0) {
-    $type = $pending.Dequeue()
+    $current = $pending.Dequeue()
+    $type = $current.Type
     if ($reachable.ContainsKey($type.FullName)) { continue }
-    $properties = @(Get-EligibleProperties $type)
+    $properties = @(Get-EligibleProperties $type | Where-Object {
+        $definition = Get-TypeDefinition $_.PropertyType
+        $null -eq $definition -or $definition.IsValueType -or $definition.Name -in $primitiveNodeTypes -or -not $current.EarlierTypes.Contains($_.PropertyType.FullName)
+    })
     $reachable[$type.FullName] = [pscustomobject]@{ Type = $type; Properties = $properties }
+    $childrenEarlierTypes = [System.Collections.Generic.HashSet[string]]::new($current.EarlierTypes, [StringComparer]::Ordinal)
+    [void]$childrenEarlierTypes.Add($type.FullName)
     foreach ($property in $properties) {
-        foreach ($child in @(Get-GameplayTypes $property.PropertyType)) { if (-not $reachable.ContainsKey($child.FullName)) { $pending.Enqueue($child) } }
+        $definition = Get-TypeDefinition $property.PropertyType
+        if ($null -ne $definition -and -not $definition.IsValueType -and -not $property.PropertyType.IsGenericInstance -and $property.PropertyType -isnot [Mono.Cecil.ArrayType] -and $definition.Name -notin $primitiveNodeTypes) {
+            [void]$childrenEarlierTypes.Add($property.PropertyType.FullName)
+        }
+    }
+    foreach ($property in $properties) {
+        foreach ($child in @(Get-GameplayTypes $property.PropertyType)) {
+            if ($reachable.ContainsKey($child.FullName)) { continue }
+            $earlierTypes = [System.Collections.Generic.HashSet[string]]::new($childrenEarlierTypes, [StringComparer]::Ordinal)
+            if ($null -ne (Get-CollectionDescription $property.PropertyType)) { [void]$earlierTypes.Add($child.FullName) }
+            $pending.Enqueue([pscustomobject]@{ Type = $child; EarlierTypes = $earlierTypes })
+        }
     }
 }
 
@@ -157,7 +177,7 @@ $allRoots = [System.Collections.Generic.List[object]]::new()
 [void]$allRoots.Add([pscustomobject]@{ Key = 'gameData'; Type = $gameData; Properties = @(Get-EligibleProperties $gameData) })
 foreach ($root in $extraRoots) { [void]$allRoots.Add($root) }
 $lines = [System.Collections.Generic.List[string]]::new()
-$lines.Add('# Complete state path reference')
+$lines.Add('# Returned state field reference')
 $lines.Add('')
 $propertyCount = 0
 foreach ($entry in $reachable.Values) { $propertyCount += @($entry.Properties).Count }
@@ -169,6 +189,24 @@ $lines.Add('')
 $lines.Add('There is no implicit or default root. Every path is case-sensitive public property names separated by `.`, and the first segment must always name one of the root keys below -- `gameData` included, the same as any `*Controller` root. Numeric segments index arrays/lists; dictionary segments resolve string, integer, or enum keys. Collections are documented below each property. A keyless request is rejected; selected requests return a flat object keyed by the requested path.')
 $lines.Add('')
 $lines.Add('JSON follows the serializer policy: BigDouble and large integers are strings; safe integers, finite floating-point values, booleans, strings, enums, dates, arrays/lists, dictionaries, and gameplay objects use their native JSON forms. Non-finite floating-point values are `"NaN"`, `"Infinity"`, or `"-Infinity"`; repeated collection objects serialize as `null` to preserve indexes.')
+$lines.Add('')
+$lines.Add('## Nested object references')
+$lines.Add('')
+$lines.Add('The tables and graph are a best-effort static model of returned fields, including scalar values, collections, and nested objects. For each gameplay type, the generator follows its first shortest route from `gameData` and omits plain object fields whose types are already exposed by earlier layers. Collections remain fields; their element types seed the next layer to hide likely sibling/back-references. Enum fields remain scalar values. Controller roots keep their directly exposed fields.')
+$lines.Add('')
+$lines.Add('The runtime serializer uses actual object identity (native pointers for IL2CPP), not types. It omits references to earlier path ancestors or their immediate members, discovering all immediate children before expanding any child. The static model can hide distinct objects of the same type or retain references that share an instance. Different request paths, nulls, and repeated references can also change the returned shape; this is not a live snapshot or a guarantee for every instance.')
+$lines.Add('')
+$lines.Add('Discovering or filtering a reference does not mark it as serialized, so a deeper back-reference cannot consume a direct member that appears later alphabetically. Filtered object properties are omitted; filtered array/list entries and dictionary values become `null` to preserve indexes and keys. Same-layer repeated references retain first-occurrence serialization. An explicitly selected value is always eligible for serialization, but its children still follow these rules.')
+$lines.Add('')
+$lines.Add('| Request | Nested response behavior |')
+$lines.Add('| --- | --- |')
+$lines.Add('| `gameData.attacks.relics.<n>` | Keeps relic values such as `amount` and `totalCost`; omits `Attacks`, `Minerals`, `Singularity`, and other references to systems exposed by `gameData`. |')
+$lines.Add('| `gameData.eternity.dilationTree` or `DT` | Read `center.level` directly. A branch upgrade pointing to that center through `prev` omits the back-reference. |')
+$lines.Add('| `gameData.unity.NextZodiacs.<n>` | Keeps `Element`, nested `stats`, and other children that do not refer to earlier layers. |')
+$lines.Add('')
+$lines.Add('Explicit paths and aliases are unchanged by this documentation projection. For example, `gameData.attacks.relics.<n>.Minerals` and `gameData.eternity.dilationTree.bot.0.prev.level` can still be requested explicitly even though those back-references are excluded from the field tables and graph.')
+$lines.Add('')
+$lines.Add('Composite requests inspect immediate reference-valued members of their path ancestors, including sibling collection entries, without expanding those sibling subtrees. This adds discovery work for indexed object requests; scalar leaf requests skip discovery. An unreadable ancestor collection can still fail a composite request, so this filtering does not guarantee that serialization errors disappear.')
 $lines.Add('')
 $lines.Add('## Compatibility aliases')
 $lines.Add('')
@@ -187,7 +225,7 @@ $lines.Add('')
 foreach ($root in $extraRoots) {
     $lines.Add([string]::Format('### `{0}` (root key `{1}`)', $root.Type.FullName, $root.Key))
     $lines.Add('')
-    $lines.Add('| Property | CLR type | Collection path extension |')
+    $lines.Add('| Field | CLR type | Collection path extension |')
     $lines.Add('| --- | --- | --- |')
     foreach ($property in $root.Properties) {
         $typeLabel = Get-TypeLabel $property.PropertyType
@@ -206,7 +244,16 @@ $sortedEntries.Sort([Comparison[object]]{ param($left, $right) [StringComparer]:
 foreach ($entry in $sortedEntries) {
     $lines.Add([string]::Format('### `{0}`', $entry.Type.FullName.Replace('/', '.')))
     $lines.Add('')
-    $lines.Add('| Property | CLR type | Collection path extension |')
+    if ($entry.Type.IsEnum) {
+        $lines.Add('| Variant | Value |')
+        $lines.Add('| --- | --- |')
+        foreach ($variant in $entry.Type.Fields | Where-Object IsLiteral) {
+            $lines.Add([string]::Format('| `{0}` | `{1}` |', $variant.Name, [Convert]::ToString($variant.Constant, [Globalization.CultureInfo]::InvariantCulture)))
+        }
+        $lines.Add('')
+        continue
+    }
+    $lines.Add('| Field | CLR type | Collection path extension |')
     $lines.Add('| --- | --- | --- |')
     foreach ($property in $entry.Properties) {
         $typeLabel = Get-TypeLabel $property.PropertyType
@@ -228,7 +275,7 @@ foreach ($entry in $reachable.Values) {
 
 $edges = [System.Collections.Generic.List[object]]::new()
 foreach ($entry in $reachable.Values) {
-    if ($entry.Type.Name -in $primitiveNodeTypes) { continue }
+    if ($entry.Type.IsEnum -or $entry.Type.Name -in $primitiveNodeTypes) { continue }
     foreach ($property in $entry.Properties) {
         $propertyType = $property.PropertyType
         $collection = Get-CollectionDescription $propertyType
@@ -284,7 +331,14 @@ $jsonLines.Add('  "nodes": [')
 $sortedNodeNames = @($graphNodeNames) | Sort-Object
 for ($i = 0; $i -lt $sortedNodeNames.Count; $i++) {
     $comma = if ($i -eq $sortedNodeNames.Count - 1) { '' } else { ',' }
-    $jsonLines.Add("    {`"id`": $(ConvertTo-JsonString $sortedNodeNames[$i])}$comma")
+    if ($reachable.ContainsKey($sortedNodeNames[$i]) -and $reachable[$sortedNodeNames[$i]].Type.IsEnum) {
+        $variants = @($reachable[$sortedNodeNames[$i]].Type.Fields | Where-Object IsLiteral | ForEach-Object {
+            "{`"name`": $(ConvertTo-JsonString $_.Name), `"value`": $(ConvertTo-JsonString ([Convert]::ToString($_.Constant, [Globalization.CultureInfo]::InvariantCulture)))}"
+        }) -join ', '
+        $jsonLines.Add("    {`"id`": $(ConvertTo-JsonString $sortedNodeNames[$i]), `"variants`": [$variants]}$comma")
+    } else {
+        $jsonLines.Add("    {`"id`": $(ConvertTo-JsonString $sortedNodeNames[$i])}$comma")
+    }
 }
 $jsonLines.Add('  ],')
 $jsonLines.Add('  "edges": [')
