@@ -361,6 +361,7 @@ public sealed class ScoreTicker : MonoBehaviour
     private static extern bool IsWindowVisible(nint window);
 
     private ControlOverlay? _controlOverlay;
+    private DisplayRelicsItem[] _relicItems = Array.Empty<DisplayRelicsItem>();
 
     public ScoreTicker(IntPtr pointer) : base(pointer)
     {
@@ -368,6 +369,26 @@ public sealed class ScoreTicker : MonoBehaviour
 
     public void Update()
     {
+        if (GameController.data != null)
+        {
+            if (_relicItems.Length == 0 || _relicItems.Any(item => item == null))
+            {
+                _relicItems = Resources.FindObjectsOfTypeAll<DisplayRelicsItem>()
+                    .Where(item => item != null && item.gameObject.scene.IsValid()).ToArray();
+                foreach (DisplayRelicsItem item in _relicItems)
+                {
+                    UIBuffer? buffer = item.GetComponentInParent<UIBuffer>(true);
+                    if (buffer != null)
+                        buffer.enabled = false;
+                    item.gameObject.SetActive(true);
+                }
+            }
+            // Hidden tabs do not run DisplayRelicsItem.Update, but their buttons remain callable.
+            foreach (DisplayRelicsItem item in _relicItems)
+                if (item.btnBuy != null)
+                    item.btnBuy.interactable = item.CanBuy;
+        }
+
         if (Application.isFocused && Input.GetKeyDown(KeyCode.F7))
         {
             nint consoleWindow = Plugin.GetConsoleWindow();
