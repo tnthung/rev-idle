@@ -105,7 +105,7 @@ A connection transition can cancel an in-flight entry invocation. When connectio
 
 `rev.stop()` inside a hook has no effect on the session. Only a default invocation's stop request is observed.
 
-A pause can also cancel an in-flight invocation. Module state remains loaded and invocation restarts after resume. Host-controlled game/window actions are gated while paused: `click`, `clickn`, `scroll`, `drag`, `press`, `invoke`, `scrollIntoView`, `transfer`, `resize`, and clipboard writes do nothing, while clipboard reads return `""`. State requests, file methods, `shell`, `global`, console output, `sleep`, and `stop` are not gated.
+A pause can also cancel an in-flight invocation. Module state remains loaded and invocation restarts after resume. Host-controlled game/window actions are gated while paused: `click`, `clickn`, `scroll`, `drag`, `press`, `invoke`, `input`, `scrollIntoView`, `transfer`, `resize`, and clipboard writes do nothing, while clipboard reads return `""`. State requests, file methods, `shell`, `global`, console output, `sleep`, and `stop` are not gated.
 
 ## `rev`
 
@@ -117,6 +117,7 @@ A pause can also cancel an in-flight invocation. Module state remains loaded and
 | --- | --- | --- |
 | `rev.state(...keys: string[])` | `Promise<JSON value>` | Requests fresh game state. One key unwraps that value; multiple keys return a flat object. No keys are rejected by the plugin. |
 | `rev.invoke(path: string)` | `Promise<void>` | Invokes a button or checkbox at an exact Unity hierarchy path. |
+| `rev.input(path: string, text: string)` | `Promise<void>` | Sets an editable Unity input field's text and fires its end-edit callback. |
 | `rev.scrollIntoView(path: string)` | `Promise<void>` | Scrolls containing Unity scroll views until an exact hierarchy path is visible. |
 | `rev.transfer(source: string, destination: string)` | `Promise<void>` | Dispatches drag/drop between two exact Unity slot paths. |
 | `rev.slot(path: string)` | `Promise<unknown>` | Reads the contained item's data, or `null` when the slot is empty. |
@@ -175,6 +176,15 @@ Coordinates are signed client-area pixels: `(0, 0)` is the top left. All coordin
 `press` accepts one ASCII letter/digit or one of: `left`, `right`, `up`, `down`, `enter`, `escape`, `space`, `tab`, `backspace`, and `f1` through `f12`.
 
 `invoke` rejects an empty path and asks the plugin to run a button's click handler or a checkbox's pointer-click handler. Checkboxes must be active and interactable; open the Automation tab before invoking its checkboxes. Capture recognizes checkbox paths and copies them to the clipboard. `scrollIntoView` rejects an empty path and asks the plugin to reveal the target through its containing Unity scroll views. It resolves after the plugin completes the request. `transfer` rejects empty paths and asks the plugin to execute the source drag and destination drop handlers. Successful dispatch does not guarantee the game accepted the resulting action; query state when confirmation matters.
+
+`input` uses a captured `input` path to set a TextMeshPro or legacy Unity input field. It requires a nonempty path and an active, interactable field with `readOnly` disabled. Setting text fires the value-change callback when changed, then `onEndEdit` is invoked with the field's resulting text. Empty text is allowed. Open the Minerals page before using this for mineral spawn level:
+
+```ts
+await rev.input(capturedInputPath, String(level));
+console.log(await rev.state("gameData.minerals.curMineralLevel"));
+```
+
+The promise resolves after the callbacks run. Check the state to see the value accepted by the game.
 
 `slot` accepts the same exact hierarchy paths as `transfer`. It returns the slot's item data using the state serializer, or `null` when empty. Empty, missing, or unsupported paths reject. Slots must already be instantiated and initialized; inactive slots can be read. Like `state`, slot reads remain available while actions are paused. Narrow the `unknown` result to the item type expected by your script.
 

@@ -13,7 +13,7 @@ pub(crate) mod test_support;
 pub(crate) use packets::{
     ClickCommand, DragCommand, InvokeReq, InvokeRes, LoadScript, LockScript, PauseScript, PressCommand, ReloadScript, RemoveScriptHistory,
     ReloadLockedScript, ResumeLockedScript, ResumeScript, ScrollCommand, StartCapture, StateReq, StateRes, StopCapture, StopScript, TransferReq,
-    TransferRes, UiPathReq, UiPathRes, SlotReq, ScrollIntoViewReq, ScrollIntoViewRes,
+    TransferRes, UiPathReq, UiPathRes, SlotReq, ScrollIntoViewReq, ScrollIntoViewRes, InputReq,
 };
 
 pub(crate) use state::request_state;

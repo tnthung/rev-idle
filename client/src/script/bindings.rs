@@ -316,6 +316,27 @@ pub(super) fn create_rev<'js>(
             }
         }))?,
     )?;
+    let input_connection = connection.clone();
+    let input_controls = controls.clone();
+    rev.set(
+        "input",
+        Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, path: String, text: String| {
+            let connection = input_connection.clone();
+            let controls = input_controls.clone();
+            async move {
+                if path.trim().is_empty() {
+                    return Err(host_error("UI path must not be empty".to_owned()));
+                }
+                if controls.actions_paused.is_paused() {
+                    return Ok(());
+                }
+                connection.request(crate::bridge::InputReq { path, text })
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| bridge_error(&ctx, error.to_string()))
+            }
+        }))?,
+    )?;
     let scroll_into_view_connection = connection.clone();
     let scroll_into_view_controls = controls.clone();
     rev.set(

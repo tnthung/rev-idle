@@ -115,7 +115,8 @@ public sealed class Plugin : BasePlugin
         Func<nint, DragCommand, (bool Success, string Error)> drag,
         Func<nint, PressCommand, (bool Success, string Error)>? press = null,
         Func<string, (bool Success, object? Value, string Error)>? slot = null,
-        Func<string, (bool Success, string Error)>? scrollIntoView = null)
+        Func<string, (bool Success, string Error)>? scrollIntoView = null,
+        Func<string, string, (bool Success, string Error)>? input = null)
     {
         _connection = connection;
         connection.Handler<StateReq>(async (context, packet) =>
@@ -159,6 +160,17 @@ public sealed class Plugin : BasePlugin
             if (!success)
                 throw new InvalidOperationException(error);
             await context.Send(new ScrollIntoViewRes());
+        });
+        connection.Handler<InputReq>(async (context, packet) =>
+        {
+            (bool success, string error) = (input ?? ((path, text) =>
+            {
+                bool found = UnityUiClickDispatcher.TrySetInput(path, text, out string message);
+                return (found, message);
+            }))(packet.Path, packet.Text);
+            if (!success)
+                throw new InvalidOperationException(error);
+            await context.Send(new InputRes());
         });
         connection.Handler<TransferReq>(async (context, packet) =>
         {

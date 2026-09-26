@@ -10,6 +10,8 @@ internal sealed record InvokeReq(string Path) : IRequest<InvokeRes>;
 internal sealed record InvokeRes;
 internal sealed record ScrollIntoViewReq(string Path) : IRequest<ScrollIntoViewRes>;
 internal sealed record ScrollIntoViewRes;
+internal sealed record InputReq(string Path, string Text) : IRequest<InputRes>;
+internal sealed record InputRes;
 internal sealed record TransferReq(string Source, string Destination) : IRequest<TransferRes>;
 internal sealed record TransferRes;
 internal sealed record SlotReq(string Path) : IRequest<SlotRes>;

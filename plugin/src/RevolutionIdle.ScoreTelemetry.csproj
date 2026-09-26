@@ -34,6 +34,9 @@
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.UI.dll">
       <Private>false</Private>
     </Reference>
+    <Reference Include="$(GameDir)\BepInEx\interop\Unity.TextMeshPro.dll">
+      <Private>false</Private>
+    </Reference>
     <Reference Include="$(GameDir)\BepInEx\interop\UnityEngine.InputModule.dll">
       <Private>false</Private>
     </Reference>

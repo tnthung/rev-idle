@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Reflection;
 using Il2CppInterop.Runtime;
+using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.SceneManagement;
@@ -172,6 +173,18 @@ internal static class UnityUiClickDispatcher
         for (int index = 0; index < raycasts.Count; index++)
         {
             GameObject? candidate = raycasts[index].gameObject;
+            TMP_InputField? tmpTarget = candidate is null ? null : candidate.GetComponentInParent<TMP_InputField>();
+            InputField? target = candidate is null ? null : candidate.GetComponentInParent<InputField>();
+            if (tmpTarget is null && target is null)
+                continue;
+            type = "input";
+            path = GetPath((tmpTarget ?? (Component)target!).gameObject);
+            result = $"captured input '{path}' at ({x}, {y})";
+            return true;
+        }
+        for (int index = 0; index < raycasts.Count; index++)
+        {
+            GameObject? candidate = raycasts[index].gameObject;
             GameObject? target = candidate is null ? null : ExecuteEvents.GetEventHandler<IDropHandler>(candidate);
             if (target is null)
                 continue;
@@ -181,7 +194,55 @@ internal static class UnityUiClickDispatcher
             return true;
         }
 
-        result = $"no button, checkbox, or slot at ({x}, {y})";
+        result = $"no button, checkbox, input, or slot at ({x}, {y})";
+        return true;
+    }
+
+    internal static bool TrySetInput(string path, string text, out string result)
+    {
+        if (text is null)
+        {
+            result = $"input text is null: '{path}'";
+            return false;
+        }
+
+        GameObject? target = FindByPath(path);
+        TMP_InputField[] tmpMatches = target is null ? Array.Empty<TMP_InputField>() : target.GetComponents<TMP_InputField>().ToArray();
+        InputField[] matches = target is null ? Array.Empty<InputField>() : target.GetComponents<InputField>().ToArray();
+        if (tmpMatches.Length + matches.Length == 0)
+        {
+            result = $"input target not found: '{path}'";
+            return false;
+        }
+        if (tmpMatches.Length + matches.Length != 1)
+        {
+            result = $"input target is ambiguous: '{path}' matches {tmpMatches.Length + matches.Length} input fields";
+            return false;
+        }
+
+        if (tmpMatches.Length == 1)
+        {
+            TMP_InputField field = tmpMatches[0];
+            if (!field.IsActive() || !field.IsInteractable() || field.readOnly)
+            {
+                result = $"input target is inactive, not interactable, or read-only: '{path}'";
+                return false;
+            }
+            field.text = text;
+            field.onEndEdit.Invoke(field.text);
+            result = $"set input '{path}'";
+            return true;
+        }
+
+        InputField legacyField = matches[0];
+        if (!legacyField.IsActive() || !legacyField.IsInteractable() || legacyField.readOnly)
+        {
+            result = $"input target is inactive, not interactable, or read-only: '{path}'";
+            return false;
+        }
+        legacyField.text = text;
+        legacyField.onEndEdit.Invoke(legacyField.text);
+        result = $"set input '{path}'";
         return true;
     }
 

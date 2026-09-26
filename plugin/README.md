@@ -81,11 +81,12 @@ Capture is one-shot: the first captured left-button down consumes its matching u
 
 ## Capture, invoke, and transfer UI elements
 
-Run `capture` in the client and click an element. Capture consumes one click, then turns itself off. It prints client coordinates followed by `button: "<path>"`, `checkbox: "<path>"`, or `slot: "<path>"`, copies a valid path to the clipboard, and prints `Copied to clipboard`. It checks buttons first, then checkboxes, then drop slots, including their parent objects. If none exists, it prints only coordinates and leaves the clipboard unchanged. Use the copied paths in scripts:
+Run `capture` in the client and click an element. Capture consumes one click, then turns itself off. It prints client coordinates followed by `button: "<path>"`, `checkbox: "<path>"`, `input: "<path>"`, or `slot: "<path>"`, copies a valid path to the clipboard, and prints `Copied to clipboard`. It checks buttons first, then checkboxes, input fields, and drop slots, including their parent objects. If none exists, it prints only coordinates and leaves the clipboard unchanged. Use the copied paths in scripts:
 
 ```javascript
 await rev.invoke(buttonPath);
 await rev.invoke(checkboxPath);
+await rev.input(inputPath, "123");
 await rev.scrollIntoView(buttonPath);
 await rev.transfer(sourceSlotPath, destinationSlotPath);
 const item = await rev.slot(sourceSlotPath); // unknown; null when empty
@@ -99,7 +100,9 @@ Checkbox invocation calls the game's pointer-click handler and requires an activ
 
 Transfer requires two distinct slot objects with one drop handler each and exactly one draggable item in the source. Lookup includes hidden and inactive objects; no screen coordinates or raycasts are used. The plugin calls the item's drag lifecycle and the destination's drop handler directly on Unity's main thread, without activating the panels. The game controls compatibility, validation, and occupied-slot behavior. A resolved promise means handlers were called, not that the game accepted or completed the transfer; check game state before depending on the result. Slots and items must already be instantiated and initialized by the game; hidden-panel transfers remain subject to the handlers' own requirements.
 
-These features require the updated client and plugin and use the loopback WebSocket bridge. Capture returns `{ "type": "button" | "checkbox" | "slot" | null, "path": string | null }` without interacting with the target.
+`input(path, text)` sets a TextMeshPro or legacy Unity input field's text and invokes `onEndEdit` with the resulting text. Setting changed text also fires `onValueChanged`. The field must be active, interactable, and editable; open its page first. Empty text is allowed. The promise resolves after the callbacks run on Unity's main thread, and paused scripts skip the action. For mineral spawn level, capture the input on the Minerals page, call `await rev.input(capturedPath, String(level))`, then read `gameData.minerals.curMineralLevel` to check the value accepted by the game.
+
+These features require the updated client and plugin and use the loopback WebSocket bridge. Capture returns `{ "type": "button" | "checkbox" | "input" | "slot" | null, "path": string | null }` without interacting with the target.
 
 ## Read state
 

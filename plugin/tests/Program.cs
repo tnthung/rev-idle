@@ -49,6 +49,7 @@ await BridgeStateHandlerReportsInvalidPath();
 await BridgeStateHandlerReportsSerializationFailurePath();
 await BridgeUiHandlersReportCorrelatedErrorsOnPumpThread();
 await BridgeScrollIntoViewHandlerRespondsOnPumpThread();
+await BridgeInputHandlerRespondsOnPumpThread();
 await BridgeSlotHandlerReturnsDataNullAndErrorsOnPumpThread();
 await BridgeInputHandlersRunOnPumpThread();
 KeyboardInputPostsKeyDownAndUpToTheGameWindow();
@@ -194,6 +195,8 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("InvokeRes", new InvokeRes()),
         ("ScrollIntoViewReq", new ScrollIntoViewReq("scene:1/Canvas[0]/Buy DTP & More[0]")),
         ("ScrollIntoViewRes", new ScrollIntoViewRes()),
+        ("InputReq", new InputReq("scene:1/Canvas[0]/Input[0]", "123")),
+        ("InputRes", new InputRes()),
         ("TransferReq", new TransferReq("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0")),
         ("TransferRes", new TransferRes()),
         ("SlotReq", new SlotReq("scene:1/Canvas[0]/Inventory/3")),
@@ -466,6 +469,57 @@ static async Task BridgeScrollIntoViewHandlerRespondsOnPumpThread()
                 Equal("ScrollIntoViewRes", response.RootElement.GetProperty("type").GetString(), testName);
                 Equal("{}", response.RootElement.GetProperty("payload").GetRawText(), testName);
             }
+        }
+    }
+}
+
+static async Task BridgeInputHandlerRespondsOnPumpThread()
+{
+    const string testName = nameof(BridgeInputHandlerRespondsOnPumpThread);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int handlerThread = 0;
+    int pumpThread = 0;
+    string? targetPath = null;
+    string? targetText = null;
+    Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () => 0,
+        (_, _, _, _, _) => (true, null, null, ""),
+        _ => (true, ""), (_, _) => (true, ""),
+        (_, _) => (true, ""), (_, _) => (true, ""), (_, _) => (true, ""),
+        input: (path, text) =>
+        {
+            handlerThread = Environment.CurrentManagedThreadId;
+            targetPath = path;
+            targetText = text;
+            return path == "scene:1/Canvas[0]/Input[0]"
+                ? (true, "")
+                : (false, $"input target not found: '{path}'");
+        });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        foreach ((string Path, string Text, bool Success) input in new[]
+        {
+            ("scene:1/Canvas[0]/Input[0]", "123", true),
+            ("missing", "456", false)
+        })
+        {
+            handlerThread = 0;
+            Guid uuid = Guid.NewGuid();
+            using JsonDocument response = await SendLiteralBridgeRequestAndPump(server, peer, 0,
+                $"{{\"uuid\":\"{uuid}\",\"type\":\"InputReq\",\"payload\":{{\"path\":\"{input.Path}\",\"text\":\"{input.Text}\"}}}}",
+                thread => { if (handlerThread == 0) pumpThread = thread; });
+            Equal(pumpThread, handlerThread, testName);
+            Equal(input.Path, targetPath, testName);
+            Equal(input.Text, targetText, testName);
+            Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), testName);
+            if (input.Success)
+            {
+                Equal("InputRes", response.RootElement.GetProperty("type").GetString(), testName);
+                Equal("{}", response.RootElement.GetProperty("payload").GetRawText(), testName);
+            }
+            else
+                AssertRemoteError(response, uuid, testName, "input target not found: 'missing'");
         }
     }
 }

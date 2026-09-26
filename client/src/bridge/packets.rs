@@ -37,6 +37,15 @@ pub(crate) struct InvokeReq {
 pub(crate) struct InvokeRes {}
 
 #[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct InputReq {
+    pub(crate) path: String,
+    pub(crate) text: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct InputRes {}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct ScrollIntoViewReq {
     pub(crate) path: String,
 }
@@ -165,6 +174,14 @@ impl Packet for InvokeRes {
     const TYPE: &'static str = "InvokeRes";
 }
 
+impl Packet for InputReq {
+    const TYPE: &'static str = "InputReq";
+}
+
+impl Packet for InputRes {
+    const TYPE: &'static str = "InputRes";
+}
+
 impl Packet for ScrollIntoViewReq {
     const TYPE: &'static str = "ScrollIntoViewReq";
 }
@@ -207,6 +224,10 @@ impl Requestable for UiPathReq {
 
 impl Requestable for InvokeReq {
     type Response = InvokeRes;
+}
+
+impl Requestable for InputReq {
+    type Response = InputRes;
 }
 
 impl Requestable for ScrollIntoViewReq {
@@ -279,6 +300,15 @@ mod tests {
                 .unwrap(),
             ),
             (InvokeRes::TYPE, serde_json::to_value(InvokeRes {}).unwrap()),
+            (
+                InputReq::TYPE,
+                serde_json::to_value(InputReq {
+                    path: "scene:1/Canvas[0]/Input[0]".to_owned(),
+                    text: "123".to_owned(),
+                })
+                .unwrap(),
+            ),
+            (InputRes::TYPE, serde_json::to_value(InputRes {}).unwrap()),
             (
                 ScrollIntoViewReq::TYPE,
                 serde_json::to_value(ScrollIntoViewReq {
