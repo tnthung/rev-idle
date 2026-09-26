@@ -69,7 +69,7 @@ The bottom-right overlay has three 30 by 30 pixel buttons: Reload/Stop, Resume/P
 
 | Script phase | Reload/Stop | Resume/Pause | Capture |
 | --- | --- | --- | --- |
-| Unloaded | disabled | disabled | disabled |
+| Unloaded | disabled | disabled | enabled |
 | Stopped | Reload | disabled | enabled |
 | Running | Stop | Pause | disabled |
 | Paused | Stop | Resume | enabled |
@@ -86,11 +86,14 @@ Run `capture` in the client and click an element. Capture consumes one click, th
 ```javascript
 await rev.invoke(buttonPath);
 await rev.invoke(checkboxPath);
+await rev.scrollIntoView(buttonPath);
 await rev.transfer(sourceSlotPath, destinationSlotPath);
 const item = await rev.slot(sourceSlotPath); // unknown; null when empty
 ```
 
 Only exact, case-sensitive paths are accepted; name lookup is not supported. Paths include the scene handle and escaped object names with sibling indexes. Capture again after scene or hierarchy changes. Hidden and inactive Unity UI Buttons can be invoked, but must still pass `IsInteractable()`. Invocation calls the registered `onClick` event on Unity's main thread without moving the mouse or raycasting. Errors reject the promise; paused scripts skip the action.
+
+`scrollIntoView(path)` reveals a UI element by instantly adjusting its active containing scroll views, from the innermost outward, on their enabled axes. It moves only as far as needed within the content bounds and leaves already-visible elements in place. Targets larger than a viewport reveal the nearest edge. Inactive buffered children are supported when their containing scroll view is active; the game remains responsible for activating them. Open the correct page first: missing targets and inactive targets without an active containing scroll view reject. The promise resolves after positioning and layout updates, without clicking the target; use `invoke(path)` separately. Paused scripts skip the action.
 
 Checkbox invocation calls the game's pointer-click handler and requires an active, interactable Toggle (including BundleToggle). Open the Automation tab before invoking its checkboxes. Slot reads return the generic slot's `Value` through the state serializer, or `null` when `Slotted` is false. Missing or unsupported slots reject. Reads run on Unity's main thread, support initialized inactive slots, and remain available while actions are paused.
 

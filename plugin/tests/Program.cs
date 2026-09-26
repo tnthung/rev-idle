@@ -48,6 +48,7 @@ await BridgeStateHandlerReportsMissingData();
 await BridgeStateHandlerReportsInvalidPath();
 await BridgeStateHandlerReportsSerializationFailurePath();
 await BridgeUiHandlersReportCorrelatedErrorsOnPumpThread();
+await BridgeScrollIntoViewHandlerRespondsOnPumpThread();
 await BridgeSlotHandlerReturnsDataNullAndErrorsOnPumpThread();
 await BridgeInputHandlersRunOnPumpThread();
 KeyboardInputPostsKeyDownAndUpToTheGameWindow();
@@ -88,6 +89,8 @@ DispatcherRejectsMalformedHierarchyPath();
 DispatcherMatchesPersistentSceneRoot();
 DispatcherNormalizesOnlySceneHandle();
 DispatcherFindsFirstScrollableRaycast();
+DispatcherScrollIntoViewMovesOnlyAsFarAsNeeded();
+DispatcherScrollIntoViewHandlesLargeTargetsAndContentEdges();
 WsEnvelopeMatchesSharedFixture();
 await WsDisconnectedCallsFailImmediately();
 await WsConnectionGenerationTracksSessions();
@@ -120,7 +123,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("120 tests passed.");
+System.Console.WriteLine("123 tests passed.");
 
 static void ClientProcessConsumesConsoleClearWithoutLoggingIt()
 {
@@ -189,6 +192,8 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("UiPathRes", new UiPathRes("slot", "scene:1/Canvas[0]/Inventory/3")),
         ("InvokeReq", new InvokeReq("scene:1/Canvas[0]/Buy DTP & More[0]")),
         ("InvokeRes", new InvokeRes()),
+        ("ScrollIntoViewReq", new ScrollIntoViewReq("scene:1/Canvas[0]/Buy DTP & More[0]")),
+        ("ScrollIntoViewRes", new ScrollIntoViewRes()),
         ("TransferReq", new TransferReq("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0")),
         ("TransferRes", new TransferRes()),
         ("SlotReq", new SlotReq("scene:1/Canvas[0]/Inventory/3")),
@@ -420,6 +425,48 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
         Equal(transferPumpThread, transferThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
         Equal("source", transferredSource, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
         Equal("destination", transferredDestination, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+    }
+}
+
+static async Task BridgeScrollIntoViewHandlerRespondsOnPumpThread()
+{
+    const string testName = nameof(BridgeScrollIntoViewHandlerRespondsOnPumpThread);
+    using WsConnection server = WsConnection.CreateForTest(0, TimeSpan.FromSeconds(2));
+    int handlerThread = 0;
+    int pumpThread = 0;
+    string? targetPath = null;
+    Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () => 0,
+        (_, _, _, _, _) => (true, null, null, ""),
+        _ => (true, ""), (_, _) => (true, ""),
+        (_, _) => (true, ""), (_, _) => (true, ""), (_, _) => (true, ""),
+        scrollIntoView: path =>
+        {
+            handlerThread = Environment.CurrentManagedThreadId;
+            targetPath = path;
+            return path == "scene:1/Buy[0]" ? (true, "") : (false, $"scrollIntoView target not found: '{path}'");
+        });
+    (TcpClient client, WebSocket peer) = await ConnectRawClient(server);
+    using (client)
+    using (peer)
+    {
+        foreach (string path in new[] { "scene:1/Buy[0]", "missing" })
+        {
+            handlerThread = 0;
+            Guid uuid = Guid.NewGuid();
+            using JsonDocument response = await SendLiteralBridgeRequestAndPump(server, peer, 0,
+                $"{{\"uuid\":\"{uuid}\",\"type\":\"ScrollIntoViewReq\",\"payload\":{{\"path\":\"{path}\"}}}}",
+                thread => { if (handlerThread == 0) pumpThread = thread; });
+            Equal(pumpThread, handlerThread, testName);
+            Equal(path, targetPath, testName);
+            Equal(uuid, response.RootElement.GetProperty("uuid").GetGuid(), testName);
+            if (path == "missing")
+                AssertRemoteError(response, uuid, testName, "scrollIntoView target not found: 'missing'");
+            else
+            {
+                Equal("ScrollIntoViewRes", response.RootElement.GetProperty("type").GetString(), testName);
+                Equal("{}", response.RootElement.GetProperty("payload").GetRawText(), testName);
+            }
+        }
     }
 }
 
@@ -840,10 +887,10 @@ static async Task WsPacketContextCarriesOriginGeneration()
 static void ControlPresentationProjectsClosedPhases()
 {
     const string testName = nameof(ControlPresentationProjectsClosedPhases);
-    ControlPresentation unloaded = ControlPresentation.From(new ControlState(ScriptPhase.Unloaded, false, Scripts: new[] { @"C:\scripts\test.js" }));
+    ControlPresentation unloaded = ControlPresentation.From(new ControlState(ScriptPhase.Unloaded, false));
     Equal(false, unloaded.ReloadStopEnabled, testName);
     Equal(false, unloaded.ResumePauseEnabled, testName);
-    Equal(false, unloaded.CaptureEnabled, testName);
+    Equal(true, unloaded.CaptureEnabled, testName);
     Equal(true, unloaded.MenuEnabled, testName);
 
     ControlPresentation stopped = ControlPresentation.From(new ControlState(ScriptPhase.Stopped, false));
@@ -2956,6 +3003,34 @@ static void DispatcherFindsFirstScrollableRaycast()
 {
     const string testName = nameof(DispatcherFindsFirstScrollableRaycast);
     Equal(1, UnityUiClickDispatcher.FindFirstScrollableIndex(new[] { false, true, false }), testName);
+}
+
+static void DispatcherScrollIntoViewMovesOnlyAsFarAsNeeded()
+{
+    const string testName = nameof(DispatcherScrollIntoViewMovesOnlyAsFarAsNeeded);
+    Equal(0f, UnityUiClickDispatcher.ScrollIntoViewOffset(20, 80, 0, 100, -200, 300), testName);
+    Equal(0f, UnityUiClickDispatcher.ScrollIntoViewOffset(0, 100, 0, 100, -200, 300), testName);
+    Equal(50f, UnityUiClickDispatcher.ScrollIntoViewOffset(-50, -20, 0, 100, -200, 300), testName);
+    Equal(-50f, UnityUiClickDispatcher.ScrollIntoViewOffset(120, 150, 0, 100, -200, 300), testName);
+    Equal(10f, UnityUiClickDispatcher.ScrollIntoViewOffset(-10, 30, 0, 100, -200, 300), testName);
+    Equal(-10f, UnityUiClickDispatcher.ScrollIntoViewOffset(80, 110, 0, 100, -200, 300), testName);
+    Equal(20f, UnityUiClickDispatcher.ScrollIntoViewOffset(-70, -40, -50, 50, -250, 250), testName);
+}
+
+static void DispatcherScrollIntoViewHandlesLargeTargetsAndContentEdges()
+{
+    const string testName = nameof(DispatcherScrollIntoViewHandlesLargeTargetsAndContentEdges);
+    Equal(20f, UnityUiClickDispatcher.ScrollIntoViewOffset(-20, 120, 0, 100, -200, 300), testName);
+    Equal(-50f, UnityUiClickDispatcher.ScrollIntoViewOffset(-100, 150, 0, 100, -200, 300), testName);
+    Equal(0f, UnityUiClickDispatcher.ScrollIntoViewOffset(0, 140, 0, 100, -200, 300), testName);
+    Equal(0f, UnityUiClickDispatcher.ScrollIntoViewOffset(-40, 100, 0, 100, -200, 300), testName);
+    Equal(50f, UnityUiClickDispatcher.ScrollIntoViewOffset(-100, 50, 0, 100, -200, 300), testName);
+    Equal(-50f, UnityUiClickDispatcher.ScrollIntoViewOffset(50, 200, 0, 100, -200, 300), testName);
+    Equal(-120f, UnityUiClickDispatcher.ScrollIntoViewOffset(120, 260, 0, 100, -200, 300), testName);
+    Equal(-200f, UnityUiClickDispatcher.ScrollIntoViewOffset(290, 330, 0, 100, -200, 300), testName);
+    Equal(200f, UnityUiClickDispatcher.ScrollIntoViewOffset(-230, -190, 0, 100, -200, 300), testName);
+    Equal(0f, UnityUiClickDispatcher.ScrollIntoViewOffset(-20, 0, 0, 100, 0, 80), testName);
+    Equal(0f, UnityUiClickDispatcher.ScrollIntoViewOffset(100, 120, 0, 100, 0, 100), testName);
 }
 
 static void Equal<T>(T expected, T actual, string testName)

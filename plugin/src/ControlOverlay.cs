@@ -41,6 +41,7 @@ internal readonly record struct ControlPresentation(
             return new(ControlIcon.Reload, false, ControlIcon.Resume, false, false, false);
         ControlPresentation presentation = state.Value.Phase switch
         {
+            ScriptPhase.Unloaded => new(ControlIcon.Reload, false, ControlIcon.Resume, false, true, true),
             ScriptPhase.Stopped => new(ControlIcon.Reload, true, ControlIcon.Resume, false, true, true),
             ScriptPhase.Running => new(ControlIcon.Stop, true, ControlIcon.Pause, true, false, true),
             ScriptPhase.Paused => new(ControlIcon.Stop, true, ControlIcon.Resume, true, true, true),

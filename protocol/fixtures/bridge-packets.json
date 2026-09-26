@@ -5,6 +5,8 @@
   "UiPathRes": { "type": "slot", "path": "scene:1/Canvas[0]/Inventory/3" },
   "InvokeReq": { "path": "scene:1/Canvas[0]/Buy DTP & More[0]" },
   "InvokeRes": {},
+  "ScrollIntoViewReq": { "path": "scene:1/Canvas[0]/Buy DTP & More[0]" },
+  "ScrollIntoViewRes": {},
   "TransferReq": { "source": "scene:1/Canvas[0]/Inventory/3", "destination": "scene:1/Canvas[0]/Combine/0" },
   "TransferRes": {},
   "SlotReq": { "path": "scene:1/Canvas[0]/Inventory/3" },

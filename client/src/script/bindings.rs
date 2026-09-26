@@ -316,6 +316,26 @@ pub(super) fn create_rev<'js>(
             }
         }))?,
     )?;
+    let scroll_into_view_connection = connection.clone();
+    let scroll_into_view_controls = controls.clone();
+    rev.set(
+        "scrollIntoView",
+        Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, path: String| {
+            let connection = scroll_into_view_connection.clone();
+            let controls = scroll_into_view_controls.clone();
+            async move {
+                if path.trim().is_empty() {
+                    return Err(host_error("UI path must not be empty".to_owned()));
+                }
+                if controls.actions_paused.is_paused() {
+                    return Ok(());
+                }
+                crate::bridge::scroll_into_view(&connection, path)
+                    .await
+                    .map_err(|error| bridge_error(&ctx, error))
+            }
+        }))?,
+    )?;
     let transfer_connection = connection.clone();
     let transfer_controls = controls.clone();
     rev.set(

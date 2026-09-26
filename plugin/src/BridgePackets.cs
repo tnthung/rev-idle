@@ -8,6 +8,8 @@ internal sealed record UiPathReq(int X, int Y, int Width, int Height) : IRequest
 internal sealed record UiPathRes(string? Type, string? Path);
 internal sealed record InvokeReq(string Path) : IRequest<InvokeRes>;
 internal sealed record InvokeRes;
+internal sealed record ScrollIntoViewReq(string Path) : IRequest<ScrollIntoViewRes>;
+internal sealed record ScrollIntoViewRes;
 internal sealed record TransferReq(string Source, string Destination) : IRequest<TransferRes>;
 internal sealed record TransferRes;
 internal sealed record SlotReq(string Path) : IRequest<SlotRes>;

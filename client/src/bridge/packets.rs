@@ -37,6 +37,14 @@ pub(crate) struct InvokeReq {
 pub(crate) struct InvokeRes {}
 
 #[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct ScrollIntoViewReq {
+    pub(crate) path: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub(crate) struct ScrollIntoViewRes {}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct TransferReq {
     pub(crate) source: String,
     pub(crate) destination: String,
@@ -157,6 +165,14 @@ impl Packet for InvokeRes {
     const TYPE: &'static str = "InvokeRes";
 }
 
+impl Packet for ScrollIntoViewReq {
+    const TYPE: &'static str = "ScrollIntoViewReq";
+}
+
+impl Packet for ScrollIntoViewRes {
+    const TYPE: &'static str = "ScrollIntoViewRes";
+}
+
 impl Packet for TransferReq {
     const TYPE: &'static str = "TransferReq";
 }
@@ -191,6 +207,10 @@ impl Requestable for UiPathReq {
 
 impl Requestable for InvokeReq {
     type Response = InvokeRes;
+}
+
+impl Requestable for ScrollIntoViewReq {
+    type Response = ScrollIntoViewRes;
 }
 
 impl Requestable for TransferReq {
@@ -259,6 +279,14 @@ mod tests {
                 .unwrap(),
             ),
             (InvokeRes::TYPE, serde_json::to_value(InvokeRes {}).unwrap()),
+            (
+                ScrollIntoViewReq::TYPE,
+                serde_json::to_value(ScrollIntoViewReq {
+                    path: "scene:1/Canvas[0]/Buy DTP & More[0]".to_owned(),
+                })
+                .unwrap(),
+            ),
+            (ScrollIntoViewRes::TYPE, serde_json::to_value(ScrollIntoViewRes {}).unwrap()),
             (
                 TransferReq::TYPE,
                 serde_json::to_value(TransferReq {

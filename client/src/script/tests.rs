@@ -529,6 +529,64 @@ async fn rev_invoke_skips_paused_actions_and_rejects_empty_paths() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn rev_scroll_into_view_awaits_response_and_skips_paused_or_empty_paths() {
+    use crate::bridge::{test_support::raw_server, WsConnection};
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (address, peer_rx) = raw_server().await;
+    let connection = WsConnection::connect_for_test(
+        address,
+        Duration::from_millis(20),
+        Duration::from_secs(1),
+    );
+    let mut peer = tokio::time::timeout(Duration::from_secs(1), peer_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    let session = ScriptSession::new_with_connection(
+        r#"export default (async () => await rev.scrollIntoView("Canvas/Relic"))"#,
+        "scroll-into-view-test.js",
+        connection.clone(),
+    )
+    .await
+    .unwrap();
+    let (controls, _) = recording_controls();
+    let invocation = session.invoke(State::default(), controls);
+    tokio::pin!(invocation);
+    let message = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::select! {
+            result = &mut invocation => panic!("scrollIntoView completed before bridge response: {result:?}"),
+            message = peer.next() => message.unwrap().unwrap(),
+        }
+    })
+    .await
+    .unwrap();
+    let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
+    assert_eq!(request["type"], "ScrollIntoViewReq");
+    assert_eq!(request["payload"], json!({ "path": "Canvas/Relic" }));
+    peer.send(Message::Text(
+        json!({ "uuid": request["uuid"], "type": "ScrollIntoViewRes", "payload": {} })
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    invocation.await.unwrap();
+    connection.shutdown().await;
+
+    let session = ScriptSession::new(r#"export default (async () => await rev.scrollIntoView("Buy"))"#).await.unwrap();
+    let (controls, _) = recording_controls();
+    controls.actions_paused.set_paused(true);
+    session.invoke(State::default(), controls).await.unwrap();
+
+    let session = ScriptSession::new(r#"export default (async () => await rev.scrollIntoView(" "))"#).await.unwrap();
+    let (controls, _) = recording_controls();
+    assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("UI path"));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rev_slot_returns_arbitrary_data_null_and_remote_errors() {
     use crate::bridge::{test_support::raw_server, WsConnection};
     use futures_util::{SinkExt, StreamExt};
@@ -3397,12 +3455,11 @@ async fn failed_load_stays_stopped_and_reload_retries_that_path() {
 }
 
 #[test]
-fn capture_is_allowed_only_when_the_script_is_paused_or_stopped() {
-    assert_eq!(capture_action(false, false, false, false), CaptureAction::Reject);
-    assert_eq!(capture_action(false, true, false, false), CaptureAction::Enable);
-    assert_eq!(capture_action(false, true, true, true), CaptureAction::Enable);
-    assert_eq!(capture_action(false, true, true, false), CaptureAction::Reject);
-    assert_eq!(capture_action(true, true, true, false), CaptureAction::Disable);
+fn capture_is_allowed_when_the_script_is_unloaded_paused_or_stopped() {
+    assert_eq!(capture_action(false, false, false), CaptureAction::Enable);
+    assert_eq!(capture_action(false, true, true), CaptureAction::Enable);
+    assert_eq!(capture_action(false, true, false), CaptureAction::Reject);
+    assert_eq!(capture_action(true, true, false), CaptureAction::Disable);
 
 let capture_state = CaptureState;
     capture_state.set_enabled(true);
@@ -4153,11 +4210,11 @@ async fn stop_command_during_an_invocation_clears_lock_state() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn capture_commands_stay_disarmed_without_a_script_path() {
+async fn capture_commands_publish_one_shot_state_without_a_script_path() {
     CaptureState.set_enabled(false);
     let (command_tx, command_rx) = mpsc::channel(8);
     let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
-    let (state_tx, _state_rx) = watch::channel(StateUpdate {
+    let (state_tx, mut state_rx) = watch::channel(StateUpdate {
         phase: ScriptPhase::Unloaded,
         capture: false,
         locked: false,
@@ -4177,13 +4234,25 @@ async fn capture_commands_stay_disarmed_without_a_script_path() {
         ));
         tokio::task::yield_now().await;
 
-        command_tx.send(ScriptCommand::Capture).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert!(!CaptureState.is_enabled());
-
-        command_tx.send(ScriptCommand::StartCapture).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert!(!CaptureState.is_enabled());
+        for (command, capturing) in [
+            (ScriptCommand::Capture, true),
+            (ScriptCommand::Capture, false),
+            (ScriptCommand::StartCapture, true),
+            (ScriptCommand::CaptureConsumed, false),
+            (ScriptCommand::StartCapture, true),
+            (ScriptCommand::StopCapture, false),
+        ] {
+            command_tx.send(command).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while state_rx.borrow().capture != capturing {
+                    state_rx.changed().await.unwrap();
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(CaptureState.is_enabled(), capturing);
+            assert_eq!(state_rx.borrow().phase, ScriptPhase::Unloaded);
+        }
 
         command_tx.send(ScriptCommand::Exit).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), runner)

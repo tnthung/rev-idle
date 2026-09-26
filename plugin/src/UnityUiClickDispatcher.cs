@@ -58,6 +58,75 @@ internal static class UnityUiClickDispatcher
         return true;
     }
 
+    internal static bool TryScrollIntoView(string path, out string result)
+    {
+        GameObject? target = FindByPath(path);
+        if (target is null)
+        {
+            result = $"scrollIntoView target not found: '{path}'";
+            return false;
+        }
+        RectTransform? targetRect = target.GetComponent<RectTransform>();
+        if (targetRect is null)
+        {
+            result = $"scrollIntoView target has no RectTransform: '{path}'";
+            return false;
+        }
+
+        Canvas.ForceUpdateCanvases();
+        var corners = new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppStructArray<Vector3>(4);
+        bool hasActiveScrollView = false;
+        for (Transform? parent = targetRect.parent; parent is not null; parent = parent.parent)
+        {
+            ScrollRect? scrollRect = parent.GetComponent<ScrollRect>();
+            if (scrollRect is null || !scrollRect.isActiveAndEnabled || scrollRect.content is null ||
+                !targetRect.IsChildOf(scrollRect.content))
+                continue;
+
+            hasActiveScrollView = true;
+            RectTransform viewport = scrollRect.viewport ?? scrollRect.GetComponent<RectTransform>();
+            Bounds BoundsInViewport(RectTransform rect)
+            {
+                rect.GetWorldCorners(corners);
+                var bounds = new Bounds(viewport.InverseTransformPoint(corners[0]), Vector3.zero);
+                for (int index = 1; index < corners.Length; index++)
+                    bounds.Encapsulate(viewport.InverseTransformPoint(corners[index]));
+                return bounds;
+            }
+
+            Bounds targetBounds = BoundsInViewport(targetRect);
+            Bounds contentBounds = BoundsInViewport(scrollRect.content);
+            Rect view = viewport.rect;
+            var offset = new Vector2(
+                scrollRect.horizontal ? ScrollIntoViewOffset(
+                    targetBounds.min.x, targetBounds.max.x, view.xMin, view.xMax,
+                    contentBounds.min.x, contentBounds.max.x) : 0f,
+                scrollRect.vertical ? ScrollIntoViewOffset(
+                    targetBounds.min.y, targetBounds.max.y, view.yMin, view.yMax,
+                    contentBounds.min.y, contentBounds.max.y) : 0f);
+            if (offset == Vector2.zero)
+                continue;
+
+            Vector2 position = scrollRect.normalizedPosition;
+            if (offset.x != 0f)
+                position.x = Math.Clamp(position.x - offset.x / (contentBounds.size.x - view.width), 0f, 1f);
+            if (offset.y != 0f)
+                position.y = Math.Clamp(position.y - offset.y / (contentBounds.size.y - view.height), 0f, 1f);
+            scrollRect.StopMovement();
+            scrollRect.normalizedPosition = position;
+            Canvas.ForceUpdateCanvases();
+        }
+
+        if (!hasActiveScrollView && !target.activeInHierarchy)
+        {
+            result = $"scrollIntoView target has no active containing scroll view: '{path}'";
+            return false;
+        }
+
+        result = $"scrolled into view '{path}'";
+        return true;
+    }
+
     internal static bool TryFindUiPath(int x, int y, int width, int height, out string? type, out string? path, out string result)
     {
         type = null;
@@ -392,6 +461,20 @@ internal static class UnityUiClickDispatcher
         }
 
         return -1;
+    }
+
+    internal static float ScrollIntoViewOffset(
+        float targetMin, float targetMax, float viewMin, float viewMax, float contentMin, float contentMax)
+    {
+        float viewSize = viewMax - viewMin;
+        if (contentMax - contentMin <= viewSize ||
+            (targetMin >= viewMin && targetMax <= viewMax))
+            return 0f;
+
+        float offset = targetMax - targetMin > viewSize
+            ? (Math.Abs(viewMin - targetMin) <= Math.Abs(viewMax - targetMax) ? viewMin - targetMin : viewMax - targetMax)
+            : (targetMin < viewMin ? viewMin - targetMin : viewMax - targetMax);
+        return Math.Clamp(offset, viewMax - contentMax, viewMin - contentMin);
     }
 
     internal static bool TryDispatchScroll(ScrollCommand command, out string result)
