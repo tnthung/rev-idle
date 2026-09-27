@@ -286,6 +286,7 @@
 
   .node-meta {
     display: flex;
+    align-items: center;
     gap: 16px;
     margin-top: 8px;
     font-size: 12px;
@@ -578,12 +579,14 @@
     const variants = nodeTypes.get(nodeId.replace(/\//g, '.'))?.variants;
     if (variants) {
       const detail = document.getElementById('detail');
-      detail.innerHTML = '<div class="node-name">' + escapeHtml(nodeId) + '</div><div class="node-meta"><span>enum</span><span><b>' + variants.length + '</b> variants</span></div>' +
+      detail.innerHTML = '<div class="node-name">' + escapeHtml(nodeId) + '</div><div class="node-meta"><span>enum</span><span><b>' + variants.length + '</b> variants</span><button type="button" class="stat-pill" data-copy="" data-copy-enum title="Copy TypeScript enum">Copy enum<span class="copy-hint">copied</span></button></div>' +
         '<div class="detail-columns" data-active-tab="fields"><div class="detail-col detail-col-fields"><div class="detail-col-body"><div class="section-label">Variants</div><div class="prop-list">' + variants.map(v =>
           '<div class="prop-row" data-copy="' + escapeHtml(v.name) + '"><span class="prop-name">' + escapeHtml(v.name) + '<span class="copy-hint">copied</span></span><span class="prop-type">' + escapeHtml(v.value) + '</span></div>'
         ).join('') + '</div></div></div></div>';
       detail.querySelectorAll('[data-copy]').forEach(el => {
-        el.addEventListener('click', () => copyToClipboard(el.getAttribute('data-copy'), el));
+        el.addEventListener('click', () => copyToClipboard(el.hasAttribute('data-copy-enum')
+          ? 'export enum ' + nodeId.split(/[./]/).pop() + ' {\n' + variants.map(v => '  ' + v.name + ' = ' + v.value + ',').join('\n') + '\n}\n'
+          : el.getAttribute('data-copy'), el));
       });
       detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
