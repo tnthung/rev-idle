@@ -2,6 +2,65 @@ import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
+test('Copy struct exports an interface with JSON types and nested collections', async () => {
+  const elements = new Map();
+  let click;
+  let copied;
+  const button = {
+    hasAttribute(name) { return name === 'data-copy-struct'; },
+    getAttribute() { return ''; },
+    addEventListener(name, handler) { if (name === 'click') click = handler; },
+    classList: { add() {}, remove() {} },
+  };
+  runInNewContext(readFileSync(new URL('../STATE_GRAPH.template.html', import.meta.url), 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1].replace('__GRAPH_JSON__', JSON.stringify({
+    nodes: [{ id: 'Example' }, { id: 'Child' }, { id: 'Kind', variants: [{ name: 'First', value: '0' }] }],
+    roots: [{ key: 'example', node: 'Example' }],
+    edges: [
+      { property: 'amount', valueType: 'BigDouble' },
+      { property: 'child', valueType: 'Child' },
+      { property: 'count', valueType: 'System.Int32' },
+      { property: 'enabled', valueType: 'System.Boolean' },
+      { property: 'kind', valueType: 'Nullable<Kind>' },
+      { property: 'name', valueType: 'System.String' },
+      { property: 'slots', valueType: 'Dictionary<Kind, List<Nullable<System.Int32>>>' },
+      { property: 'values', valueType: 'Il2CppStructArray<BigDouble>' },
+    ].map(field => ({ from: 'Example', to: null, kind: 'plain', ...field })),
+  })), {
+    document: {
+      getElementById(id) {
+        if (!elements.has(id)) elements.set(id, {
+          innerHTML: '', textContent: '', value: '',
+          addEventListener() {}, scrollIntoView() {},
+          classList: { remove() {} },
+          querySelectorAll(selector) {
+            return selector === '[data-copy]' && this.innerHTML.includes('data-copy-struct') ? [button] : [];
+          },
+        });
+        return elements.get(id);
+      },
+      addEventListener() {}, querySelectorAll() { return []; },
+    },
+    navigator: { clipboard: { async writeText(text) { copied = text; } } },
+    location: { search: '?select=Example' },
+    history: { replaceState() {} },
+    URLSearchParams,
+    setTimeout() {}, clearTimeout() {},
+  });
+  expect(click).toBeTypeOf('function');
+  await click({ target: { closest() { return null; } } });
+  expect(copied).toBe(`export interface Example {
+  amount: string;
+  child: Child;
+  count: number;
+  enabled: boolean;
+  kind: keyof typeof Kind | null;
+  name: string;
+  slots: Partial<Record<keyof typeof Kind, Array<number | null>>>;
+  values: Array<string>;
+}
+`);
+});
+
 for (const { type, fields, absent, count, variants, links = [] } of [
   { type: 'Relic', fields: ['amount', 'totalCost'], absent: ['Attacks', 'Elements', 'Minerals', 'Singularity', 'Tarot', 'Unity'], count: 13 },
   { type: 'DilationTree', fields: ['TotalDTP', 'bot', 'center', 'mid', 'top'], absent: ['prev'], count: 5 },

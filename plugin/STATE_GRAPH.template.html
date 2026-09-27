@@ -609,6 +609,7 @@
     html += '<span><b>' + (currentRoutes.length + nodeAliases.length + (isRoot ? 1 : 0)) + '</b> route' + (currentRoutes.length + nodeAliases.length + (isRoot ? 1 : 0) === 1 ? '' : 's') + '</span>';
     html += '<span><b>' + ins.length + '</b> refs in</span>';
     html += '<span title="Best-effort static fields; live instances may differ"><b>' + fields.length + '</b> fields</span>';
+    html += '<button type="button" class="stat-pill" data-copy="" data-copy-struct title="Copy TypeScript interface">Copy struct<span class="copy-hint">copied</span></button>';
     html += '</div>';
 
     html += '<div class="detail-tabs">';
@@ -677,6 +678,46 @@
         if (evt.target.closest('.linked')) return;
         const aliasBadge = evt.target.closest('.alias-badge[data-copy]');
         if (aliasBadge && aliasBadge !== el) return;
+        if (el.hasAttribute('data-copy-struct')) {
+          function typeScriptType(valueType) {
+            const type = valueType.replace(/&$/, '').trim();
+            if (type.endsWith('[]')) return 'Array<' + typeScriptType(type.slice(0, -2)) + '>';
+            const generic = type.match(/^([^<]+)<(.*)>$/);
+            if (generic) {
+              const args = [];
+              let depth = 0;
+              let start = 0;
+              for (let i = 0; i <= generic[2].length; i++) {
+                if (i === generic[2].length || generic[2][i] === ',' && depth === 0) {
+                  args.push(typeScriptType(generic[2].slice(start, i)));
+                  start = i + 1;
+                } else if (generic[2][i] === '<') depth++;
+                else if (generic[2][i] === '>') depth--;
+              }
+              switch (generic[1].split(/[./]/).pop()) {
+                case 'Nullable': return args[0] + ' | null';
+                case 'List': case 'IEnumerable': case 'Il2CppReferenceArray': case 'Il2CppStructArray':
+                  return 'Array<' + args[0] + '>';
+                case 'Dictionary': return 'Partial<Record<' + args.join(', ') + '>>';
+                case 'ValueTuple': return '{ ' + args.map((arg, i) => 'Item' + (i + 1) + ': ' + arg).join('; ') + ' }';
+                default: return 'unknown';
+              }
+            }
+            switch (type.split(/[./]/).pop()) {
+              case 'Boolean': case 'ObscuredBool': return 'boolean';
+              case 'String': case 'Char': case 'ObscuredString': case 'BigDouble': case 'DateTime': case 'DateTimeOffset': return 'string';
+              case 'Byte': case 'SByte': case 'Int16': case 'UInt16': case 'Int32': case 'UInt32': case 'ObscuredInt': return 'number';
+              case 'Int64': case 'UInt64': return 'number | string';
+              case 'Single': case 'Double': case 'ObscuredDouble': return 'number | "NaN" | "Infinity" | "-Infinity"';
+            }
+            if (type === 'UnityEngine.Color') return '{ r: number; g: number; b: number; a: number }';
+            if (nodeTypes.get(type.replace(/\//g, '.'))?.variants) return 'keyof typeof ' + type.split(/[./]/).pop();
+            return nodeTypes.has(type.replace(/\//g, '.')) ? type.split(/[./]/).pop() : 'unknown';
+          }
+          return copyToClipboard('export interface ' + nodeId.split(/[./]/).pop() + ' {\n' + fields.map(e =>
+            '  ' + (/^[A-Za-z_$][\w$]*$/.test(e.property) ? e.property : JSON.stringify(e.property)) + ': ' + typeScriptType(e.valueType) + ';'
+          ).join('\n') + '\n}\n', el);
+        }
         copyToClipboard(el.getAttribute('data-copy'), el);
       });
     });
