@@ -365,6 +365,38 @@ mod tests {
     }
 
     #[test]
+    fn ui_registry_alignment_fields_validate_update_and_reset() {
+        check(r#"
+            ui.a = { text: 'aligned', onClick() {} };
+            const original = ui.a, first = snapshots.at(-1)[0];
+            assert(ui.a.alignX === 'left' && ui.a.alignY === 'center');
+            assert(first.alignX === 'left' && first.alignY === 'center');
+            for (const alignX of ['left', 'center', 'right']) {
+                for (const alignY of ['top', 'center', 'bottom']) {
+                    ui.a.alignX = alignX; ui.a.alignY = alignY;
+                    const state = snapshots.at(-1)[0];
+                    assert(state.alignX === alignX && state.alignY === alignY);
+                    assert(ui.a === original && state.instanceId === first.instanceId && state.eventsVersion === first.eventsVersion);
+                }
+            }
+            const count = snapshots.length;
+            ui.a.alignX = 'right'; ui.a.alignY = 'bottom';
+            for (const value of ['middle', 'LEFT', '', null, undefined, 1, {}, new String('center')]) {
+                throws(() => ui.a.alignX = value); throws(() => ui.a.alignY = value);
+                throws(() => ui.a = { text: 'invalid replacement', alignX: value });
+                throws(() => ui.a = { text: 'invalid replacement', alignY: value });
+            }
+            throws(() => ui.a.alignX = 'top'); throws(() => ui.a.alignY = 'left');
+            assert(ui.a === original && ui.a.alignX === 'right' && ui.a.alignY === 'bottom' && snapshots.length === count);
+            delete ui.a.alignX; delete ui.a.alignY;
+            assert(ui.a.alignX === 'left' && ui.a.alignY === 'center');
+            assert(snapshots.at(-1)[0].alignX === 'left' && snapshots.at(-1)[0].alignY === 'center');
+            ui.b = { alignX: 'center', alignY: 'top' };
+            assert(snapshots.at(-1)[1].alignX === 'center' && snapshots.at(-1)[1].alignY === 'top');
+        "#);
+    }
+
+    #[test]
     fn ui_registry_accepts_styles_in_initial_definition() {
         check(r#"
             const original = { text: 'Click Me', border: { thickness: 2, color: [255,0,0] },

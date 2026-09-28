@@ -55,6 +55,8 @@ internal sealed record ScriptUiElementState(
     Guid InstanceId,
     ulong EventsVersion,
     string Text,
+    string AlignX,
+    string AlignY,
     double PosX,
     double PosY,
     ScriptUiLengthState LenX,

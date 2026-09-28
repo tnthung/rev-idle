@@ -145,6 +145,7 @@ Create elements once in `afterLoad`. All definition fields also support later as
 export function afterLoad() {
   rev.ui.button = {
     text: "Click Me", posX: 100, posY: -100,
+    alignX: "center", alignY: "center",
     lenX: { min: 100 }, lenY: 28,
     color: [40, 40, 40],
     border: { thickness: 2, color: [255, 0, 0, 180] },
@@ -168,7 +169,9 @@ export default function() {}
 
 Use `delete rev.ui.button` to remove an element. Assigning a whole definition replaces its identity; field updates preserve it. Check identity after an `await` before updating a captured element. A write through a deleted/replaced proxy throws. Equal field writes are no-ops, including structurally equal colors/styles and identical handler functions. Changes publish snapshots asynchronously, independently of the 50 ms default-call delay; unchanged UI is not periodically resent.
 
-Colors use RGB or RGBA bytes. Lengths are fixed numbers or automatic `{ min, max }` bounds. Padding contributes to automatic size and is included in fixed sizes. Its `thickness` is the fallback for `top`, `right`, `bottom`, and `left`. Border is an external outline: it adds no size or hit area. Corner `radius` is the fallback for each named corner; explicit zero stays square. Replace compound fields as a whole, for example `rev.ui.button.border = { thickness: 1, color: [0, 255, 0] }`; nested writes throw. Text is plain, centered, and clipped inside the padded rounded box.
+Colors use RGB or RGBA bytes. Lengths are fixed numbers or automatic `{ min, max }` bounds. Padding contributes to automatic size and is included in fixed sizes. Its `thickness` is the fallback for `top`, `right`, `bottom`, and `left`. Border is an external outline: it adds no size or hit area. Corner `radius` is the fallback for each named corner; explicit zero stays square. Replace compound fields as a whole, for example `rev.ui.button.border = { thickness: 1, color: [0, 255, 0] }`; nested writes throw. Text is plain and clipped inside the padded rounded box.
+
+Use `alignX: "left" | "center" | "right"` and `alignY: "top" | "center" | "bottom"` to place text within its padded content area. Defaults are `"left"` and `"center"`. Assign either field to update an existing element, or delete it to restore the default. Alignment does not change automatic size or the element's position.
 
 Positive positions measure from the left/top; negative positions measure from the right/bottom to the element's far edge. Elements with handlers receive pointer entry, exit, and matching press/release clicks. Async handlers overlap after yielding. Handler errors are logged without unloading the script. Elements without handlers allow pointer hits through.
 

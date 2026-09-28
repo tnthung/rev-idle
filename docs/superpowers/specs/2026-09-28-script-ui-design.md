@@ -118,6 +118,8 @@ type RevUiPadding = Readonly<{
 
 interface RevUiElement {
   text?: string;
+  alignX?: "left" | "center" | "right";
+  alignY?: "top" | "center" | "bottom";
   posX?: number;
   posY?: number;
   lenX?: RevUiLength;
@@ -185,6 +187,8 @@ These defaults complete the proposed first-version contract:
 | Field | Default and interpretation |
 | --- | --- |
 | `text` | Empty string; plain text, rich-text markup disabled |
+| `alignX` | `"left"`; one of `"left"`, `"center"`, `"right"` |
+| `alignY` | `"center"`; one of `"top"`, `"center"`, `"bottom"` |
 | `posX`, `posY` | `0`; finite viewport-pixel offsets |
 | `lenX`, `lenY` | `{ min: 0 }`; automatic text size plus padding |
 | Numeric length | Fixed non-negative finite pixels |
@@ -198,11 +202,11 @@ These defaults complete the proposed first-version contract:
 | `padding` | `{ thickness: 0 }`; no padding by default |
 | Padding values | Non-negative finite pixels, including fractional values; each named edge overrides `thickness`, which defaults to 0 |
 | Color channels | Integer bytes `0..255`; omitted alpha is 255 |
-| Text layout | Existing overlay font fallback, size 14, centered within the content area after padding, no automatic wrapping; explicit newlines supported |
+| Text layout | Existing overlay font fallback, size 14, aligned by `alignX`/`alignY` within the content area after padding, no automatic wrapping; explicit newlines supported |
 
 Measure text with Unity's text metrics. Preferred width is text width plus left/right padding; preferred height is text height plus top/bottom padding. Apply automatic min/max constraints to those preferred sizes. Numeric lengths and min/max bounds describe the element's box including padding. Border thickness contributes nothing to fixed or automatic size, text layout, or anchoring. An empty string has zero preferred text size; padding can still give it a nonzero box. A zero-width or zero-height element renders nothing, including its border, and has no pointer hit area.
 
-Text is centered in the content rectangle starting at `(left, top)`, with width `max(0, w - left - right)` and height `max(0, h - top - bottom)`. Clip text to the intersection of that rectangle and the rounded element shape. If padding consumes a fixed/max-constrained dimension, the content area is empty; preserve the requested padding and box size without drawing text outside them.
+Text uses `alignX` and `alignY` in the content rectangle starting at `(left, top)`, with width `max(0, w - left - right)` and height `max(0, h - top - bottom)`. Alignment changes placement within that rectangle without changing preferred size, padding, anchors, or hit area. Both fields support initial definitions, later assignments, and deletion back to their defaults; other values throw without changing the element. Clip text to the intersection of that rectangle and the rounded element shape. If padding consumes a fixed/max-constrained dimension, the content area is empty; preserve the requested padding and box size without drawing text outside them.
 
 ### Borders, corners, and padding
 
@@ -245,6 +249,7 @@ ScriptUiSnapshot {
 ScriptUiElementState {
   id: string, instanceId: UUID string, eventsVersion: u64,
   text: string, posX: number, posY: number,
+  alignX: "left" | "center" | "right", alignY: "top" | "center" | "bottom",
   lenX: ScriptUiLengthState, lenY: ScriptUiLengthState,
   color: [u8, u8, u8, u8], textColor: [u8, u8, u8, u8],
   border: ScriptUiBorderState, corner: ScriptUiCornerState, padding: ScriptUiPaddingState,

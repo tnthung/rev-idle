@@ -45,6 +45,7 @@ StatePayloadFiltersEarlierLayersByNativeIdentity();
 BridgePacketPayloadsMatchSharedFixture();
 ScriptUiSnapshotRejectsStaleRevisionAndGeneration();
 ScriptUiSnapshotReplacesAtomically();
+ScriptUiSnapshotValidatesAlignmentAndClonesState();
 ScriptUiDisconnectRetainsVisualStateButDisablesEvents();
 ScriptUiLayoutUsesViewportAnchorsAndPadding();
 ScriptUiOutlineAndCornerGeometry();
@@ -133,7 +134,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("130 tests passed.");
+System.Console.WriteLine("131 tests passed.");
 
 static void ClientProcessConsumesConsoleClearWithoutLoggingIt()
 {
@@ -170,11 +171,56 @@ static void ScriptUiSnapshotReplacesAtomically()
     ScriptUiElementState malformed = ScriptUiTestElement("two") with { Color = new byte[] { 1, 2, 3 } };
     Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { malformed }), 2), testName);
     Equal("one", bridge.Snapshot!.Elements[0].Id, testName);
+    malformed = ScriptUiTestElement("two") with { AlignX = "diagonal" };
+    Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { malformed }), 2), testName);
+    Equal("one", bridge.Snapshot!.Elements[0].Id, testName);
     ScriptUiElementState duplicate = first.Elements[0] with { Id = "different-name" };
     Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { first.Elements[0], duplicate }), 2), testName);
     Equal((ulong)1, bridge.Snapshot!.Revision, testName);
     Equal(true, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 3, Array.Empty<ScriptUiElementState>()), 2), testName);
     Equal(0, bridge.Snapshot!.Elements.Length, testName);
+}
+
+static void ScriptUiSnapshotValidatesAlignmentAndClonesState()
+{
+    const string testName = nameof(ScriptUiSnapshotValidatesAlignmentAndClonesState);
+    using WsConnection connection = WsConnection.DisconnectedForTest();
+    ScriptUiBridge bridge = new(connection);
+    Guid session = Guid.NewGuid();
+    ScriptUiElementState element = ScriptUiTestElement("one") with
+    {
+        AlignX = "right",
+        AlignY = "bottom",
+        TextColor = new byte[] { 1, 2, 3, 4 },
+        Events = new[] { "click" }
+    };
+    Equal(true, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 1, new[] { element }), 1), testName);
+    element.TextColor[0] = 99;
+    element.Events[0] = "hover";
+    ScriptUiElementState cloned = bridge.Snapshot!.Elements[0];
+    Equal("right", cloned.AlignX, testName);
+    Equal("bottom", cloned.AlignY, testName);
+    Equal((byte)1, cloned.TextColor[0], testName);
+    Equal("click", cloned.Events[0], testName);
+    Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { ScriptUiTestElement("bad") with { AlignY = null! } }), 1), testName);
+    Equal((ulong)1, bridge.Snapshot!.Revision, testName);
+    ulong revision = 1;
+    foreach (string alignX in new[] { "left", "center", "right" })
+        foreach (string alignY in new[] { "top", "center", "bottom" })
+        {
+            Equal(true, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, ++revision,
+                new[] { ScriptUiTestElement("aligned") with { AlignX = alignX, AlignY = alignY } }), 1), testName);
+            Equal(alignX, bridge.Snapshot!.Elements[0].AlignX, testName);
+            Equal(alignY, bridge.Snapshot!.Elements[0].AlignY, testName);
+        }
+    foreach (string? invalid in new string?[] { null, "", "middle", "LEFT" })
+    {
+        Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, revision + 1,
+            new[] { ScriptUiTestElement("invalid") with { AlignX = invalid! } }), 1), testName);
+        Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, revision + 1,
+            new[] { ScriptUiTestElement("invalid") with { AlignY = invalid! } }), 1), testName);
+        Equal(revision, bridge.Snapshot!.Revision, testName);
+    }
 }
 
 static void ScriptUiDisconnectRetainsVisualStateButDisablesEvents()
@@ -353,6 +399,8 @@ static ScriptUiElementState ScriptUiTestElement(string id)
         Guid.NewGuid(),
         1,
         "",
+        "left",
+        "center",
         0,
         0,
         new ScriptUiLengthState(null, 0, null),
@@ -450,13 +498,13 @@ static void BridgePacketPayloadsMatchSharedFixture()
             new[]
             {
                 new ScriptUiElementState(
-                    "button", Guid.Parse("22222222-2222-4222-8222-222222222222"), 2, "Click Me", 100, -100,
+                    "button", Guid.Parse("22222222-2222-4222-8222-222222222222"), 2, "Click Me", "left", "center", 100, -100,
                     new ScriptUiLengthState(null, 100, 300), new ScriptUiLengthState(20, 0, null),
                     new byte[] { 255, 0, 0, 255 }, new byte[] { 255, 255, 255, 255 },
                     new ScriptUiBorderState(2, new byte[] { 0, 255, 0, 128 }), new ScriptUiCornerState(0, 5, 0, 5),
                     new ScriptUiPaddingState(4, 8, 4, 0), new[] { "hover", "leave", "click" }),
                 new ScriptUiElementState(
-                    "signal", Guid.Parse("33333333-3333-4333-8333-333333333333"), 1, "", 0, 0,
+                    "signal", Guid.Parse("33333333-3333-4333-8333-333333333333"), 1, "", "left", "center", 0, 0,
                     new ScriptUiLengthState(10, 0, null), new ScriptUiLengthState(10, 0, null),
                     new byte[] { 0, 255, 0, 255 }, new byte[] { 255, 255, 255, 255 },
                     new ScriptUiBorderState(0, new byte[] { 255, 255, 255, 255 }), new ScriptUiCornerState(0, 0, 0, 0),

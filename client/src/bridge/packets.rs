@@ -19,6 +19,8 @@ pub(crate) struct ScriptUiElementState {
     pub(crate) instance_id: Uuid,
     pub(crate) events_version: u64,
     pub(crate) text: String,
+    pub(crate) align_x: String,
+    pub(crate) align_y: String,
     pub(crate) pos_x: f64,
     pub(crate) pos_y: f64,
     pub(crate) len_x: ScriptUiLengthState,

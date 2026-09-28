@@ -502,6 +502,7 @@ internal sealed class ScriptUiOverlay : IDisposable
             {
                 font = _font,
                 fontSize = FontSize,
+                lineSpacing = 1,
                 scaleFactor = 1,
                 textAnchor = TextAnchor.UpperLeft,
                 alignByGeometry = false,
@@ -621,7 +622,7 @@ internal sealed class ScriptUiOverlay : IDisposable
             _text.transform.SetParent(_contentObject.transform, false);
             _text.font = font;
             _text.fontSize = FontSize;
-            _text.alignment = TextAnchor.MiddleCenter;
+            _text.alignment = TextAnchor.MiddleLeft;
             _text.horizontalOverflow = HorizontalWrapMode.Overflow;
             _text.verticalOverflow = VerticalWrapMode.Overflow;
             _text.supportRichText = false;
@@ -650,6 +651,19 @@ internal sealed class ScriptUiOverlay : IDisposable
             Layout = ScriptUiGeometry.Calculate(state, viewportWidth, viewportHeight, measuredText.x, measuredText.y);
             _text.text = state.Text;
             _text.font = font;
+            _text.alignment = (state.AlignX, state.AlignY) switch
+            {
+                ("left", "top") => TextAnchor.UpperLeft,
+                ("center", "top") => TextAnchor.UpperCenter,
+                ("right", "top") => TextAnchor.UpperRight,
+                ("left", "center") => TextAnchor.MiddleLeft,
+                ("center", "center") => TextAnchor.MiddleCenter,
+                ("right", "center") => TextAnchor.MiddleRight,
+                ("left", "bottom") => TextAnchor.LowerLeft,
+                ("center", "bottom") => TextAnchor.LowerCenter,
+                ("right", "bottom") => TextAnchor.LowerRight,
+                _ => TextAnchor.MiddleLeft
+            };
             _text.color = new Color32(state.TextColor[0], state.TextColor[1], state.TextColor[2], state.TextColor[3]);
             _background.color = Color.white;
             _fill.color = new Color32(state.Color[0], state.Color[1], state.Color[2], state.Color[3]);

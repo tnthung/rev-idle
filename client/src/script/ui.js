@@ -12,6 +12,7 @@
     const handlers = { onHover: 'hover', onLeave: 'leave', onClick: 'click' };
     const defaults = {
         text: '', posX: 0, posY: 0, lenX: { min: 0 }, lenY: { min: 0 },
+        alignX: 'left', alignY: 'center',
         color: [0, 0, 0, 0], textColor: [255, 255, 255, 255],
         border: { thickness: 0, color: [255, 255, 255, 255] },
         corner: { radius: 0 }, padding: { thickness: 0 },
@@ -41,6 +42,14 @@
         if (!hasOwn(defaults, field)) throw new NativeTypeError(`Unknown UI field: ${string(field)}`);
         if (field === 'text') {
             if (typeof value !== 'string') throw new NativeTypeError('text must be a string');
+            return value;
+        }
+        if (field === 'alignX') {
+            if (value !== 'left' && value !== 'center' && value !== 'right') throw new NativeTypeError('Invalid alignX');
+            return value;
+        }
+        if (field === 'alignY') {
+            if (value !== 'top' && value !== 'center' && value !== 'bottom') throw new NativeTypeError('Invalid alignY');
             return value;
         }
         if (field === 'posX' || field === 'posY' || ((field === 'lenX' || field === 'lenY') && typeof value === 'number')) {
@@ -114,7 +123,7 @@
             const events = setPrototypeOf([], null);
             for (let i = 0; i < handlerKeys.length; i++) if (element.values[handlerKeys[i]]) events[events.length] = handlers[handlerKeys[i]];
             states[states.length] = { __proto__: null, id, instanceId: element.instanceId, eventsVersion: element.eventsVersion,
-                text: values.text, posX: values.posX, posY: values.posY, ...lengths, ...colors,
+                text: values.text, alignX: values.alignX, alignY: values.alignY, posX: values.posX, posY: values.posY, ...lengths, ...colors,
                 border: { __proto__: null, thickness: values.border.thickness ?? 0, color: setPrototypeOf([borderColor[0], borderColor[1], borderColor[2], borderColor[3] ?? 255], null) },
                 corner, padding, events };
         }
