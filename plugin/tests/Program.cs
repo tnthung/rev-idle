@@ -50,6 +50,7 @@ ScriptUiDisconnectRetainsVisualStateButDisablesEvents();
 ScriptUiLayoutUsesViewportAnchorsAndPadding();
 ScriptUiOutlineAndCornerGeometry();
 ScriptUiPaddingLayout();
+ScriptUiTextMeasurementIncludesGlyphOverhang();
 ScriptUiRoundedHitTestMatchesRelay();
 ScriptUiPointerRequiresMatchingLiveInstance();
 ScriptUiPointerRejectsStaleConnection();
@@ -134,7 +135,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("131 tests passed.");
+System.Console.WriteLine("132 tests passed.");
 
 static void ClientProcessConsumesConsoleClearWithoutLoggingIt()
 {
@@ -191,6 +192,7 @@ static void ScriptUiSnapshotValidatesAlignmentAndClonesState()
     {
         AlignX = "right",
         AlignY = "bottom",
+        Font = "Consolas",
         TextColor = new byte[] { 1, 2, 3, 4 },
         Events = new[] { "click" }
     };
@@ -200,8 +202,10 @@ static void ScriptUiSnapshotValidatesAlignmentAndClonesState()
     ScriptUiElementState cloned = bridge.Snapshot!.Elements[0];
     Equal("right", cloned.AlignX, testName);
     Equal("bottom", cloned.AlignY, testName);
+    Equal("Consolas", cloned.Font, testName);
     Equal((byte)1, cloned.TextColor[0], testName);
     Equal("click", cloned.Events[0], testName);
+    Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { ScriptUiTestElement("bad") with { Font = null! } }), 1), testName);
     Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { ScriptUiTestElement("bad") with { AlignY = null! } }), 1), testName);
     Equal((ulong)1, bridge.Snapshot!.Revision, testName);
     ulong revision = 1;
@@ -341,6 +345,30 @@ static void ScriptUiPaddingLayout()
     Equal(4f, layout.Content.yMin, testName);
 }
 
+static void ScriptUiTextMeasurementIncludesGlyphOverhang()
+{
+    const string testName = nameof(ScriptUiTextMeasurementIncludesGlyphOverhang);
+    ScriptUiTextMeasurement measured = new(100, 30, -32.5f, 1.2f);
+    Equal(100f, measured.Width, testName);
+    Equal(35f, measured.Height, testName);
+    Equal(2f, measured.Top, testName);
+    Equal(3f, measured.Bottom, testName);
+    foreach (float contentHeight in new[] { 35f, 80f })
+        foreach (float anchor in new[] { 0f, 0.5f, 1f })
+        {
+            float textTop = measured.Top + anchor * (contentHeight - measured.Top - measured.Bottom - 30);
+            Equal(true, textTop - 1.2f >= 0, testName);
+            Equal(true, textTop + 32.5f <= contentHeight, testName);
+        }
+    ScriptUiElementState element = ScriptUiTestElement("text") with { Padding = new ScriptUiPaddingState(10, 10, 10, 10) };
+    Equal(55f, ScriptUiGeometry.Calculate(element, 1920, 1080, measured.Width, measured.Height).Box.height, testName);
+    Equal(40f, ScriptUiGeometry.Calculate(element with { LenY = new ScriptUiLengthState(40, 0, null) }, 1920, 1080, measured.Width, measured.Height).Box.height, testName);
+    Equal(40f, ScriptUiGeometry.Calculate(element with { LenY = new ScriptUiLengthState(null, 0, 40) }, 1920, 1080, measured.Width, measured.Height).Box.height, testName);
+    Equal(31f, new ScriptUiTextMeasurement(100, 30.25f, -29, -2).Height, testName);
+    Equal(30f, new ScriptUiTextMeasurement(100, 30, -29, -2).Height, testName);
+    Equal(0f, default(ScriptUiTextMeasurement).Height, testName);
+}
+
 static void ScriptUiRoundedHitTestMatchesRelay()
 {
     const string testName = nameof(ScriptUiRoundedHitTestMatchesRelay);
@@ -398,6 +426,7 @@ static ScriptUiElementState ScriptUiTestElement(string id)
         id,
         Guid.NewGuid(),
         1,
+        "",
         "",
         "left",
         "center",
@@ -498,13 +527,13 @@ static void BridgePacketPayloadsMatchSharedFixture()
             new[]
             {
                 new ScriptUiElementState(
-                    "button", Guid.Parse("22222222-2222-4222-8222-222222222222"), 2, "Click Me", "left", "center", 100, -100,
+                    "button", Guid.Parse("22222222-2222-4222-8222-222222222222"), 2, "Click Me", "Consolas", "left", "center", 100, -100,
                     new ScriptUiLengthState(null, 100, 300), new ScriptUiLengthState(20, 0, null),
                     new byte[] { 255, 0, 0, 255 }, new byte[] { 255, 255, 255, 255 },
                     new ScriptUiBorderState(2, new byte[] { 0, 255, 0, 128 }), new ScriptUiCornerState(0, 5, 0, 5),
                     new ScriptUiPaddingState(4, 8, 4, 0), new[] { "hover", "leave", "click" }),
                 new ScriptUiElementState(
-                    "signal", Guid.Parse("33333333-3333-4333-8333-333333333333"), 1, "", "left", "center", 0, 0,
+                    "signal", Guid.Parse("33333333-3333-4333-8333-333333333333"), 1, "", "", "left", "center", 0, 0,
                     new ScriptUiLengthState(10, 0, null), new ScriptUiLengthState(10, 0, null),
                     new byte[] { 0, 255, 0, 255 }, new byte[] { 255, 255, 255, 255 },
                     new ScriptUiBorderState(0, new byte[] { 255, 255, 255, 255 }), new ScriptUiCornerState(0, 0, 0, 0),

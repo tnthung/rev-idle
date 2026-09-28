@@ -118,6 +118,7 @@ type RevUiPadding = Readonly<{
 
 interface RevUiElement {
   text?: string;
+  font?: string;
   alignX?: "left" | "center" | "right";
   alignY?: "top" | "center" | "bottom";
   posX?: number;
@@ -187,6 +188,7 @@ These defaults complete the proposed first-version contract:
 | Field | Default and interpretation |
 | --- | --- |
 | `text` | Empty string; plain text, rich-text markup disabled |
+| `font` | Empty string uses the existing overlay font fallback; otherwise an installed system font family name |
 | `alignX` | `"left"`; one of `"left"`, `"center"`, `"right"` |
 | `alignY` | `"center"`; one of `"top"`, `"center"`, `"bottom"` |
 | `posX`, `posY` | `0`; finite viewport-pixel offsets |
@@ -202,7 +204,9 @@ These defaults complete the proposed first-version contract:
 | `padding` | `{ thickness: 0 }`; no padding by default |
 | Padding values | Non-negative finite pixels, including fractional values; each named edge overrides `thickness`, which defaults to 0 |
 | Color channels | Integer bytes `0..255`; omitted alpha is 255 |
-| Text layout | Existing overlay font fallback, size 14, aligned by `alignX`/`alignY` within the content area after padding, no automatic wrapping; explicit newlines supported |
+| Text layout | Selected font, size 14, aligned by `alignX`/`alignY` within the content area after padding, no automatic wrapping; explicit newlines supported |
+
+Font names are matched case-insensitively against Unity's installed system font names. Unavailable or unloadable names use the default font and log a warning once while that name remains requested. The requested string remains readable from the element. `font` supports initial definitions and later assignments; deleting it restores the default. Non-string values throw without changing the element. Measure and render with the same resolved font, and recalculate automatic size when the font changes. Share dynamically created fonts across elements and release them when no longer used or when the UI is cleared; never destroy the game's default font.
 
 Measure text with Unity's text metrics. Preferred width is text width plus left/right padding; preferred height is text height plus top/bottom padding. Apply automatic min/max constraints to those preferred sizes. Numeric lengths and min/max bounds describe the element's box including padding. Border thickness contributes nothing to fixed or automatic size, text layout, or anchoring. An empty string has zero preferred text size; padding can still give it a nonzero box. A zero-width or zero-height element renders nothing, including its border, and has no pointer hit area.
 
@@ -248,7 +252,7 @@ ScriptUiSnapshot {
 }
 ScriptUiElementState {
   id: string, instanceId: UUID string, eventsVersion: u64,
-  text: string, posX: number, posY: number,
+  text: string, font: string, posX: number, posY: number,
   alignX: "left" | "center" | "right", alignY: "top" | "center" | "bottom",
   lenX: ScriptUiLengthState, lenY: ScriptUiLengthState,
   color: [u8, u8, u8, u8], textColor: [u8, u8, u8, u8],

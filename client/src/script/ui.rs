@@ -365,6 +365,33 @@ mod tests {
     }
 
     #[test]
+    fn ui_registry_font_updates_and_resets_without_replacing_element() {
+        check(r#"
+            ui.a = { text: 'default', onClick() {} };
+            const original = ui.a, first = snapshots.at(-1)[0];
+            assert(ui.a.font === '' && first.font === '');
+            ui.a.font = 'Consolas';
+            assert(ui.a === original && ui.a.font === 'Consolas');
+            assert(snapshots.at(-1)[0].font === 'Consolas');
+            assert(snapshots.at(-1)[0].instanceId === first.instanceId && snapshots.at(-1)[0].eventsVersion === first.eventsVersion);
+            const count = snapshots.length;
+            ui.a.font = 'Consolas';
+            for (const value of [null, undefined, 14, {}, [], new String('Arial')]) {
+                throws(() => ui.a.font = value);
+                throws(() => ui.a = { text: 'invalid replacement', font: value });
+            }
+            assert(ui.a === original && ui.a.font === 'Consolas' && snapshots.length === count);
+            delete ui.a.font;
+            assert(ui.a.font === '' && snapshots.at(-1)[0].font === '');
+            const resetCount = snapshots.length;
+            delete ui.a.font; ui.a.font = '';
+            assert(snapshots.length === resetCount);
+            ui.b = { text: 'named', font: 'Noto Sans CJK TC' };
+            assert(snapshots.at(-1)[1].font === 'Noto Sans CJK TC');
+        "#);
+    }
+
+    #[test]
     fn ui_registry_alignment_fields_validate_update_and_reset() {
         check(r#"
             ui.a = { text: 'aligned', onClick() {} };

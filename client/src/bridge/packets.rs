@@ -19,6 +19,7 @@ pub(crate) struct ScriptUiElementState {
     pub(crate) instance_id: Uuid,
     pub(crate) events_version: u64,
     pub(crate) text: String,
+    pub(crate) font: String,
     pub(crate) align_x: String,
     pub(crate) align_y: String,
     pub(crate) pos_x: f64,

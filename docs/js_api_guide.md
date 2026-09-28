@@ -160,7 +160,7 @@ export function afterLoad() {
       if (rev.ui.button === button) button.text = "Click Me";
     },
   };
-  rev.ui.label = { text: "Ready", posX: 100, posY: -140 };
+  rev.ui.label = { text: "Ready", font: "Consolas", posX: 100, posY: -140 };
   rev.ui.signal = { posX: 80, posY: -140, lenX: 12, lenY: 12, color: [0, 255, 0] };
 }
 
@@ -172,6 +172,8 @@ Use `delete rev.ui.button` to remove an element. Assigning a whole definition re
 Colors use RGB or RGBA bytes. Lengths are fixed numbers or automatic `{ min, max }` bounds. Padding contributes to automatic size and is included in fixed sizes. Its `thickness` is the fallback for `top`, `right`, `bottom`, and `left`. Border is an external outline: it adds no size or hit area. Corner `radius` is the fallback for each named corner; explicit zero stays square. Replace compound fields as a whole, for example `rev.ui.button.border = { thickness: 1, color: [0, 255, 0] }`; nested writes throw. Text is plain and clipped inside the padded rounded box.
 
 Use `alignX: "left" | "center" | "right"` and `alignY: "top" | "center" | "bottom"` to place text within its padded content area. Defaults are `"left"` and `"center"`. Assign either field to update an existing element, or delete it to restore the default. Alignment does not change automatic size or the element's position.
+
+Set `font` to an installed system font family name, for example `font: "Consolas"` or `rev.ui.label.font = "Arial"`. Names are case-insensitive. Empty, omitted, or deleted `font` uses the default overlay font; unavailable fonts fall back with a warning. Font changes recalculate automatic width and height. Text remains 14px.
 
 Positive positions measure from the left/top; negative positions measure from the right/bottom to the element's far edge. Elements with handlers receive pointer entry, exit, and matching press/release clicks. Async handlers overlap after yielding. Handler errors are logged without unloading the script. Elements without handlers allow pointer hits through.
 

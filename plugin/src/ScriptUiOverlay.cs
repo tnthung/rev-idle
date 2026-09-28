@@ -25,6 +25,22 @@ internal readonly struct ScriptUiRect
     internal float yMax => yMin + height;
 }
 
+internal readonly struct ScriptUiTextMeasurement
+{
+    internal ScriptUiTextMeasurement(float width, float height, float minY, float maxY)
+    {
+        Width = width;
+        Top = MathF.Ceiling(MathF.Max(0, maxY));
+        Bottom = MathF.Ceiling(MathF.Max(height, -minY)) - height;
+        Height = height + Top + Bottom;
+    }
+
+    internal float Width { get; }
+    internal float Height { get; }
+    internal float Top { get; }
+    internal float Bottom { get; }
+}
+
 internal readonly struct ScriptUiRadii
 {
     internal ScriptUiRadii(float topLeft, float topRight, float bottomLeft, float bottomRight)
@@ -260,6 +276,9 @@ internal sealed class ScriptUiOverlay : IDisposable
     private readonly Canvas _canvas;
     private Font? _font;
     private TextGenerator? _textGenerator;
+    private readonly Dictionary<string, Font?> _scriptFonts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<(string Text, Font Font), ScriptUiTextMeasurement> _textMeasurements = new();
+    private ulong _textMeasurementRevision;
     private readonly Func<ScriptUiEvent, bool> _sendEvent;
     private readonly Action<string>? _log;
     private readonly List<ElementView> _elements = new();
@@ -357,7 +376,10 @@ internal sealed class ScriptUiOverlay : IDisposable
             return;
         }
         if (_sessionId is not Guid previousSession || previousSession != sessionId)
+        {
             _pressed.Clear();
+            ClearElements();
+        }
         _sessionId = sessionId;
         if (_font == null)
         {
@@ -375,10 +397,21 @@ internal sealed class ScriptUiOverlay : IDisposable
         int height = Screen.height;
         if (width <= 0 || height <= 0)
             return;
-        Vector2[] measurements = new Vector2[snapshot.Elements.Length];
+        if (_textMeasurementRevision != snapshot.Revision)
+        {
+            _textMeasurements.Clear();
+            _textMeasurementRevision = snapshot.Revision;
+        }
+        Font?[] fonts = new Font?[snapshot.Elements.Length];
+        ScriptUiTextMeasurement[] measurements = new ScriptUiTextMeasurement[snapshot.Elements.Length];
+        HashSet<string> requestedFonts = new(StringComparer.OrdinalIgnoreCase);
         for (int index = 0; index < snapshot.Elements.Length; index++)
         {
-            if (!TryMeasure(snapshot.Elements[index].Text, out measurements[index]))
+            ScriptUiElementState element = snapshot.Elements[index];
+            fonts[index] = ResolveFont(element.Font);
+            if (element.Font.Length > 0)
+                requestedFonts.Add(element.Font);
+            if (fonts[index] == null || !TryMeasure(element.Text, fonts[index], out measurements[index]))
             {
                 _font = null;
                 _eventsEnabled = false;
@@ -400,11 +433,11 @@ internal sealed class ScriptUiOverlay : IDisposable
             ElementView? view = _byInstance.TryGetValue(element.InstanceId, out ElementView? existing) ? existing : null;
             if (view is null)
             {
-                view = new ElementView(_root.transform, _font, _sendEvent, _log);
+                view = new ElementView(_root.transform, fonts[index]!, _sendEvent, _log);
                 _byInstance[element.InstanceId] = view;
             }
             view.SetSession(sessionId);
-            view.Apply(element, width, height, measurements[index], _font);
+            view.Apply(element, width, height, measurements[index], fonts[index]!);
             view.SetEventsEnabled(_eventsEnabled);
             view.Root.transform.SetSiblingIndex(index);
             retained.Add(element.InstanceId);
@@ -420,6 +453,14 @@ internal sealed class ScriptUiOverlay : IDisposable
         }
         _elements.Clear();
         _elements.AddRange(next);
+        foreach ((string family, Font? font) in _scriptFonts.ToArray())
+        {
+            if (requestedFonts.Contains(family))
+                continue;
+            _scriptFonts.Remove(family);
+            if (font != null)
+                UnityEngine.Object.Destroy(font);
+        }
     }
 
     internal bool HandlePointer(ScriptUiPointer pointer)
@@ -488,19 +529,55 @@ internal sealed class ScriptUiOverlay : IDisposable
         return null;
     }
 
-    private bool TryMeasure(string text, out Vector2 measured)
+    private Font? ResolveFont(string requested)
     {
-        measured = Vector2.zero;
+        if (requested.Length == 0)
+            return _font;
+        if (_scriptFonts.TryGetValue(requested, out Font? cached))
+            return cached != null ? cached : _font;
+        Font? resolved = null;
+        try
+        {
+            string? canonical = Font.GetOSInstalledFontNames()
+                .FirstOrDefault(name => string.Equals(name, requested, StringComparison.OrdinalIgnoreCase));
+            if (canonical is not null)
+            {
+                // The factory overloads depend on stripped constructors in the game's IL2CPP bindings.
+                resolved = new Font(IL2CPP.il2cpp_object_new(Il2CppClassPointerStore<Font>.NativeClassPtr));
+                Font.Internal_CreateDynamicFont(resolved, new[] { canonical }, FontSize);
+                if (resolved != null)
+                    resolved.hideFlags |= HideFlags.DontUnloadUnusedAsset;
+            }
+        }
+        catch (Exception exception)
+        {
+            if (resolved != null)
+                UnityEngine.Object.Destroy(resolved);
+            _scriptFonts[requested] = null;
+            Report($"Script UI font '{requested}' could not be loaded: {exception.Message}; using the fallback font.");
+            return _font;
+        }
+        _scriptFonts[requested] = resolved;
+        if (resolved == null)
+            Report($"Script UI font '{requested}' is unavailable; using the fallback font.");
+        return resolved != null ? resolved : _font;
+    }
+
+    private bool TryMeasure(string text, Font? font, out ScriptUiTextMeasurement measured)
+    {
+        measured = default;
         if (string.IsNullOrEmpty(text))
             return true;
-        if (_font == null)
+        if (font == null)
             return false;
+        if (_textMeasurements.TryGetValue((text, font), out measured))
+            return true;
         try
         {
             TextGenerator generator = _textGenerator ??= new();
             TextGenerationSettings settings = new()
             {
-                font = _font,
+                font = font,
                 fontSize = FontSize,
                 lineSpacing = 1,
                 scaleFactor = 1,
@@ -513,11 +590,34 @@ internal sealed class ScriptUiOverlay : IDisposable
                 horizontalOverflow = HorizontalWrapMode.Overflow,
                 updateBounds = true,
                 richText = false,
-                generationExtents = new Vector2(float.PositiveInfinity, float.PositiveInfinity)
+                pivot = new Vector2(0, 1),
+                generationExtents = Vector2.zero
             };
-            measured = new Vector2(generator.GetPreferredWidth(text, settings), generator.GetPreferredHeight(text, settings));
-            if (!float.IsFinite(measured.x) || !float.IsFinite(measured.y))
+            float width = generator.GetPreferredWidth(text, settings);
+            float height = generator.GetPreferredHeight(text, settings);
+            if (!float.IsFinite(width) || !float.IsFinite(height))
                 throw new InvalidOperationException("Font measurement returned a non-finite size.");
+            // Preferred size describes line metrics; glyphs can extend beyond that box.
+            settings.generationExtents = new Vector2(width, height);
+            settings.updateBounds = false;
+            if (!generator.Populate(text, settings))
+                throw new InvalidOperationException("Font geometry could not be generated.");
+            float minY = -height;
+            float maxY = 0;
+            var vertices = generator.verts;
+            for (int index = 0, count = generator.vertexCount; index + 3 < count; index += 4)
+            {
+                Vector3 first = vertices[index].position;
+                Vector3 opposite = vertices[index + 2].position;
+                if (first.x == opposite.x || first.y == opposite.y)
+                    continue;
+                minY = MathF.Min(minY, MathF.Min(first.y, opposite.y));
+                maxY = MathF.Max(maxY, MathF.Max(first.y, opposite.y));
+            }
+            measured = new ScriptUiTextMeasurement(width, height, minY, maxY);
+            if (!float.IsFinite(measured.Height))
+                throw new InvalidOperationException("Font geometry returned a non-finite size.");
+            _textMeasurements[(text, font)] = measured;
             return true;
         }
         catch (Exception exception)
@@ -534,6 +634,11 @@ internal sealed class ScriptUiOverlay : IDisposable
             view.Dispose();
         _elements.Clear();
         _byInstance.Clear();
+        _textMeasurements.Clear();
+        foreach (Font? font in _scriptFonts.Values)
+            if (font != null)
+                UnityEngine.Object.Destroy(font);
+        _scriptFonts.Clear();
     }
 
     private void Report(string message)
@@ -566,11 +671,12 @@ internal sealed class ScriptUiOverlay : IDisposable
         private readonly RectTransform _contentRect;
         private readonly RectMask2D _contentMask;
         private readonly Text _text;
+        private readonly RectTransform _textRect;
         private readonly Func<ScriptUiEvent, bool> _sendEvent;
         private readonly Action<string>? _log;
         private readonly EventTrigger _trigger;
         private ScriptUiElementState _state = null!;
-        private Vector2 _measuredText;
+        private ScriptUiTextMeasurement _measuredText;
         private bool _eventsEnabled;
         private bool _nativePressed;
         private bool _nativeInside;
@@ -622,16 +728,18 @@ internal sealed class ScriptUiOverlay : IDisposable
             _text.transform.SetParent(_contentObject.transform, false);
             _text.font = font;
             _text.fontSize = FontSize;
+            _text.lineSpacing = 1;
             _text.alignment = TextAnchor.MiddleLeft;
             _text.horizontalOverflow = HorizontalWrapMode.Overflow;
             _text.verticalOverflow = VerticalWrapMode.Overflow;
             _text.supportRichText = false;
             _text.raycastTarget = false;
-            RectTransform textRect = _text.GetComponent<RectTransform>();
-            textRect.anchorMin = Vector2.zero;
-            textRect.anchorMax = Vector2.one;
-            textRect.offsetMin = Vector2.zero;
-            textRect.offsetMax = Vector2.zero;
+            _textRect = _text.GetComponent<RectTransform>();
+            _textRect.anchorMin = Vector2.zero;
+            _textRect.anchorMax = Vector2.one;
+            _textRect.pivot = new Vector2(0, 1);
+            _textRect.offsetMin = Vector2.zero;
+            _textRect.offsetMax = Vector2.zero;
             _trigger = _backgroundObject.AddComponent<EventTrigger>();
         }
 
@@ -641,14 +749,14 @@ internal sealed class ScriptUiOverlay : IDisposable
         internal ScriptUiLayout Layout { get; private set; }
         internal bool HasEvents => _state.Events is { Length: > 0 };
 
-        internal void Apply(ScriptUiElementState state, int viewportWidth, int viewportHeight, Vector2 measuredText, Font font)
+        internal void Apply(ScriptUiElementState state, int viewportWidth, int viewportHeight, ScriptUiTextMeasurement measuredText, Font font)
         {
             bool eventsChanged = _state is null ||
                 _state.EventsVersion != state.EventsVersion ||
                 !_state.Events.SequenceEqual(state.Events);
             _state = state;
             _measuredText = measuredText;
-            Layout = ScriptUiGeometry.Calculate(state, viewportWidth, viewportHeight, measuredText.x, measuredText.y);
+            Layout = ScriptUiGeometry.Calculate(state, viewportWidth, viewportHeight, measuredText.Width, measuredText.Height);
             _text.text = state.Text;
             _text.font = font;
             _text.alignment = (state.AlignX, state.AlignY) switch
@@ -668,7 +776,7 @@ internal sealed class ScriptUiOverlay : IDisposable
             _background.color = Color.white;
             _fill.color = new Color32(state.Color[0], state.Color[1], state.Color[2], state.Color[3]);
             _outline.color = new Color32(state.Border.Color[0], state.Border.Color[1], state.Border.Color[2], state.Border.Color[3]);
-            _text.gameObject.SetActive(Layout.Content.width > 0 && Layout.Content.height > 0 && state.Text.Length > 0);
+            _text.gameObject.SetActive(Layout.Content.width > 0 && Layout.Content.height > measuredText.Top + measuredText.Bottom && state.Text.Length > 0);
             _object.SetActive(Layout.Box.width > 0 && Layout.Box.height > 0);
             _background.SetGeometry(new ScriptUiRect(0, 0, Layout.Box.width, Layout.Box.height), Layout.Radii);
             _outline.SetGeometry(new ScriptUiRect(0, 0, Layout.Outline.width, Layout.Outline.height), Layout.OutlineRadii, new ScriptUiRect(Layout.BorderThickness, Layout.BorderThickness, Layout.Box.width, Layout.Box.height), Layout.Radii);
@@ -685,7 +793,7 @@ internal sealed class ScriptUiOverlay : IDisposable
         {
             if (_disposed)
                 return;
-            Layout = ScriptUiGeometry.Calculate(_state, viewportWidth, viewportHeight, _measuredText.x, _measuredText.y);
+            Layout = ScriptUiGeometry.Calculate(_state, viewportWidth, viewportHeight, _measuredText.Width, _measuredText.Height);
             _object.SetActive(Layout.Box.width > 0 && Layout.Box.height > 0);
             _background.SetGeometry(new ScriptUiRect(0, 0, Layout.Box.width, Layout.Box.height), Layout.Radii);
             _outline.SetGeometry(new ScriptUiRect(0, 0, Layout.Outline.width, Layout.Outline.height), Layout.OutlineRadii, new ScriptUiRect(Layout.BorderThickness, Layout.BorderThickness, Layout.Box.width, Layout.Box.height), Layout.Radii);
@@ -788,6 +896,8 @@ internal sealed class ScriptUiOverlay : IDisposable
             _contentRect.pivot = new Vector2(0, 1);
             _contentRect.anchoredPosition = new Vector2(Layout.Content.xMin - Layout.Box.xMin, -(Layout.Content.yMin - Layout.Box.yMin));
             _contentRect.sizeDelta = new Vector2(Layout.Content.width, Layout.Content.height);
+            _textRect.offsetMin = new Vector2(0, _measuredText.Bottom);
+            _textRect.offsetMax = new Vector2(0, -_measuredText.Top);
         }
 
         public void Dispose()

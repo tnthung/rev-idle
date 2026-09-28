@@ -11,7 +11,7 @@
     const set = elements.set.bind(elements), remove = elements.delete.bind(elements), each = elements.forEach.bind(elements);
     const handlers = { onHover: 'hover', onLeave: 'leave', onClick: 'click' };
     const defaults = {
-        text: '', posX: 0, posY: 0, lenX: { min: 0 }, lenY: { min: 0 },
+        text: '', font: '', posX: 0, posY: 0, lenX: { min: 0 }, lenY: { min: 0 },
         alignX: 'left', alignY: 'center',
         color: [0, 0, 0, 0], textColor: [255, 255, 255, 255],
         border: { thickness: 0, color: [255, 255, 255, 255] },
@@ -40,8 +40,8 @@
             return value;
         }
         if (!hasOwn(defaults, field)) throw new NativeTypeError(`Unknown UI field: ${string(field)}`);
-        if (field === 'text') {
-            if (typeof value !== 'string') throw new NativeTypeError('text must be a string');
+        if (field === 'text' || field === 'font') {
+            if (typeof value !== 'string') throw new NativeTypeError(`${field} must be a string`);
             return value;
         }
         if (field === 'alignX') {
@@ -123,7 +123,7 @@
             const events = setPrototypeOf([], null);
             for (let i = 0; i < handlerKeys.length; i++) if (element.values[handlerKeys[i]]) events[events.length] = handlers[handlerKeys[i]];
             states[states.length] = { __proto__: null, id, instanceId: element.instanceId, eventsVersion: element.eventsVersion,
-                text: values.text, alignX: values.alignX, alignY: values.alignY, posX: values.posX, posY: values.posY, ...lengths, ...colors,
+                text: values.text, font: values.font, alignX: values.alignX, alignY: values.alignY, posX: values.posX, posY: values.posY, ...lengths, ...colors,
                 border: { __proto__: null, thickness: values.border.thickness ?? 0, color: setPrototypeOf([borderColor[0], borderColor[1], borderColor[2], borderColor[3] ?? 255], null) },
                 corner, padding, events };
         }

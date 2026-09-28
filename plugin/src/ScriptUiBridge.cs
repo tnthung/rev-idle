@@ -221,6 +221,7 @@ internal sealed class ScriptUiBridge
                 element.InstanceId,
                 element.EventsVersion,
                 element.Text,
+                element.Font,
                 element.AlignX,
                 element.AlignY,
                 element.PosX,
@@ -254,8 +255,8 @@ internal sealed class ScriptUiBridge
                 return "element ids must be nonempty and unique";
             if (element.InstanceId == Guid.Empty || !instances.Add(element.InstanceId))
                 return $"element '{element.Id}' has an empty or duplicate instanceId";
-            if (element.Text is null || !double.IsFinite(element.PosX) || !double.IsFinite(element.PosY))
-                return $"element '{element.Id}' has invalid text or position";
+            if (element.Text is null || element.Font is null || !double.IsFinite(element.PosX) || !double.IsFinite(element.PosY))
+                return $"element '{element.Id}' has invalid text, font, or position";
             if (element.AlignX is not ("left" or "center" or "right") || element.AlignY is not ("top" or "center" or "bottom"))
                 return $"element '{element.Id}' has invalid alignment";
             string? lengthError = ValidateLength(element.LenX, $"{element.Id}.lenX") ?? ValidateLength(element.LenY, $"{element.Id}.lenY");
