@@ -7,6 +7,7 @@ mod transfer;
 mod connection;
 mod packets;
 mod control;
+mod script_ui;
 #[cfg(test)]
 pub(crate) mod test_support;
 
@@ -22,5 +23,9 @@ pub(crate) use input::{click, drag, press, scroll};
 pub(crate) use ui_path::{request_ui_path, UiPathTarget};
 pub(crate) use transfer::transfer;
 pub(crate) use scroll_into_view::scroll_into_view;
-pub(crate) use connection::{ConnectionEvent, WsConnection};
+pub(crate) use connection::{ConnectionEvent, WsConnection, WsError};
 pub(crate) use control::{publish_state, register_control_handlers};
+pub(crate) use packets::{ScriptUiSnapshot, ScriptUiElementState, ScriptUiEvent, ScriptUiPointer, ScriptUiPointerPhase};
+#[cfg(test)]
+pub(crate) use packets::ScriptUiEventKind;
+pub(crate) use script_ui::{ScriptUiPublisher, QueuedScriptUiEvent, publish_script_ui, register_script_ui_handlers};

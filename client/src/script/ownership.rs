@@ -1,4 +1,5 @@
 use crate::{app::StateUpdate, capture::LockState};
+use crate::script::control::SessionControl;
 use rquickjs::{class::Trace, Class, Ctx, Exception, JsLifetime};
 use std::{cell::{Cell, RefCell}, rc::Rc, sync::Arc};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
@@ -65,9 +66,20 @@ impl ScreenOwnershipState {
         }
     }
 
-    pub(super) async fn acquire<'js>(self: Rc<Self>, ctx: Ctx<'js>) -> rquickjs::Result<Class<'js, ScreenOwnership>> {
+    pub(super) async fn acquire<'js>(
+        self: Rc<Self>,
+        ctx: Ctx<'js>,
+        session: SessionControl,
+    ) -> rquickjs::Result<Class<'js, ScreenOwnership>> {
+        if session.is_stopped() {
+            return Err(Exception::throw_message(&ctx, SessionControl::error_message()));
+        }
         let permit = self.semaphore.clone().acquire_owned().await
             .map_err(|_| Exception::throw_message(&ctx, "screen ownership is unavailable: script session stopped"))?;
+        if session.is_stopped() {
+            drop(permit);
+            return Err(Exception::throw_message(&ctx, SessionControl::error_message()));
+        }
         self.owned.set(true);
         self.update_lock();
         Class::instance(ctx, ScreenOwnership { state: self, permit: Some(permit) })
@@ -107,6 +119,64 @@ mod tests {
     use std::{sync::atomic::AtomicBool, time::Duration};
 
     #[tokio::test(flavor = "current_thread")]
+    async fn ownership_checkpoint_retains_token_and_fifo_order() {
+        use crate::script::{bindings::{Button, HostControls, MouseInput, SharedMouse}, session::ScriptSession};
+        static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+        struct Mouse(Rc<RefCell<Vec<i32>>>, tokio::sync::mpsc::UnboundedSender<i32>);
+        impl MouseInput for Mouse {
+            fn click_at(&mut self, x: i32, _: i32, _: Button) -> Result<(), crate::script::bindings::MouseInputError> {
+                self.0.borrow_mut().push(x);
+                self.1.send(x).unwrap();
+                Ok(())
+            }
+        }
+        let clicks = Rc::new(RefCell::new(Vec::new()));
+        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let controls: HostControls = (Rc::new(RefCell::new(Mouse(clicks.clone(), events))) as SharedMouse).into();
+        let lock_state = LockState { enabled: &LOCK_ENABLED };
+        let (state_updates, _) = watch::channel(StateUpdate::new(true, true, true, false, false));
+        let session = ScriptSession::new(r#"
+            export default async function() {
+                using first = await rev.screenOwnership();
+                rev.click(1, 1);
+                const second = (async () => { using next = await rev.screenOwnership(); rev.click(2, 1); })();
+                const third = (async () => { using next = await rev.screenOwnership(); rev.click(4, 1); })();
+                const monitor = (async () => {
+                    for (let i = 0; i < 3; i++) { await rev.sleep(1); rev.click(100, 1); }
+                })();
+                await rev.ensureRunning();
+                rev.click(3, 1);
+                first.release();
+                await Promise.all([second, third, monitor]);
+            }
+        "#).await.unwrap();
+        session.screen_ownership.attach(lock_state, state_updates);
+        session.screen_ownership.set_paused(true);
+        controls.actions_paused.set_paused(true);
+        let invocation = session.invoke((), controls.clone());
+        tokio::pin!(invocation);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            let mut monitor_ticks = 0;
+            while monitor_ticks < 3 {
+                tokio::select! {
+                    _ = &mut invocation => panic!("checkpoint completed while paused"),
+                    event = received.recv() => {
+                        if event.unwrap() == 100 { monitor_ticks += 1; }
+                    }
+                }
+            }
+        }).await.unwrap();
+        assert_eq!(*clicks.borrow(), vec![1, 100, 100, 100]);
+        assert!(!lock_state.is_enabled());
+        session.screen_ownership.set_paused(false);
+        controls.actions_paused.set_paused(false);
+        assert!(lock_state.is_enabled());
+        tokio::time::timeout(Duration::from_secs(1), invocation).await.unwrap().unwrap();
+        assert_eq!(*clicks.borrow(), vec![1, 100, 100, 100, 3, 2, 4]);
+        assert!(!lock_state.is_enabled());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn screen_ownership_gc_releases_a_cycle_without_clearing_manual_lock() {
         static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
         let lock_state = LockState { enabled: &LOCK_ENABLED };
@@ -114,10 +184,11 @@ mod tests {
         let runtime = AsyncRuntime::new().unwrap();
         let context = AsyncContext::full(&runtime).await.unwrap();
         let state = Rc::new(ScreenOwnershipState::default());
+        let session = SessionControl::standalone();
         state.attach(lock_state, state_updates);
 
         context.async_with(async |ctx| {
-            let owner = state.clone().acquire(ctx).await.unwrap();
+            let owner = state.clone().acquire(ctx, session.clone()).await.unwrap();
             owner.set("cycle", owner.clone()).unwrap();
         }).await;
         assert!(lock_state.is_enabled());
@@ -126,7 +197,7 @@ mod tests {
 
         state.set_manual_lock();
         context.async_with(async |ctx| {
-            let owner = tokio::time::timeout(Duration::from_secs(1), state.clone().acquire(ctx)).await.unwrap().unwrap();
+            let owner = tokio::time::timeout(Duration::from_secs(1), state.clone().acquire(ctx, session.clone())).await.unwrap().unwrap();
             owner.set("cycle", owner.clone()).unwrap();
         }).await;
         runtime.run_gc().await;
@@ -143,11 +214,12 @@ mod tests {
         let runtime = AsyncRuntime::new().unwrap();
         let context = AsyncContext::full(&runtime).await.unwrap();
         let state = Rc::new(ScreenOwnershipState::default());
+        let session = SessionControl::standalone();
         state.attach(lock_state, state_updates.clone());
 
         context.async_with(async |ctx| {
-            let owner = state.clone().acquire(ctx.clone()).await.unwrap();
-            let waiting = state.clone().acquire(ctx.clone());
+            let owner = state.clone().acquire(ctx.clone(), session.clone()).await.unwrap();
+            let waiting = state.clone().acquire(ctx.clone(), session.clone());
             tokio::pin!(waiting);
             tokio::select! {
                 biased;
@@ -161,14 +233,14 @@ mod tests {
 
             let replacement = Rc::new(ScreenOwnershipState::default());
             replacement.attach(lock_state, state_updates);
-            let next = replacement.clone().acquire(ctx.clone()).await.unwrap();
+            let next = replacement.clone().acquire(ctx.clone(), session.clone()).await.unwrap();
             owner.borrow_mut().release();
             assert!(lock_state.is_enabled());
             next.borrow_mut().release();
             assert!(!lock_state.is_enabled());
 
             replacement.set_paused(true);
-            let next = tokio::time::timeout(Duration::from_secs(1), replacement.clone().acquire(ctx)).await.unwrap().unwrap();
+            let next = tokio::time::timeout(Duration::from_secs(1), replacement.clone().acquire(ctx, session.clone())).await.unwrap().unwrap();
             assert!(!lock_state.is_enabled());
             replacement.set_paused(false);
             assert!(lock_state.is_enabled());

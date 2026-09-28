@@ -3,12 +3,12 @@ use super::{
     packets::{LoadScript, LockScript, PauseScript, ReloadLockedScript, ReloadScript, RemoveScriptHistory, ResumeLockedScript, ResumeScript, StartCapture, StopCapture, StopScript},
     WsConnection,
 };
-use crate::app::{ScriptCommand, StateUpdate};
-use tokio::sync::{mpsc, watch};
+use crate::app::{ScriptCommand, ScriptCommandSink, StateUpdate};
+use tokio::sync::watch;
 
-pub(crate) fn register_control_handlers(
+pub(crate) fn register_control_handlers<S: ScriptCommandSink>(
     connection: &WsConnection,
-    command_tx: mpsc::Sender<ScriptCommand>,
+    command_tx: S,
 ) -> Result<(), WsError> {
     let command_sender = command_tx.clone();
     connection.handler::<LoadScript, _, _>(move |_context: PacketContext, packet| {
@@ -18,7 +18,7 @@ pub(crate) fn register_control_handlers(
                 ScriptCommand::LoadLocked(packet.path.into())
             } else {
                 ScriptCommand::Load(packet.path.into())
-            }).await.ok();
+            }).await;
             Ok(())
         }
     })?;
@@ -26,7 +26,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<RemoveScriptHistory, _, _>(move |_context: PacketContext, packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.send(ScriptCommand::RemoveFromHistory(packet.path.into())).await.ok();
+            command_tx.send(ScriptCommand::RemoveFromHistory(packet.path.into())).await;
             Ok(())
         }
     })?;
@@ -34,7 +34,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<ReloadScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.send(ScriptCommand::Reload).await.ok();
+            command_tx.send(ScriptCommand::Reload).await;
             Ok(())
         }
     })?;
@@ -42,7 +42,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<ReloadLockedScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.send(ScriptCommand::ReloadLocked).await.ok();
+            command_tx.send(ScriptCommand::ReloadLocked).await;
             Ok(())
         }
     })?;
@@ -50,7 +50,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<StopScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.send(ScriptCommand::Stop).await.ok();
+            command_tx.send(ScriptCommand::Stop).await;
             Ok(())
         }
     })?;
@@ -58,7 +58,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<PauseScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.send(ScriptCommand::Pause).await.ok();
+            command_tx.send(ScriptCommand::Pause).await;
             Ok(())
         }
     })?;
@@ -66,7 +66,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<ResumeScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.send(ScriptCommand::Resume).await.ok();
+            command_tx.send(ScriptCommand::Resume).await;
             Ok(())
         }
     })?;
@@ -74,7 +74,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<ResumeLockedScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.send(ScriptCommand::ResumeLocked).await.ok();
+            command_tx.send(ScriptCommand::ResumeLocked).await;
             Ok(())
         }
     })?;
@@ -82,7 +82,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<StartCapture, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.send(ScriptCommand::StartCapture).await.ok();
+            command_tx.send(ScriptCommand::StartCapture).await;
             Ok(())
         }
     })?;
@@ -90,7 +90,7 @@ pub(crate) fn register_control_handlers(
     connection.handler::<StopCapture, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.send(ScriptCommand::StopCapture).await.ok();
+            command_tx.send(ScriptCommand::StopCapture).await;
             Ok(())
         }
     })?;
@@ -98,13 +98,12 @@ pub(crate) fn register_control_handlers(
     connection.handler::<LockScript, _, _>(move |_context: PacketContext, _packet| {
         let command_tx = command_sender.clone();
         async move {
-            command_tx.send(ScriptCommand::Lock).await.ok();
+            command_tx.send(ScriptCommand::Lock).await;
             Ok(())
         }
     })?;
     Ok(())
 }
-
 pub(crate) async fn publish_state(
     connection: WsConnection,
     mut state_updates: watch::Receiver<StateUpdate>,

@@ -2,7 +2,7 @@ mod command;
 mod pause;
 mod status;
 
-pub(crate) use command::ScriptCommand;
+pub(crate) use command::{ScriptCommand, ScriptCommandSender, ScriptCommandSink};
 pub(crate) use pause::{ActionGate, PauseUpdate};
 pub(crate) use status::{ScriptPhase, StateUpdate};
 
@@ -187,21 +187,24 @@ pub(crate) async fn run() -> io::Result<()> {
     let options = parse_cli(std::env::args_os()).map_err(io::Error::other)?;
     let initial_path = options.initial_path;
     let actions_paused = ActionGate::default();
-    let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (pause_tx, _) = watch::channel(PauseUpdate::initial());
     let (command_tx, command_rx) = mpsc::channel(32);
+    let script_control = crate::script::ScriptControl::default();
+    let command_sender = ScriptCommandSender::new(command_tx.clone(), script_control.clone());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let script_running = Arc::new(AtomicBool::new(false));
     let console_locked = Arc::new(AtomicBool::new(false));
     let capture_state = crate::capture::CaptureState::default();
     let lock_state = crate::capture::LockState::default();
-    let console_commands = command_tx.clone();
-    let hotkey = crate::hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx, command_tx.clone())
+    let script_ui_publisher = crate::bridge::ScriptUiPublisher::default();
+    let console_commands = command_sender.clone();
+    let hotkey = crate::hotkey::HotkeyWorker::start(actions_paused.clone(), pause_tx, command_sender.clone())
         .map_err(io::Error::other)?;
     let connection = crate::bridge::WsConnection::connect(SocketAddr::from((
         [127, 0, 0, 1],
         options.port,
     )));
-    if let Err(error) = crate::bridge::register_control_handlers(&connection, command_tx.clone()) {
+    if let Err(error) = crate::bridge::register_control_handlers(&connection, command_sender.clone()) {
         connection.shutdown().await;
         return Err(io::Error::other(error));
     }
@@ -212,15 +215,27 @@ pub(crate) async fn run() -> io::Result<()> {
         capture_state.is_enabled(),
         lock_state.is_enabled(),
     ));
-    let capture = match crate::capture::CaptureWorker::start(connection.clone(), command_tx.clone()) {
+    let capture = match crate::capture::CaptureWorker::start(
+        connection.clone(),
+        command_sender.clone(),
+        script_ui_publisher.subscribe(),
+    ) {
         Ok(capture) => capture,
         Err(error) => {
             connection.shutdown().await;
             return Err(io::Error::other(error));
         }
     };
+    drop(command_tx);
+    let (script_ui_events, script_ui_event_rx) = mpsc::channel(256);
+    if let Err(error) = crate::bridge::register_script_ui_handlers(&connection, script_ui_events) {
+        connection.shutdown().await;
+        return Err(io::Error::other(error));
+    }
     let script_connection = connection.clone();
+    let worker_pause_rx = actions_paused.subscribe();
     let publisher_connection = connection.clone();
+    let ui_connection = connection.clone();
     let local = LocalSet::new();
 
     let result = local
@@ -230,7 +245,7 @@ pub(crate) async fn run() -> io::Result<()> {
                 let console_shutdown = shutdown_rx.clone();
                 let console_locked_for_task = console_locked.clone();
                 tasks.spawn_local(async move {
-                    crate::console::run(console_commands, console_shutdown, console_locked_for_task).await
+                crate::console::run(console_commands, console_shutdown, console_locked_for_task).await
                 });
             }
             let publisher_shutdown = shutdown_rx.clone();
@@ -246,13 +261,23 @@ pub(crate) async fn run() -> io::Result<()> {
                 .await;
                 Ok(())
             });
+            let ui_shutdown = shutdown_rx.clone();
+            let ui_connection = ui_connection.clone();
+            let ui_publisher = script_ui_publisher.clone();
+            tasks.spawn_local(async move {
+                crate::bridge::publish_script_ui(ui_connection, ui_publisher.subscribe(), ui_shutdown).await;
+                Ok(())
+            });
             let script_shutdown = shutdown_rx.clone();
             let script_running_for_task = script_running.clone();
+            let worker_control = script_control.clone();
+            let worker_publisher = script_ui_publisher.clone();
             tasks.spawn_local(async move {
-                crate::script::run(
+                let worker = crate::script::ScriptWorker::start(
                     command_rx,
+                    script_ui_event_rx,
                     script_connection,
-                    pause_rx,
+                    worker_pause_rx,
                     initial_path,
                     actions_paused,
                     script_shutdown,
@@ -261,15 +286,17 @@ pub(crate) async fn run() -> io::Result<()> {
                     capture_state,
                     lock_state,
                     state_tx,
-                )
-                .await
-                .map_err(io::Error::other)
+                    worker_control,
+                    worker_publisher,
+                ).map_err(io::Error::other)?;
+                worker.wait().await.map_err(io::Error::other)
             });
 
             let result = loop {
                 tokio::select! {
                     Some(result) = tasks.join_next() => {
                         let result = task_result(result);
+                        script_control.request_internal_terminal();
                         shutdown_tx.send_replace(true);
                         break shutdown_tasks(tasks, result).await;
                     }
@@ -281,10 +308,10 @@ pub(crate) async fn run() -> io::Result<()> {
                         ) {
                             CtrlCAction::StopScript => {
                                 capture_state.set_enabled(false);
-                                let _ = command_tx.send(ScriptCommand::Stop).await;
+                                let _ = command_sender.send(ScriptCommand::Stop).await;
                             }
                             CtrlCAction::StopCapture => {
-                                let _ = command_tx.send(ScriptCommand::StopCapture).await;
+                                let _ = command_sender.send(ScriptCommand::StopCapture).await;
                             }
                             CtrlCAction::Ignore => {}
                         }

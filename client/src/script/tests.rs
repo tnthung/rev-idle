@@ -1,5 +1,5 @@
 use super::State;
-use super::bindings::{click_at_with, Button, HostControls, MouseInput, SharedMouse};
+use super::bindings::{click_at_with, BridgeMouseInput, Button, HostControls, MouseInput, MouseInputError, SharedMouse};
 use crate::window::{Axis, WindowControl};
 use super::lifecycle::{
     apply_hotkey_update,
@@ -113,15 +113,15 @@ impl WindowControl for RecordingWindow {
 }
 struct RecordingMouse { events: Rc<RefCell<Vec<HostEvent>>> }
 impl MouseInput for RecordingMouse {
-    fn click_at(&mut self, x: i32, y: i32, button: Button) -> Result<(), String> {
+    fn click_at(&mut self, x: i32, y: i32, button: Button) -> Result<(), MouseInputError> {
         self.events.borrow_mut().push(HostEvent::Click(x, y, button)); Ok(())
     }
 
-    fn scroll(&mut self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), String> {
+    fn scroll(&mut self, x: i32, y: i32, length: i32, axis: Axis) -> Result<(), MouseInputError> {
         self.events.borrow_mut().push(HostEvent::Scroll(x, y, length, axis)); Ok(())
     }
 
-    fn press(&mut self, key: String) -> Result<(), String> {
+    fn press(&mut self, key: String) -> Result<(), MouseInputError> {
         self.events.borrow_mut().push(HostEvent::Press(key)); Ok(())
     }
 
@@ -129,6 +129,103 @@ impl MouseInput for RecordingMouse {
 fn recording_controls() -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
     let events = Rc::new(RefCell::new(Vec::new()));
     (HostControls { mouse: Rc::new(RefCell::new(RecordingMouse { events: events.clone() })), window: Rc::new(RecordingWindow { events: events.clone(), clipboard: RefCell::new(String::new()) }), actions_paused: ActionGate::default() }, events)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ensure_running_resolves_when_running() {
+    let session = ScriptSession::new(r#"export default (async () => { await rev.ensureRunning(); })"#)
+        .await
+        .unwrap();
+    let (controls, _) = recording_controls();
+    session.invoke(State::default(), controls).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn synchronous_bridge_control_disconnect_is_classified() {
+    let connection = crate::bridge::WsConnection::disconnected_for_test();
+    let session = ScriptSession::new_with_connection(
+        "export function onDisconnect() {} export default (() => rev.press('a'));",
+        "test.js",
+        connection.clone(),
+    )
+    .await
+    .unwrap();
+    let result = session
+        .invoke_classified(
+            State::default(),
+            HostControls {
+                mouse: Rc::new(RefCell::new(BridgeMouseInput { connection })),
+                window: Rc::new(FakeWindow),
+                actions_paused: ActionGate::default(),
+            },
+        )
+        .await;
+    let Err(error) = result else { panic!("disconnected press must fail") };
+    assert!(error.disconnected);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ensure_running_waits_for_resume() {
+    let session = ScriptSession::new(r#"export default (async () => { await rev.ensureRunning(); rev.click(1, 1); })"#)
+        .await
+        .unwrap();
+    let (controls, events) = recording_controls();
+    controls.actions_paused.set_paused(true);
+    let invocation = session.invoke(State::default(), controls.clone());
+    tokio::pin!(invocation);
+    assert!(tokio::time::timeout(Duration::from_millis(20), &mut invocation).await.is_err());
+    assert!(events.borrow().is_empty());
+    controls.actions_paused.set_paused(false);
+    tokio::time::timeout(Duration::from_secs(1), &mut invocation)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(events.borrow().len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ensure_running_rechecks_rapid_transitions() {
+    let session = ScriptSession::new(r#"export default async function() {
+        await Promise.all([rev.ensureRunning(), rev.ensureRunning(), rev.ensureRunning()]);
+        rev.click(3, 3);
+    }"#).await.unwrap();
+    let (controls, events) = recording_controls();
+    controls.actions_paused.set_paused(true);
+    let invocation = session.invoke((), controls.clone());
+    tokio::pin!(invocation);
+    assert!(tokio::time::timeout(Duration::from_millis(10), &mut invocation).await.is_err());
+    controls.actions_paused.set_paused(false);
+    controls.actions_paused.set_paused(true);
+    assert!(tokio::time::timeout(Duration::from_millis(10), &mut invocation).await.is_err());
+    assert!(events.borrow().is_empty());
+    controls.actions_paused.set_paused(false);
+    tokio::time::timeout(Duration::from_secs(1), invocation).await.unwrap().unwrap();
+    assert_eq!(*events.borrow(), vec![HostEvent::Click(3, 3, Button::Left)]);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ensure_running_cannot_wake_in_replacement_session() {
+    let control = super::ScriptControl::default();
+    let old_control = control.register_session();
+    let old = ScriptSession::new_with_connection_and_control(
+        "export default async function() { await rev.ensureRunning(); rev.click(1, 1); }", "old-checkpoint.js",
+        crate::bridge::WsConnection::disconnected_for_test(), old_control.clone(), crate::bridge::ScriptUiPublisher::default(),
+    ).await.unwrap();
+    let (controls, events) = recording_controls();
+    controls.actions_paused.set_paused(true);
+    let invocation = old.invoke((), controls.clone());
+    tokio::pin!(invocation);
+    assert!(tokio::time::timeout(Duration::from_millis(10), &mut invocation).await.is_err());
+    old_control.stop();
+    let replacement = ScriptSession::new_with_connection_and_control(
+        "export default async function() { await rev.ensureRunning(); rev.click(2, 2); }", "new-checkpoint.js",
+        crate::bridge::WsConnection::disconnected_for_test(), control.register_session(), crate::bridge::ScriptUiPublisher::default(),
+    ).await.unwrap();
+    controls.actions_paused.set_paused(false);
+    replacement.invoke((), controls).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_secs(1), invocation).await.unwrap().is_err());
+    assert!(old.is_stopped());
+    assert_eq!(*events.borrow(), vec![HostEvent::Click(2, 2, Button::Left)]);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -273,7 +370,7 @@ async fn screen_ownership_tracks_pause_resume_and_stop_during_an_invocation() {
             }
         }).await.unwrap();
         assert!(!lock_state.is_enabled());
-        assert_eq!(*events.borrow(), vec![HostEvent::Click(9, 9, Button::Left)]);
+        assert!(events.borrow().is_empty(), "terminal teardown must skip beforeStop");
         command_tx.send(ScriptCommand::Exit).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), runner).await.unwrap().unwrap().unwrap();
     }).await;
@@ -369,14 +466,14 @@ async fn rev_press_rejects_unsupported_keys_without_sending_input() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rev_press_skips_input_while_actions_are_paused() {
+async fn rev_press_sends_input_while_actions_are_paused() {
     let session = ScriptSession::new(r#"export default (() => rev.press("enter"))"#).await.unwrap();
     let (controls, events) = recording_controls();
     controls.actions_paused.set_paused(true);
 
     session.invoke(State::default(), controls).await.unwrap();
 
-    assert!(events.borrow().is_empty());
+    assert_eq!(*events.borrow(), vec![HostEvent::Press("enter".to_owned())]);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -461,9 +558,11 @@ async fn rev_invoke_sends_button_path_and_reports_plugin_errors() {
     use tokio_tungstenite::tungstenite::Message;
 
     let remote_error = "invoke target is not interactable: 'scene:-148/CANVAS[0]/safe_area[0]/views[1]/unity[3]/content[0]/panel[1]/views[0]/astrology[0]/content[0]/views[0]/planet_shop[1]/ctn_views[3]/ctn_content[0]/scroll_view[0]/viewport[0]/content[0]/zodiac_upgrade_row[12]/buy_button[0]' -- complete remote error";
-    for (response_type, payload, expect_error) in [
-        ("InvokeRes", json!({}), false),
-        ("RemoteError", json!({ "message": remote_error }), true),
+    for (response_type, payload, expect_error, paused) in [
+        ("InvokeRes", json!({}), false, false),
+        ("InvokeRes", json!({}), false, true),
+        ("RemoteError", json!({ "message": remote_error }), true, false),
+        ("RemoteError", json!({ "message": remote_error }), true, true),
     ] {
         let (address, peer_rx) = raw_server().await;
         let connection = WsConnection::connect_for_test(
@@ -481,6 +580,7 @@ async fn rev_invoke_sends_button_path_and_reports_plugin_errors() {
             connection.clone(),
         ).await.unwrap();
         let (controls, _) = recording_controls();
+        controls.actions_paused.set_paused(paused);
         let invocation = session.invoke(State::default(), controls);
         tokio::pin!(invocation);
         let message = tokio::time::timeout(Duration::from_secs(1), async {
@@ -517,12 +617,7 @@ async fn rev_invoke_sends_button_path_and_reports_plugin_errors() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rev_invoke_skips_paused_actions_and_rejects_empty_paths() {
-    let session = ScriptSession::new(r#"export default (async () => await rev.invoke("Buy"))"#).await.unwrap();
-    let (controls, _) = recording_controls();
-    controls.actions_paused.set_paused(true);
-    session.invoke(State::default(), controls).await.unwrap();
-
+async fn rev_invoke_rejects_empty_paths() {
     let session = ScriptSession::new(r#"export default (async () => await rev.invoke(" "))"#).await.unwrap();
     let (controls, _) = recording_controls();
     assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("UI path"));
@@ -535,10 +630,11 @@ async fn rev_input_sends_text_and_awaits_success_or_remote_error() {
     use serde_json::{json, Value};
     use tokio_tungstenite::tungstenite::Message;
 
-    for (text, response_type, payload) in [
-        ("123", "InputRes", json!({})),
-        ("", "InputRes", json!({})),
-        ("文字 \"value\"\n", "RemoteError", json!({ "message": "input target is read-only" })),
+    for (text, response_type, payload, paused) in [
+        ("123", "InputRes", json!({}), false),
+        ("123", "InputRes", json!({}), true),
+        ("", "InputRes", json!({}), false),
+        ("文字 \"value\"\n", "RemoteError", json!({ "message": "input target is read-only" }), true),
     ] {
         let (address, peer_rx) = raw_server().await;
         let connection = WsConnection::connect_for_test(
@@ -553,6 +649,7 @@ async fn rev_input_sends_text_and_awaits_success_or_remote_error() {
             connection.clone(),
         ).await.unwrap();
         let (controls, _) = recording_controls();
+        controls.actions_paused.set_paused(paused);
         let invocation = session.invoke(State::default(), controls);
         tokio::pin!(invocation);
         let message = tokio::time::timeout(Duration::from_secs(1), async {
@@ -577,19 +674,14 @@ async fn rev_input_sends_text_and_awaits_success_or_remote_error() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rev_input_skips_paused_actions_and_rejects_blank_paths() {
-    let session = ScriptSession::new(r#"export default async () => await rev.input("Canvas/Input", "123")"#).await.unwrap();
-    let (controls, _) = recording_controls();
-    controls.actions_paused.set_paused(true);
-    session.invoke(State::default(), controls).await.unwrap();
-
+async fn rev_input_rejects_blank_paths() {
     let session = ScriptSession::new(r#"export default async () => await rev.input(" ", "123")"#).await.unwrap();
     let (controls, _) = recording_controls();
     assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("UI path"));
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rev_scroll_into_view_awaits_response_and_skips_paused_or_empty_paths() {
+async fn rev_scroll_into_view_works_while_paused_and_rejects_empty_paths() {
     use crate::bridge::{test_support::raw_server, WsConnection};
     use futures_util::{SinkExt, StreamExt};
     use serde_json::{json, Value};
@@ -613,6 +705,7 @@ async fn rev_scroll_into_view_awaits_response_and_skips_paused_or_empty_paths() 
     .await
     .unwrap();
     let (controls, _) = recording_controls();
+    controls.actions_paused.set_paused(true);
     let invocation = session.invoke(State::default(), controls);
     tokio::pin!(invocation);
     let message = tokio::time::timeout(Duration::from_secs(1), async {
@@ -635,11 +728,6 @@ async fn rev_scroll_into_view_awaits_response_and_skips_paused_or_empty_paths() 
     .unwrap();
     invocation.await.unwrap();
     connection.shutdown().await;
-
-    let session = ScriptSession::new(r#"export default (async () => await rev.scrollIntoView("Buy"))"#).await.unwrap();
-    let (controls, _) = recording_controls();
-    controls.actions_paused.set_paused(true);
-    session.invoke(State::default(), controls).await.unwrap();
 
     let session = ScriptSession::new(r#"export default (async () => await rev.scrollIntoView(" "))"#).await.unwrap();
     let (controls, _) = recording_controls();
@@ -706,7 +794,7 @@ async fn rev_slot_rejects_blank_paths() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rev_transfer_sends_source_and_destination_paths() {
+async fn rev_transfer_sends_source_and_destination_paths_while_paused() {
     use crate::bridge::{test_support::raw_server, WsConnection};
     use futures_util::{SinkExt, StreamExt};
     use serde_json::{json, Value};
@@ -728,6 +816,7 @@ async fn rev_transfer_sends_source_and_destination_paths() {
         connection.clone(),
     ).await.unwrap();
     let (controls, _) = recording_controls();
+    controls.actions_paused.set_paused(true);
     let invocation = session.invoke(State::default(), controls);
     tokio::pin!(invocation);
     let message = tokio::time::timeout(Duration::from_secs(1), async {
@@ -761,7 +850,7 @@ async fn rev_transfer_sends_source_and_destination_paths() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rev_transfer_reports_errors_and_skips_when_paused_or_given_blank_paths() {
+async fn rev_transfer_reports_errors_and_rejects_blank_paths() {
     use crate::bridge::{test_support::raw_server, WsConnection};
     use futures_util::{SinkExt, StreamExt};
     use serde_json::{json, Value};
@@ -821,12 +910,6 @@ async fn rev_transfer_reports_errors_and_skips_when_paused_or_given_blank_paths(
         assert!(session.invoke(State::default(), controls).await.unwrap_err().contains("slot paths"));
     }
 
-    let session = ScriptSession::new(
-        r#"export default (async () => await rev.transfer("scene:1/Canvas[0]/Inventory/3", "scene:1/Canvas[0]/Combine/0"))"#,
-    ).await.unwrap();
-    let (controls, _) = recording_controls();
-    controls.actions_paused.set_paused(true);
-    session.invoke(State::default(), controls).await.unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1135,7 +1218,7 @@ impl MouseInput for FakeMouse {
         x: i32,
         y: i32,
         button: Button,
-    ) -> Result<(), String> {
+    ) -> Result<(), MouseInputError> {
         self.clicks.borrow_mut().push(Click { x, y, button });
         Ok(())
     }
@@ -1887,8 +1970,8 @@ async fn console_commands_control_context_lifetime() {
             x: i32,
             y: i32,
             button: Button,
-        ) -> Result<(), String> {
-            self.0.send((x, y, button)).map_err(|error| error.to_string())
+        ) -> Result<(), MouseInputError> {
+            self.0.send((x, y, button)).map_err(|error| error.to_string().into())
         }
     }
 
@@ -1980,93 +2063,37 @@ async fn console_commands_control_context_lifetime() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn pause_error_does_not_stop_the_active_script() {
-    use crate::app::ScriptCommand;
-    use std::fs;
-    use tokio::sync::{mpsc, watch};
-
-    let path = std::env::temp_dir().join(format!(
-        "rev-idle-requested-pause-test-{}.js",
-        std::process::id(),
-    ));
-    fs::write(
-        &path,
-        r#"export default (async () => { await rev.sleep(30); rev.click(1, 1); })"#,
-    )
-    .unwrap();
-
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-    struct GateMouse(mpsc::UnboundedSender<()>);
-    impl MouseInput for GateMouse {
-        fn click_at(
-            &mut self,
-            _x: i32,
-            _y: i32,
-            _button: Button,
-        ) -> Result<(), String> {
-            self.0.send(()).map_err(|error| error.to_string())
+async fn paused_default_failure_stops_the_session() {
+    let path = std::env::temp_dir().join(format!("rev-idle-paused-failure-{}.js", uuid::Uuid::new_v4()));
+    std::fs::write(&path, r#"
+        let reject;
+        export default async function() {
+            rev.click(1, 1);
+            await new Promise((_, fail) => { reject = fail; });
         }
-    }
-
-    let controls = HostControls {
-        mouse: Rc::new(RefCell::new(GateMouse(event_tx))),
-        window: Rc::new(FakeWindow),
-        actions_paused: ActionGate::default(),
-    };
-    let gate = controls.actions_paused.clone();
-    let (command_tx, command_rx) = mpsc::channel(8);
-    let (_state_tx, state_rx) = watch::channel(State::default());
+        export function beforePause() { reject(new Error('paused failure')); }
+        export function beforeStop() { rev.click(9, 9); }
+    "#).unwrap();
+    let (controls, events) = recording_controls();
+    let (commands, command_rx) = mpsc::channel(8);
     let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
-    let runner_path = path.clone();
-    let local = tokio::task::LocalSet::new();
-
-    local
-        .run_until(async move {
-            let runner = tokio::task::spawn_local(run_with_controls(
-                command_rx,
-                state_rx,
-                pause_rx,
-                Some(runner_path),
-                controls,
-                Duration::from_millis(1),
-            ));
-
-            tokio::time::sleep(Duration::from_millis(5)).await;
-            gate.set_paused(true);
-            command_tx
-                .send(ScriptCommand::SetPaused(true))
-                .await
-                .unwrap();
-
-            assert!(tokio::time::timeout(
-                Duration::from_millis(80),
-                event_rx.recv(),
-            )
-            .await
-            .is_err());
-            // Pausing mid-invocation must not tear down the session: the
-            // gate stays paused and the script keeps waiting to be resumed
-            // instead of being force-stopped.
-            assert!(gate.is_paused());
-
-            command_tx.send(ScriptCommand::Resume).await.unwrap();
-            assert!(tokio::time::timeout(
-                Duration::from_millis(200),
-                event_rx.recv(),
-            )
-                .await
-                .is_ok());
-
-            command_tx.send(ScriptCommand::Exit).await.unwrap();
-            tokio::time::timeout(Duration::from_secs(1), runner)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
-        })
-        .await;
-
-    fs::remove_file(path).unwrap();
+    let (states, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    tokio::task::LocalSet::new().run_until(async {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx, states, pause_rx, Some(path.clone()), controls, LockState::default(), Duration::from_millis(2),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while events.borrow().is_empty() { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        commands.send(ScriptCommand::Pause).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while state_rx.borrow().phase != ScriptPhase::Stopped { state_rx.changed().await.unwrap(); }
+        }).await.unwrap();
+        assert_eq!(*events.borrow(), vec![HostEvent::Click(1, 1, Button::Left)]);
+        commands.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner).await.unwrap().unwrap().unwrap();
+    }).await;
+    std::fs::remove_file(path).unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2097,8 +2124,8 @@ async fn pause_and_resume_hooks_run_around_the_actual_transition() {
             x: i32,
             y: i32,
             _button: Button,
-        ) -> Result<(), String> {
-            self.0.send((x, y)).map_err(|error| error.to_string())
+        ) -> Result<(), MouseInputError> {
+            self.0.send((x, y)).map_err(|error| error.to_string().into())
         }
     }
 
@@ -2173,7 +2200,6 @@ async fn pause_and_resume_hooks_run_around_the_actual_transition() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn connection_hooks_survive_a_pause_during_disconnect() {
-    use crate::global_state::GlobalState;
     use futures_util::StreamExt;
     use std::fs;
     use tokio_tungstenite::{tungstenite::protocol::Role, WebSocketStream};
@@ -2185,22 +2211,15 @@ async fn connection_hooks_survive_a_pause_during_disconnect() {
     fs::write(
         &path,
         r#"
+            let invocations = 0;
             export function afterLoad() { rev.click(1, 1); }
-            export function onConnect() { rev.global.connected = true; rev.click(2, 2); }
-            export async function onDisconnect() { rev.click(3, 3); await rev.sleep(100); }
-            export function beforeStop() { rev.global.disconnectBeforeStop = true; }
-            export default (async () => {
-                if (!rev.global.connected)
-                    await rev.sleep(5000);
-                rev.global.connectedInvocations = (rev.global.connectedInvocations ?? 0) + 1;
-                if (rev.global.connectedInvocations > 1)
-                    rev.click(9, 9);
-                try {
-                    await rev.state();
-                } catch {
-                    throw new Error("terminal");
-                }
-            });
+            export function onConnect() { rev.click(2, 2); }
+            export async function onDisconnect() { rev.click(3, 3); await rev.sleep(100); rev.click(4, 4); }
+            export function beforeStop() { rev.click(99, 99); }
+            export default async function() {
+                if (++invocations > 1) rev.click(9, 9);
+                await rev.state();
+            }
         "#,
     )
     .unwrap();
@@ -2213,8 +2232,8 @@ async fn connection_hooks_survive_a_pause_during_disconnect() {
             x: i32,
             y: i32,
             _button: Button,
-        ) -> Result<(), String> {
-            self.0.send((x, y)).map_err(|error| error.to_string())
+        ) -> Result<(), MouseInputError> {
+            self.0.send((x, y)).map_err(|error| error.to_string().into())
         }
     }
 
@@ -2263,7 +2282,7 @@ async fn connection_hooks_survive_a_pause_during_disconnect() {
             assert_eq!(
                 tokio::time::timeout(Duration::from_millis(300), event_rx.recv()).await.unwrap().unwrap(),
                 (2, 2),
-                "onConnect must interrupt the in-flight invocation promptly"
+                "onConnect must run before the first default call"
             );
             tokio::time::timeout(Duration::from_secs(1), peer.next())
                 .await
@@ -2277,33 +2296,23 @@ async fn connection_hooks_survive_a_pause_during_disconnect() {
                 "onDisconnect must win over the in-flight request failure"
             );
             pause_tx.send_replace(gate.set_paused(true));
-            assert!(
-                tokio::time::timeout(Duration::from_millis(300), async {
-                    while GlobalState.get("disconnectBeforeStop").is_none() {
-                        tokio::task::yield_now().await;
-                    }
-                })
-                .await
-                .is_err(),
-                "a disconnect-triggered invocation error must not stop the loaded session",
-            );
-            assert!(event_rx.try_recv().is_err(), "the disconnected invocation must not run again");
+            assert_eq!(tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(), (4, 4), "pause must preserve the in-flight disconnect hook");
+            let (stream, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept()).await.unwrap().unwrap();
+            let mut reconnected = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
+            assert_eq!(tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(), (2, 2));
+            assert!(tokio::time::timeout(Duration::from_millis(30), event_rx.recv()).await.is_err(), "reconnect must preserve pause");
+            command_tx.send(ScriptCommand::Resume).await.unwrap();
+            assert_eq!(tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(), (9, 9));
+            tokio::time::timeout(Duration::from_secs(1), reconnected.next()).await.unwrap().unwrap().unwrap();
 
             command_tx.send(ScriptCommand::Exit).await.unwrap();
-            tokio::time::timeout(Duration::from_millis(300), async {
-                while GlobalState.get("disconnectBeforeStop").is_none() {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await
-            .expect("beforeStop must still run on explicit exit");
             tokio::time::timeout(Duration::from_secs(1), runner)
                 .await
                 .unwrap()
                 .unwrap()
                 .unwrap();
             connection.shutdown().await;
-            GlobalState.delete("disconnectBeforeStop");
+            assert!(event_rx.try_recv().is_err(), "Exit must skip beforeStop");
         })
         .await;
 
@@ -2343,8 +2352,8 @@ async fn disconnected_script_waits_for_connect_and_survives_disconnect() {
             x: i32,
             y: i32,
             _button: Button,
-        ) -> Result<(), String> {
-            self.0.send((x, y)).map_err(|error| error.to_string())
+        ) -> Result<(), MouseInputError> {
+            self.0.send((x, y)).map_err(|error| error.to_string().into())
         }
     }
 
@@ -2434,16 +2443,14 @@ async fn disconnected_script_waits_for_connect_and_survives_disconnect() {
                 .expect("bridge request was malformed");
 
             command_tx.send(ScriptCommand::Stop).await.unwrap();
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
-                (4, 4),
-            );
+
             command_tx.send(ScriptCommand::Exit).await.unwrap();
             tokio::time::timeout(Duration::from_secs(1), runner)
                 .await
                 .unwrap()
                 .unwrap()
                 .unwrap();
+            assert!(event_rx.try_recv().is_err(), "Stop and Exit must skip beforeStop");
             peer.close(None).await.ok();
             connection.shutdown().await;
         })
@@ -2453,123 +2460,90 @@ async fn disconnected_script_waits_for_connect_and_survives_disconnect() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn before_stop_runs_for_replacement_self_stop_failure_and_exit() {
-    use std::fs;
-
-    let root = std::env::temp_dir().join(format!(
-        "rev-idle-before-stop-paths-test-{}",
-        std::process::id(),
-    ));
-    fs::create_dir_all(&root).unwrap();
+async fn before_stop_is_skipped_for_replacement_self_stop_failure_and_exit() {
+    let root = std::env::temp_dir().join(format!("rev-idle-no-before-stop-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).unwrap();
     let replaced = root.join("replaced.js");
     let self_stopping = root.join("self-stopping.js");
     let failing = root.join("failing.js");
     let exiting = root.join("exiting.js");
-    fs::write(
-        &replaced,
-        r#"
-            export function beforeStop() { rev.click(1, 1); }
-            export default (async () => { await rev.sleep(5000); });
-        "#,
-    )
-    .unwrap();
-    fs::write(
-        &self_stopping,
-        r#"
-            export function afterLoad() { rev.click(2, 2); }
-            export function beforeStop() { rev.click(3, 3); }
-            export default (() => rev.stop());
-        "#,
-    )
-    .unwrap();
-    fs::write(
-        &failing,
-        r#"
-            export function afterLoad() { rev.click(4, 4); }
-            export function beforeStop() { rev.click(5, 5); }
-            export default (() => { throw new Error("expected failure"); });
-        "#,
-    )
-    .unwrap();
-    fs::write(
-        &exiting,
-        r#"
-            export function afterLoad() { rev.click(6, 6); }
-            export function beforeStop() { rev.click(7, 7); }
-            export default (async () => { await rev.sleep(5000); });
-        "#,
-    )
-    .unwrap();
-
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-    struct HookMouse(mpsc::UnboundedSender<(i32, i32)>);
-    impl MouseInput for HookMouse {
-        fn click_at(
-            &mut self,
-            x: i32,
-            y: i32,
-            _button: Button,
-        ) -> Result<(), String> {
-            self.0.send((x, y)).map_err(|error| error.to_string())
-        }
-    }
-
-    let controls = HostControls {
-        mouse: Rc::new(RefCell::new(HookMouse(event_tx))),
-        window: Rc::new(FakeWindow),
-        actions_paused: ActionGate::default(),
-    };
-    let (command_tx, command_rx) = mpsc::channel(8);
+    for (path, source) in [
+        (&replaced, "export function afterLoad() { rev.click(0, 0); } export function beforeStop() { rev.click(1, 1); } export default async function() { await rev.sleep(5000); }"),
+        (&self_stopping, "export function afterLoad() { rev.click(2, 2); } export function beforeStop() { rev.click(3, 3); } export default function() { rev.click(20, 20); rev.stop(); }"),
+        (&failing, "export function afterLoad() { rev.click(4, 4); } export function beforeStop() { rev.click(5, 5); } export default function() { rev.click(40, 40); throw new Error('expected failure'); }"),
+        (&exiting, "export function afterLoad() { rev.click(6, 6); } export function beforeStop() { rev.click(7, 7); } export default async function() { await rev.sleep(5000); }"),
+    ] { std::fs::write(path, source).unwrap(); }
+    let (controls, events) = recording_controls();
+    let (commands, command_rx) = mpsc::channel(8);
     let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
-    let connection = crate::bridge::WsConnection::disconnected_for_test();
-    let local = tokio::task::LocalSet::new();
+    let (states, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    tokio::task::LocalSet::new().run_until(async {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx, states, pause_rx, Some(replaced), controls, LockState::default(), Duration::from_millis(2),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while events.borrow().is_empty() { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        for (path, count) in [(self_stopping, 3), (failing, 5)] {
+            commands.send(ScriptCommand::Load(path)).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while events.borrow().len() < count { tokio::task::yield_now().await; }
+                while state_rx.borrow().phase != ScriptPhase::Stopped { state_rx.changed().await.unwrap(); }
+            }).await.unwrap();
+        }
+        commands.send(ScriptCommand::Load(exiting)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while events.borrow().len() < 6 { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        commands.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner).await.unwrap().unwrap().unwrap();
+        assert_eq!(*events.borrow(), vec![
+            HostEvent::Click(0, 0, Button::Left), HostEvent::Click(2, 2, Button::Left), HostEvent::Click(20, 20, Button::Left),
+            HostEvent::Click(4, 4, Button::Left), HostEvent::Click(40, 40, Button::Left), HostEvent::Click(6, 6, Button::Left),
+        ]);
+    }).await;
+    let root = root.canonicalize().unwrap();
+    assert!(root.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    std::fs::remove_dir_all(root).unwrap();
+}
 
-    local
-        .run_until(async move {
-            let runner = tokio::task::spawn_local(run_with_controls_and_connection(
-                command_rx,
-                connection,
-                pause_rx,
-                Some(replaced),
-                controls,
-                Duration::from_millis(2),
-            ));
-
-            command_tx.send(ScriptCommand::Load(self_stopping)).await.unwrap();
-            for expected in [(1, 1), (2, 2), (3, 3)] {
-                assert_eq!(
-                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
-                    expected
-                );
-            }
-
-            command_tx.send(ScriptCommand::Load(failing)).await.unwrap();
-            for expected in [(4, 4), (5, 5)] {
-                assert_eq!(
-                    tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
-                    expected
-                );
-            }
-
-            command_tx.send(ScriptCommand::Load(exiting)).await.unwrap();
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
-                (6, 6)
-            );
-            command_tx.send(ScriptCommand::Exit).await.unwrap();
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(),
-                (7, 7)
-            );
-            tokio::time::timeout(Duration::from_secs(1), runner)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
-        })
-        .await;
-
-    fs::remove_dir_all(root).unwrap();
+#[tokio::test(flavor = "current_thread")]
+async fn ordinary_javascript_error_after_disconnect_stops_the_session() {
+    use futures_util::StreamExt;
+    let path = std::env::temp_dir().join(format!("rev-idle-disconnect-error-{}.js", uuid::Uuid::new_v4()));
+    std::fs::write(&path, r#"
+        export function onDisconnect() { rev.click(2, 2); }
+        export default async function() {
+            try { await rev.state(); } catch (_) { throw new Error('ordinary JavaScript failure'); }
+        }
+    "#).unwrap();
+    let (address, peer_rx) = crate::bridge::test_support::raw_server().await;
+    let connection = crate::bridge::WsConnection::connect_for_test(address, Duration::from_millis(20), Duration::from_secs(1));
+    let mut peer = peer_rx.await.unwrap();
+    let mut generations = connection.connection_generation();
+    while *generations.borrow_and_update() == 0 { generations.changed().await.unwrap(); }
+    let (controls, events) = recording_controls();
+    let (commands, command_rx) = mpsc::channel(8);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (states, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    tokio::task::LocalSet::new().run_until(async {
+        let runner = tokio::task::spawn_local(run_with_controls_and_lifecycle(
+            command_rx, connection.clone(), pause_rx, Some(path.clone()), controls, Duration::from_millis(2), shutdown_rx,
+            std::sync::Arc::new(AtomicBool::new(false)), std::sync::Arc::new(AtomicBool::new(false)),
+            CaptureState, LockState::default(), None, states,
+        ));
+        tokio::time::timeout(Duration::from_secs(1), peer.next()).await.unwrap().unwrap().unwrap();
+        peer.close(None).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while state_rx.borrow().phase != ScriptPhase::Stopped { state_rx.changed().await.unwrap(); }
+        }).await.unwrap();
+        assert!(events.borrow().contains(&HostEvent::Click(2, 2, Button::Left)));
+        commands.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner).await.unwrap().unwrap().unwrap();
+    }).await;
+    connection.shutdown().await;
+    std::fs::remove_file(path).unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2796,131 +2770,50 @@ async fn invalid_typescript_reports_source_name_and_parser_detail() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn hotkey_pause_cancels_the_in_flight_invocation_immediately() {
-    use crate::app::ScriptCommand;
-    use crate::global_state::GlobalState;
-    use std::fs;
-    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-    use tokio::sync::{mpsc, watch};
-
-    // F8 flips the shared `ActionGate` directly from a separate OS
-    // thread (see hotkey.rs), independently of the script runner's own
-    // loop, so this simulates a hotkey press exactly the way that
-    // worker does: mutate the gate, then publish the resulting update.
-    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-    let hook_key = format!(
-        "hotkey-cancel-test-marker-{}-{}",
-        std::process::id(),
-        NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed),
-    );
-    let path = std::env::temp_dir().join(format!(
-        "rev-idle-hotkey-cancel-test-{}.js",
-        std::process::id(),
-    ));
-    // beforePause signals through rev.global rather than a click: the
-    // ActionGate is already closed by the time this hook runs (that's
-    // the whole point of F8 taking effect immediately), so its own
-    // rev.click would be silently skipped same as the cancelled
-    // invocation's — rev.global isn't gated, so it still proves the
-    // hook ran, and ran promptly rather than after the cancelled sleep.
-    fs::write(
-        &path,
-        format!(
-            r#"
-            export default (async () => {{ rev.click(1, 1); await rev.sleep(2000); rev.click(2, 2); }});
-            export function beforePause() {{ rev.global['{hook_key}'] = true; }}
-            "#
-        ),
-    )
-    .unwrap();
-
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-    struct HotkeyMouse(mpsc::UnboundedSender<(i32, i32)>);
-    impl MouseInput for HotkeyMouse {
-        fn click_at(
-            &mut self,
-            x: i32,
-            y: i32,
-            _button: Button,
-        ) -> Result<(), String> {
-            self.0.send((x, y)).map_err(|error| error.to_string())
+async fn pause_preserves_in_flight_default_and_blocks_next_call() {
+    let path = std::env::temp_dir().join(format!("rev-idle-pause-preserved-{}.js", uuid::Uuid::new_v4()));
+    std::fs::write(&path, r#"
+        let release, count = 0;
+        export default async function() {
+            const id = ++count;
+            rev.click(id, 0);
+            await new Promise(resolve => { release = resolve; });
+            rev.click(id, 1);
         }
-    }
-
-    let gate = ActionGate::default();
-    let controls = HostControls {
-        mouse: Rc::new(RefCell::new(HotkeyMouse(event_tx))),
-        window: Rc::new(FakeWindow),
-        actions_paused: gate.clone(),
-    };
-    let (command_tx, command_rx) = mpsc::channel(8);
-    let (_state_tx, state_rx) = watch::channel(State::default());
+        export function beforePause() { rev.click(8, 8); release(); }
+        export async function afterResume() { await rev.ensureRunning(); rev.click(9, 9); }
+    "#).unwrap();
+    let (controls, events) = recording_controls();
+    let gate = controls.actions_paused.clone();
+    let (commands, command_rx) = mpsc::channel(8);
     let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
-    let runner_path = path.clone();
-    let local = tokio::task::LocalSet::new();
-
-    local
-        .run_until(async move {
-            let runner = tokio::task::spawn_local(run_with_controls(
-                command_rx,
-                state_rx,
-                pause_rx,
-                Some(runner_path),
-                controls,
-                Duration::from_millis(2),
-            ));
-
-            assert_eq!(
-                tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-                    .await
-                    .unwrap()
-                    .unwrap(),
-                (1, 1),
-                "script should click before its long sleep"
-            );
-
-            // Simulate F8 partway through the 2s sleep: hotkey.rs itself
-            // flips the gate via `toggle()`, private to that module, but
-            // `set_paused` produces the same update from an unpaused gate.
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            pause_tx.send_replace(gate.set_paused(true));
-            assert!(gate.is_paused());
-
-            // If the invocation merely ran to the end of its sleep and
-            // only then got interrupted, this marker wouldn't appear
-            // for ~2s. Seeing it almost immediately proves the sleep
-            // itself was cancelled, not just skipped over.
-            let saw_hook_marker = tokio::time::timeout(Duration::from_millis(300), async {
-                while GlobalState.get(&hook_key).is_none() {
-                    tokio::task::yield_now().await;
-                }
-            })
-            .await;
-            assert!(
-                saw_hook_marker.is_ok(),
-                "beforePause should run right after the hotkey pause, not after the cancelled sleep"
-            );
-
-            // The cancelled invocation's remaining click must never
-            // arrive, even after its original sleep would have elapsed.
-            assert!(
-                tokio::time::timeout(Duration::from_millis(2200), event_rx.recv())
-                    .await
-                    .is_err(),
-                "the cancelled invocation's remaining click must not fire"
-            );
-
-            GlobalState.delete(&hook_key);
-            command_tx.send(ScriptCommand::Exit).await.unwrap();
-            tokio::time::timeout(Duration::from_secs(1), runner)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
-        })
-        .await;
-
-    fs::remove_file(path).unwrap();
+    let (states, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    tokio::task::LocalSet::new().run_until(async {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx, states, pause_rx, Some(path.clone()), controls, LockState::default(), Duration::from_millis(2),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while events.borrow().is_empty() { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert_eq!(*events.borrow(), vec![HostEvent::Click(1, 0, Button::Left)]);
+        pause_tx.send_replace(gate.set_paused(true));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while events.borrow().len() < 3 { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert_eq!(*events.borrow(), vec![HostEvent::Click(1, 0, Button::Left), HostEvent::Click(8, 8, Button::Left), HostEvent::Click(1, 1, Button::Left)]);
+        while state_rx.borrow().phase != ScriptPhase::Paused { state_rx.changed().await.unwrap(); }
+        assert!(tokio::time::timeout(Duration::from_millis(30), async {
+            while events.borrow().len() == 3 { tokio::task::yield_now().await; }
+        }).await.is_err(), "pause must withhold the next default call");
+        commands.send(ScriptCommand::Resume).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while events.borrow().len() < 5 { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert_eq!(&events.borrow()[3..], &[HostEvent::Click(9, 9, Button::Left), HostEvent::Click(2, 0, Button::Left)]);
+        commands.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner).await.unwrap().unwrap().unwrap();
+    }).await;
+    std::fs::remove_file(path).unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2947,8 +2840,8 @@ async fn lifecycle_commands_keep_requested_pause_gate_in_sync() {
             _x: i32,
             _y: i32,
             _button: Button,
-        ) -> Result<(), String> {
-            self.0.send(()).map_err(|error| error.to_string())
+        ) -> Result<(), MouseInputError> {
+            self.0.send(()).map_err(|error| error.to_string().into())
         }
     }
 
@@ -3178,65 +3071,25 @@ async fn lifecycle_commands_keep_requested_pause_gate_in_sync() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn rev_stop_unloads_script_after_current_invocation() {
-    use std::fs;
-    use tokio::sync::{mpsc, watch};
-
-    let path = std::env::temp_dir().join(format!(
-        "rev-idle-stop-test-{}.js",
-        std::process::id(),
-    ));
-    fs::write(&path, r#"export default (() => { rev.stop(); rev.click(1, 1); })"#).unwrap();
-
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
-    struct StopMouse(mpsc::UnboundedSender<()>);
-    impl MouseInput for StopMouse {
-        fn click_at(
-            &mut self,
-            _x: i32,
-            _y: i32,
-            _button: Button,
-        ) -> Result<(), String> {
-            self.0.send(()).map_err(|error| error.to_string())
-        }
-    }
-
-    let mouse: SharedMouse = Rc::new(RefCell::new(StopMouse(event_tx)));
-    let (command_tx, command_rx) = mpsc::channel(32);
-    let (_state_tx, state_rx) = watch::channel(State::default());
-    let local = tokio::task::LocalSet::new();
-
-    let runner_path = path.clone();
-    local
-        .run_until(async move {
-            let runner = tokio::task::spawn_local(run_with_mouse(
-                command_rx,
-                state_rx,
-                runner_path,
-                mouse,
-                Duration::from_millis(5),
-            ));
-
-            tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-                .await
-                .unwrap()
-                .unwrap();
-            assert!(
-                tokio::time::timeout(Duration::from_millis(30), event_rx.recv())
-                    .await
-                    .is_err()
-            );
-
-            command_tx.send(ScriptCommand::Exit).await.unwrap();
-            tokio::time::timeout(Duration::from_secs(1), runner)
-                .await
-                .unwrap()
-                .unwrap()
-                .unwrap();
-        })
-        .await;
-
-    fs::remove_file(path).unwrap();
+async fn rev_stop_interrupts_the_session() {
+    let path = std::env::temp_dir().join(format!("rev-idle-self-stop-{}.js", uuid::Uuid::new_v4()));
+    std::fs::write(&path, r#"export default function() { rev.click(0, 0); rev.stop(); rev.click(1, 1); }"#).unwrap();
+    let (controls, events) = recording_controls();
+    let (commands, command_rx) = mpsc::channel(8);
+    let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (states, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    tokio::task::LocalSet::new().run_until(async {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx, states, pause_rx, Some(path.clone()), controls, LockState::default(), Duration::from_millis(2),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while state_rx.borrow().phase != ScriptPhase::Stopped { state_rx.changed().await.unwrap(); }
+        }).await.unwrap();
+        assert_eq!(*events.borrow(), vec![HostEvent::Click(0, 0, Button::Left)]);
+        commands.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner).await.unwrap().unwrap().unwrap();
+    }).await;
+    std::fs::remove_file(path).unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -3271,8 +3124,8 @@ async fn stop_command_cancels_an_in_flight_sleep_immediately() {
             x: i32,
             y: i32,
             _button: Button,
-        ) -> Result<(), String> {
-            self.0.send((x, y)).map_err(|error| error.to_string())
+        ) -> Result<(), MouseInputError> {
+            self.0.send((x, y)).map_err(|error| error.to_string().into())
         }
     }
 
@@ -3395,8 +3248,8 @@ async fn unhandled_exception_stops_script_after_first_invocation() {
             _x: i32,
             _y: i32,
             _button: Button,
-        ) -> Result<(), String> {
-            self.0.send(()).map_err(|error| error.to_string())
+        ) -> Result<(), MouseInputError> {
+            self.0.send(()).map_err(|error| error.to_string().into())
         }
     }
 
@@ -3460,8 +3313,8 @@ async fn failed_load_stays_stopped_and_reload_retries_that_path() {
             _x: i32,
             _y: i32,
             _button: Button,
-        ) -> Result<(), String> {
-            self.0.send(()).map_err(|error| error.to_string())
+        ) -> Result<(), MouseInputError> {
+            self.0.send(()).map_err(|error| error.to_string().into())
         }
     }
 
@@ -4221,7 +4074,6 @@ async fn stop_command_during_an_invocation_clears_lock_state() {
         })
         .await
         .unwrap();
-        events.borrow_mut().clear();
         command_tx.send(ScriptCommand::Lock).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {

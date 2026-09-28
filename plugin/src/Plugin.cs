@@ -24,6 +24,7 @@ public sealed class Plugin : BasePlugin
 
     private static WsConnection? _connection;
     private static ControlBridge? _controlBridge;
+    private static ScriptUiBridge? _scriptUiBridge;
     private static ManualLogSource? _logger;
 
     public override void Load()
@@ -47,6 +48,7 @@ public sealed class Plugin : BasePlugin
         {
             RegisterHandlers(_connection, () => GameController.data, () => 0);
             _controlBridge = new ControlBridge(_connection, LogBridgeError);
+            _scriptUiBridge = new ScriptUiBridge(_connection, LogBridgeError);
             ClientProcess.Start(Paths.GameRootPath, _connection.Port, message => _logger?.LogInfo($"[Client] {message}"), message => _logger?.LogError($"[Client] {message}"));
         }
         AddComponent<ScoreTicker>();
@@ -244,6 +246,9 @@ public sealed class Plugin : BasePlugin
     internal static ControlBridge? ControlBridge
         => _controlBridge;
 
+    internal static ScriptUiBridge? ScriptUiBridge
+        => _scriptUiBridge;
+
     private sealed class FilteredLogListener : ILogListener
     {
         // Add exact, case-sensitive source/message pairs here to suppress more messages.
@@ -385,6 +390,7 @@ public sealed class ScoreTicker : MonoBehaviour
     private static extern bool IsWindowVisible(nint window);
 
     private ControlOverlay? _controlOverlay;
+    private ScriptUiOverlay? _scriptUiOverlay;
 
     public ScoreTicker(IntPtr pointer) : base(pointer)
     {
@@ -399,22 +405,47 @@ public sealed class ScoreTicker : MonoBehaviour
                 Plugin.ShowWindow(consoleWindow, IsWindowVisible(consoleWindow) ? 0 : 5);
         }
         Plugin.PumpPackets(0);
-        if (Plugin.ControlBridge is not ControlBridge bridge)
-            return;
-        _controlOverlay ??= ControlOverlay.Create(bridge.Send, bridge.Load, bridge.RemoveFromHistory);
-        _controlOverlay?.Apply(bridge.State);
+        if (Plugin.ScriptUiBridge is ScriptUiBridge scriptUiBridge)
+        {
+            _scriptUiOverlay ??= ScriptUiOverlay.Create(scriptUiBridge.SendEvent, Plugin.LogBridgeError);
+            if (_scriptUiOverlay is not null)
+            {
+                scriptUiBridge.AttachOverlay(_scriptUiOverlay);
+                bool capture = Plugin.ControlBridge?.State?.Capture == true;
+                _scriptUiOverlay.Apply(scriptUiBridge.Snapshot, scriptUiBridge.EventsEnabled, capture);
+                if (capture)
+                    scriptUiBridge.ClearQueuedPointers();
+                else
+                    scriptUiBridge.FlushPointers();
+            }
+        }
+        if (Plugin.ControlBridge is ControlBridge bridge)
+        {
+            _controlOverlay ??= ControlOverlay.Create(bridge.Send, bridge.Load, bridge.RemoveFromHistory);
+            _controlOverlay?.Apply(bridge.State);
+        }
     }
 
     public void OnDestroy()
     {
         _controlOverlay?.Dispose();
         _controlOverlay = null;
+        if (_scriptUiOverlay is not null && Plugin.ScriptUiBridge is ScriptUiBridge scriptUiBridge)
+            scriptUiBridge.DetachOverlay(_scriptUiOverlay);
+        _scriptUiOverlay?.Dispose();
+        _scriptUiOverlay = null;
         Plugin.StopClient();
         Plugin.StopServer();
     }
 
     public void OnApplicationQuit()
     {
+        _controlOverlay?.Dispose();
+        _controlOverlay = null;
+        if (_scriptUiOverlay is not null && Plugin.ScriptUiBridge is ScriptUiBridge scriptUiBridge)
+            scriptUiBridge.DetachOverlay(_scriptUiOverlay);
+        _scriptUiOverlay?.Dispose();
+        _scriptUiOverlay = null;
         Plugin.StopClient();
         Plugin.StopServer();
     }

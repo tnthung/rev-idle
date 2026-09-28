@@ -2,6 +2,109 @@ use super::connection::{Packet, Requestable};
 use crate::app::{ScriptPhase, StateUpdate};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ScriptUiSnapshot {
+    pub(crate) session_id: Option<Uuid>,
+    pub(crate) revision: u64,
+    pub(crate) elements: Vec<ScriptUiElementState>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ScriptUiElementState {
+    pub(crate) id: String,
+    pub(crate) instance_id: Uuid,
+    pub(crate) events_version: u64,
+    pub(crate) text: String,
+    pub(crate) pos_x: f64,
+    pub(crate) pos_y: f64,
+    pub(crate) len_x: ScriptUiLengthState,
+    pub(crate) len_y: ScriptUiLengthState,
+    pub(crate) color: [u8; 4],
+    pub(crate) text_color: [u8; 4],
+    pub(crate) border: ScriptUiBorderState,
+    pub(crate) corner: ScriptUiCornerState,
+    pub(crate) padding: ScriptUiPaddingState,
+    pub(crate) events: Vec<ScriptUiEventKind>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScriptUiLengthState {
+    pub(crate) fixed: Option<f64>,
+    pub(crate) min: f64,
+    pub(crate) max: Option<f64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScriptUiBorderState {
+    pub(crate) thickness: f64,
+    pub(crate) color: [u8; 4],
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ScriptUiCornerState {
+    pub(crate) top_left: f64,
+    pub(crate) top_right: f64,
+    pub(crate) bottom_left: f64,
+    pub(crate) bottom_right: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScriptUiPaddingState {
+    pub(crate) top: f64,
+    pub(crate) right: f64,
+    pub(crate) bottom: f64,
+    pub(crate) left: f64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ScriptUiEventKind { Hover, Leave, Click }
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ScriptUiEvent {
+    pub(crate) session_id: Uuid,
+    pub(crate) element_id: String,
+    pub(crate) instance_id: Uuid,
+    pub(crate) events_version: u64,
+    pub(crate) event: ScriptUiEventKind,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ScriptUiPointerPhase { Down, Up }
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ScriptUiPointer {
+    pub(crate) session_id: Uuid,
+    pub(crate) press_id: u64,
+    pub(crate) phase: ScriptUiPointerPhase,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: i32,
+    pub(crate) height: i32,
+}
+
+impl Packet for ScriptUiSnapshot {
+    const TYPE: &'static str = "ScriptUiSnapshot";
+}
+
+impl Packet for ScriptUiEvent {
+    const TYPE: &'static str = "ScriptUiEvent";
+}
+
+impl Packet for ScriptUiPointer {
+    const TYPE: &'static str = "ScriptUiPointer";
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct StateReq {
@@ -253,6 +356,25 @@ impl Requestable for SlotReq {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn script_ui_packet_payloads_match_shared_fixture() {
+        let fixture: Value = serde_json::from_str(include_str!("../../../protocol/fixtures/bridge-packets.json")).unwrap();
+        let snapshot: ScriptUiSnapshot = serde_json::from_value(fixture["ScriptUiSnapshot"].clone()).unwrap();
+        assert_eq!(snapshot.elements[0].padding.right, 8.0);
+        assert_eq!(snapshot.elements[0].corner.top_left, 0.0);
+        assert_eq!(snapshot.elements[0].border.color, [0, 255, 0, 128]);
+        assert_eq!(serde_json::to_value(snapshot).unwrap(), fixture["ScriptUiSnapshot"]);
+        let clear: ScriptUiSnapshot = serde_json::from_value(fixture["ScriptUiClear"].clone()).unwrap();
+        assert_eq!(clear.session_id, None);
+        assert_eq!(serde_json::to_value(clear).unwrap(), fixture["ScriptUiClear"]);
+        let event: ScriptUiEvent = serde_json::from_value(fixture["ScriptUiEvent"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(event).unwrap(), fixture["ScriptUiEvent"]);
+        for key in ["ScriptUiPointer", "ScriptUiPointerUp"] {
+            let pointer: ScriptUiPointer = serde_json::from_value(fixture[key].clone()).unwrap();
+            assert_eq!(serde_json::to_value(pointer).unwrap(), fixture[key]);
+        }
+    }
 
     #[test]
     fn packet_payloads_match_shared_fixture() {

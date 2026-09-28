@@ -449,6 +449,10 @@ pub(crate) struct PacketContext {
 }
 
 impl PacketContext {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub(crate) async fn send<P: Packet>(&self, packet: P) -> Result<(), WsError> {
         let active = self.inner.active().map_err(|_| WsError::Closed)?;
         if active.generation != self.generation {
@@ -567,6 +571,29 @@ impl WsConnection {
         let envelope = Envelope::new(Uuid::new_v4(), P::TYPE, packet)
             .map_err(|error| WsError::Protocol(error.to_string()))?;
         self.inner.enqueue(active, envelope).await
+    }
+
+    pub(crate) async fn send_for_generation<P: Packet>(
+        &self,
+        packet: P,
+        generation: u64,
+        is_valid: impl Fn() -> bool,
+    ) -> Result<(), WsError> {
+        let active = self.inner.active()?;
+        if active.generation != generation || !is_valid() {
+            return Err(WsError::Closed);
+        }
+        let envelope = Envelope::new(Uuid::new_v4(), P::TYPE, packet)
+            .map_err(|error| WsError::Protocol(error.to_string()))?;
+        let permit = active.outbound.reserve().await.map_err(|_| WsError::Closed)?;
+        // Capacity may have taken time to become available. Revalidate before
+        // committing this packet to the captured connection's queue.
+        if !self.inner.is_active(generation) || !is_valid() {
+            return Err(WsError::Closed);
+        }
+        let (written, result) = oneshot::channel();
+        permit.send(Outbound { envelope, written });
+        result.await.unwrap_or(Err(WsError::Closed))
     }
 
     pub(crate) fn try_send<P: Packet>(&self, packet: P) -> Result<(), WsError> {
@@ -1265,6 +1292,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn script_ui_scoped_send_rejects_reconnect_and_rechecks_after_backpressure() {
+        let connection = super::WsConnection::disconnected_for_test();
+        let (outbound, mut received) = tokio::sync::mpsc::channel(1);
+        let generation = connection.inner.activate(outbound);
+        connection.try_send(TestReq { value: "occupy".to_owned() }).unwrap();
+        let valid = AtomicBool::new(true);
+        let send = connection.send_for_generation(TestReq { value: "stale".to_owned() }, generation, || valid.load(Ordering::Acquire));
+        tokio::pin!(send);
+        assert!(tokio::time::timeout(Duration::from_millis(5), &mut send).await.is_err());
+        valid.store(false, Ordering::Release);
+        received.recv().await.unwrap();
+        assert_eq!(send.await, Err(super::WsError::Closed));
+        assert!(received.try_recv().is_err());
+
+        connection.inner.close_generation(generation);
+        let (outbound, mut replacement) = tokio::sync::mpsc::channel(1);
+        connection.inner.activate(outbound);
+        assert_eq!(connection.send_for_generation(TestReq { value: "old press".to_owned() }, generation, || true).await, Err(super::WsError::Closed));
+        assert!(replacement.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn script_ui_pointer_phases_wait_for_outbound_capacity_in_order() {
+        let connection = super::WsConnection::disconnected_for_test();
+        let (outbound, mut received) = tokio::sync::mpsc::channel(1);
+        let generation = connection.inner.activate(outbound);
+        connection.try_send(TestReq { value: "occupy".to_owned() }).unwrap();
+        let sender = connection.clone();
+        let mut task = tokio::spawn(async move {
+            for phase in [crate::bridge::ScriptUiPointerPhase::Down, crate::bridge::ScriptUiPointerPhase::Up] {
+                sender.send_for_generation(crate::bridge::ScriptUiPointer {
+                    session_id: uuid::Uuid::nil(), press_id: 7, phase, x: 10, y: 20, width: 100, height: 100,
+                }, generation, || true).await.unwrap();
+            }
+        });
+        assert!(tokio::time::timeout(Duration::from_millis(5), &mut task).await.is_err());
+        received.recv().await.unwrap();
+        for phase in ["down", "up"] {
+            let packet = tokio::time::timeout(Duration::from_secs(1), received.recv()).await.unwrap().unwrap();
+            assert_eq!(packet.envelope.payload["phase"], phase);
+            assert_eq!(packet.envelope.payload["pressId"], 7);
+            packet.written.send(Ok(())).unwrap();
+        }
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn connection_events_preserve_every_rapid_transition() {
         let connection = super::WsConnection::disconnected_for_test();
         let mut events = connection.connection_events();
@@ -1286,6 +1360,27 @@ mod tests {
         ] {
             assert_eq!(events.recv().await.unwrap(), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn script_ui_backpressure_keeps_only_latest_pending_snapshot() {
+        let connection = super::WsConnection::disconnected_for_test();
+        let (outbound, mut receiver) = tokio::sync::mpsc::channel(1);
+        connection.inner.activate(outbound);
+        let publisher = crate::bridge::ScriptUiPublisher::default();
+        let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+        let task = tokio::spawn(crate::bridge::publish_script_ui(connection.clone(), publisher.subscribe(), shutdown_rx));
+        let first = receiver.recv().await.unwrap();
+        let session = uuid::Uuid::new_v4();
+        for _ in 0..20 { publisher.replace(session, Vec::new()); }
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(40), receiver.recv()).await.is_err());
+        first.written.send(Ok(())).unwrap();
+        let latest = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv()).await.unwrap().unwrap();
+        assert_eq!(latest.envelope.payload["revision"], 20);
+        latest.written.send(Ok(())).unwrap();
+        shutdown.send(true).unwrap();
+        task.await.unwrap();
+        connection.shutdown().await;
     }
 
     #[tokio::test]

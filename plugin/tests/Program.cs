@@ -43,6 +43,15 @@ StatePayloadPreservesNestedUnityZodiacData();
 StatePayloadAvoidsUnrelatedReadsForLeafRequests();
 StatePayloadFiltersEarlierLayersByNativeIdentity();
 BridgePacketPayloadsMatchSharedFixture();
+ScriptUiSnapshotRejectsStaleRevisionAndGeneration();
+ScriptUiSnapshotReplacesAtomically();
+ScriptUiDisconnectRetainsVisualStateButDisablesEvents();
+ScriptUiLayoutUsesViewportAnchorsAndPadding();
+ScriptUiOutlineAndCornerGeometry();
+ScriptUiPaddingLayout();
+ScriptUiRoundedHitTestMatchesRelay();
+ScriptUiPointerRequiresMatchingLiveInstance();
+ScriptUiPointerRejectsStaleConnection();
 await BridgeStateHandlerPreservesMixedJsonAndSelectedKeys();
 await BridgeStateHandlerReportsMissingData();
 await BridgeStateHandlerReportsInvalidPath();
@@ -124,7 +133,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("123 tests passed.");
+System.Console.WriteLine("130 tests passed.");
 
 static void ClientProcessConsumesConsoleClearWithoutLoggingIt()
 {
@@ -136,6 +145,224 @@ static void ClientProcessConsumesConsoleClearWithoutLoggingIt()
     ClientProcess.ForwardOutput(null, output.Add, () => output.Add("cleared"));
     Equal("before|cleared|after|", string.Join("|", output), nameof(ClientProcessConsumesConsoleClearWithoutLoggingIt));
 }
+
+static void ScriptUiSnapshotRejectsStaleRevisionAndGeneration()
+{
+    const string testName = nameof(ScriptUiSnapshotRejectsStaleRevisionAndGeneration);
+    using WsConnection connection = WsConnection.DisconnectedForTest();
+    ScriptUiBridge bridge = new(connection);
+    Guid session = Guid.NewGuid();
+    ScriptUiSnapshot first = new(session, 4, new[] { ScriptUiTestElement("one") });
+    Equal(true, bridge.TryAcceptSnapshot(first, 8), testName);
+    Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 3, first.Elements), 8), testName);
+    Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 5, first.Elements), 7), testName);
+    Equal((ulong)4, bridge.Snapshot!.Revision, testName);
+}
+
+static void ScriptUiSnapshotReplacesAtomically()
+{
+    const string testName = nameof(ScriptUiSnapshotReplacesAtomically);
+    using WsConnection connection = WsConnection.DisconnectedForTest();
+    ScriptUiBridge bridge = new(connection);
+    Guid session = Guid.NewGuid();
+    ScriptUiSnapshot first = new(session, 1, new[] { ScriptUiTestElement("one") });
+    Equal(true, bridge.TryAcceptSnapshot(first, 2), testName);
+    ScriptUiElementState malformed = ScriptUiTestElement("two") with { Color = new byte[] { 1, 2, 3 } };
+    Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { malformed }), 2), testName);
+    Equal("one", bridge.Snapshot!.Elements[0].Id, testName);
+    ScriptUiElementState duplicate = first.Elements[0] with { Id = "different-name" };
+    Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { first.Elements[0], duplicate }), 2), testName);
+    Equal((ulong)1, bridge.Snapshot!.Revision, testName);
+    Equal(true, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 3, Array.Empty<ScriptUiElementState>()), 2), testName);
+    Equal(0, bridge.Snapshot!.Elements.Length, testName);
+}
+
+static void ScriptUiDisconnectRetainsVisualStateButDisablesEvents()
+{
+    const string testName = nameof(ScriptUiDisconnectRetainsVisualStateButDisablesEvents);
+    using WsConnection connection = WsConnection.DisconnectedForTest();
+    ScriptUiBridge bridge = new(connection);
+    Guid session = Guid.NewGuid();
+    ScriptUiSnapshot snapshot = new(session, 1, new[] { ScriptUiTestElement("one") });
+    Equal(true, bridge.TryAcceptSnapshot(snapshot, 1), testName);
+    Equal(false, bridge.EventsEnabled, testName);
+    Equal("one", bridge.Snapshot!.Elements[0].Id, testName);
+}
+
+static void ScriptUiLayoutUsesViewportAnchorsAndPadding()
+{
+    const string testName = nameof(ScriptUiLayoutUsesViewportAnchorsAndPadding);
+    ScriptUiElementState element = ScriptUiTestElement("one") with
+    {
+        PosX = 100,
+        PosY = -100,
+        LenX = new ScriptUiLengthState(100, 0, null),
+        LenY = new ScriptUiLengthState(20, 0, null)
+    };
+    ScriptUiLayout layout = ScriptUiGeometry.Calculate(element, 1920, 1080, 60, 12);
+    Equal(100f, layout.Box.xMin, testName);
+    Equal(960f, layout.Box.yMin, testName);
+    element = element with { PosX = -100 };
+    layout = ScriptUiGeometry.Calculate(element, 1920, 1080, 60, 12);
+    Equal(1720f, layout.Box.xMin, testName);
+    element = element with { LenX = new ScriptUiLengthState(null, 100, 140) };
+    layout = ScriptUiGeometry.Calculate(element, 1920, 1080, 160, 12);
+    Equal(140f, layout.Box.width, testName);
+}
+
+static void ScriptUiOutlineAndCornerGeometry()
+{
+    const string testName = nameof(ScriptUiOutlineAndCornerGeometry);
+    ScriptUiElementState element = ScriptUiTestElement("one") with
+    {
+        LenX = new ScriptUiLengthState(100, 0, null),
+        LenY = new ScriptUiLengthState(20, 0, null),
+        Border = new ScriptUiBorderState(2, new byte[] { 255, 0, 0, 255 }),
+        Corner = new ScriptUiCornerState(5, 5, 5, 5)
+    };
+    ScriptUiLayout layout = ScriptUiGeometry.Calculate(element, 1920, 1080, 0, 0);
+    Equal(100f, layout.Box.width, testName);
+    Equal(104f, layout.Outline.width, testName);
+    Equal(7f, layout.OutlineRadii.TopLeft, testName);
+    element = element with { Corner = new ScriptUiCornerState(0, 0, 0, 0) };
+    layout = ScriptUiGeometry.Calculate(element, 1920, 1080, 0, 0);
+    Equal(0f, layout.OutlineRadii.TopLeft, testName);
+    layout = ScriptUiGeometry.Calculate(element with { LenX = new ScriptUiLengthState(0, 0, null) }, 1920, 1080, 0, 0);
+    Equal(0f, layout.Outline.width, testName);
+    Equal(0f, layout.Outline.height, testName);
+    foreach (float width in new[] { 100f, 8000f, 1_000_000f })
+    {
+        ScriptUiRect inner = new(1, 1, width, 20);
+        ScriptUiRect outer = new(0, 0, width + 2, 22);
+        ScriptUiRadii innerRadii = new(5, 5, 0, 0);
+        ScriptUiRadii outerRadii = new(6, 6, 0, 0);
+        (float innerX, float innerY) = ScriptUiGeometry.BoundaryPoint(inner, innerRadii, 32);
+        (float outerX, float outerY) = ScriptUiGeometry.BoundaryPoint(outer, outerRadii, 32);
+        Equal(true, MathF.Abs(innerX - outerX) < 0.001f, testName);
+        Equal(true, MathF.Abs(innerY - outerY - 1) < 0.001f, testName);
+        (innerX, innerY) = ScriptUiGeometry.BoundaryPoint(inner, innerRadii, 66);
+        (outerX, outerY) = ScriptUiGeometry.BoundaryPoint(outer, outerRadii, 66);
+        Equal(1f, outerX - innerX, testName);
+        Equal(1f, outerY - innerY, testName);
+        for (int index = 0; index < ScriptUiGeometry.BoundaryPointCount; index++)
+        {
+            (float x, float y) = ScriptUiGeometry.BoundaryPoint(outer, outerRadii, index);
+            Equal(true, float.IsFinite(x) && float.IsFinite(y), testName);
+        }
+    }
+    Equal(true, ScriptUiGeometry.BoundaryPointCount * 2 < 1024, testName);
+    foreach (double border in new[] { 1d, double.MaxValue })
+    {
+        layout = ScriptUiGeometry.Calculate(element with
+        {
+            LenX = new ScriptUiLengthState(1_000_000, 0, null),
+            Border = new ScriptUiBorderState(border, element.Border.Color),
+            Corner = new ScriptUiCornerState(5, 5, 0, 0)
+        }, 1920, 1080, 0, 0);
+        ScriptUiRect inner = new(layout.BorderThickness, layout.BorderThickness, layout.Box.width, layout.Box.height);
+        ScriptUiRect outer = new(0, 0, layout.Outline.width, layout.Outline.height);
+        Equal(true, inner.xMin >= 0 && inner.yMin >= 0 && inner.xMax <= outer.xMax && inner.yMax <= outer.yMax, testName);
+        for (int index = 0; index < ScriptUiGeometry.BoundaryPointCount; index++)
+        {
+            (float x, float y) = ScriptUiGeometry.BoundaryPoint(outer, layout.OutlineRadii, index);
+            Equal(true, float.IsFinite(x) && float.IsFinite(y), testName);
+            (x, y) = ScriptUiGeometry.BoundaryPoint(inner, layout.Radii, index);
+            Equal(true, float.IsFinite(x) && float.IsFinite(y), testName);
+        }
+    }
+}
+
+static void ScriptUiPaddingLayout()
+{
+    const string testName = nameof(ScriptUiPaddingLayout);
+    ScriptUiElementState element = ScriptUiTestElement("one") with
+    {
+        Padding = new ScriptUiPaddingState(4, 8, 4, 0),
+        LenX = new ScriptUiLengthState(null, 0, null),
+        LenY = new ScriptUiLengthState(null, 0, null)
+    };
+    ScriptUiLayout layout = ScriptUiGeometry.Calculate(element, 1920, 1080, 60, 12);
+    Equal(68f, layout.Box.width, testName);
+    Equal(20f, layout.Box.height, testName);
+    element = element with
+    {
+        LenX = new ScriptUiLengthState(100, 0, null),
+        LenY = new ScriptUiLengthState(20, 0, null)
+    };
+    layout = ScriptUiGeometry.Calculate(element, 1920, 1080, 60, 12);
+    Equal(92f, layout.Content.width, testName);
+    Equal(0f, layout.Content.xMin, testName);
+    Equal(4f, layout.Content.yMin, testName);
+}
+
+static void ScriptUiRoundedHitTestMatchesRelay()
+{
+    const string testName = nameof(ScriptUiRoundedHitTestMatchesRelay);
+    ScriptUiElementState element = ScriptUiTestElement("one") with
+    {
+        LenX = new ScriptUiLengthState(100, 0, null),
+        LenY = new ScriptUiLengthState(20, 0, null),
+        Border = new ScriptUiBorderState(2, new byte[] { 255, 0, 0, 255 }),
+        Corner = new ScriptUiCornerState(5, 5, 5, 5)
+    };
+    ScriptUiLayout layout = ScriptUiGeometry.Calculate(element, 1920, 1080, 0, 0);
+    Equal(false, ScriptUiGeometry.Contains(layout, 0, 0), testName);
+    Equal(true, ScriptUiGeometry.Contains(layout, 5, 5), testName);
+    Equal(false, ScriptUiGeometry.Contains(layout, -1, 5), testName);
+    element = element with { Corner = new ScriptUiCornerState(0, 0, 0, 0) };
+    Equal(true, ScriptUiGeometry.Contains(ScriptUiGeometry.Calculate(element, 1920, 1080, 0, 0), 0, 0), testName);
+    ScriptUiLayout changedBorder = ScriptUiGeometry.Calculate(element with { Border = new ScriptUiBorderState(20, element.Border.Color) }, 1920, 1080, 0, 0);
+    Equal(layout.Box.width, changedBorder.Box.width, testName);
+    Equal(layout.Box.height, changedBorder.Box.height, testName);
+}
+
+static void ScriptUiPointerRequiresMatchingLiveInstance()
+{
+    const string testName = nameof(ScriptUiPointerRequiresMatchingLiveInstance);
+    Guid session = Guid.NewGuid();
+    Guid instance = Guid.NewGuid();
+    ScriptUiElementState element = ScriptUiTestElement("one") with
+    {
+        InstanceId = instance,
+        LenX = new ScriptUiLengthState(100, 0, null),
+        LenY = new ScriptUiLengthState(20, 0, null)
+    };
+    ScriptUiLayout layout = ScriptUiGeometry.Calculate(element, 1920, 1080, 0, 0);
+    ScriptUiPointer pointer = new(session, 1, "up", 20, 10, 1920, 1080);
+    Equal(true, ScriptUiPointerPairing.MatchesRelease(pointer, session, instance, 1, instance, 1, layout), testName);
+    Equal(false, ScriptUiPointerPairing.MatchesRelease(pointer, session, instance, 1, Guid.NewGuid(), 1, layout), testName);
+    Equal(false, ScriptUiPointerPairing.MatchesRelease(pointer with { X = 200 }, session, instance, 1, instance, 1, layout), testName);
+    Equal(false, ScriptUiPointerPairing.MatchesRelease(pointer, session, instance, 1, instance, 2, layout), testName);
+}
+
+static void ScriptUiPointerRejectsStaleConnection()
+{
+    const string testName = nameof(ScriptUiPointerRejectsStaleConnection);
+    using WsConnection connection = WsConnection.DisconnectedForTest();
+    ScriptUiBridge bridge = new(connection);
+    Guid session = Guid.NewGuid();
+    ScriptUiSnapshot snapshot = new(session, 1, new[] { ScriptUiTestElement("one") });
+    Equal(true, bridge.TryAcceptSnapshot(snapshot, 4), testName);
+    Equal(false, bridge.AcceptsPointer(new ScriptUiPointer(session, 1, "down", 1, 1, 1920, 1080), 4), testName);
+    Equal(false, bridge.AcceptsPointer(new ScriptUiPointer(Guid.NewGuid(), 1, "down", 1, 1, 1920, 1080), 4), testName);
+}
+
+static ScriptUiElementState ScriptUiTestElement(string id)
+    => new(
+        id,
+        Guid.NewGuid(),
+        1,
+        "",
+        0,
+        0,
+        new ScriptUiLengthState(null, 0, null),
+        new ScriptUiLengthState(null, 0, null),
+        new byte[] { 0, 0, 0, 0 },
+        new byte[] { 255, 255, 255, 255 },
+        new ScriptUiBorderState(0, new byte[] { 255, 255, 255, 255 }),
+        new ScriptUiCornerState(0, 0, 0, 0),
+        new ScriptUiPaddingState(0, 0, 0, 0),
+        Array.Empty<string>());
 
 static void ClientProcessBuildsNonInteractableLaunchArguments()
 {
@@ -216,18 +443,93 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("LockScript", new LockScript()),
         ("LoadScript", new LoadScript(@"C:\scripts\unity_loop2.js", true)),
         ("RemoveScriptHistory", new RemoveScriptHistory(@"C:\scripts\test.js")),
-        ("StateUpdate", new StateUpdate("paused", true, false, new[] { @"C:\scripts\test.js", @"C:\scripts\unity_loop2.js" }))
+        ("StateUpdate", new StateUpdate("paused", true, false, new[] { @"C:\scripts\test.js", @"C:\scripts\unity_loop2.js" })),
+        ("ScriptUiSnapshot", new ScriptUiSnapshot(
+            Guid.Parse("11111111-1111-4111-8111-111111111111"),
+            7,
+            new[]
+            {
+                new ScriptUiElementState(
+                    "button", Guid.Parse("22222222-2222-4222-8222-222222222222"), 2, "Click Me", 100, -100,
+                    new ScriptUiLengthState(null, 100, 300), new ScriptUiLengthState(20, 0, null),
+                    new byte[] { 255, 0, 0, 255 }, new byte[] { 255, 255, 255, 255 },
+                    new ScriptUiBorderState(2, new byte[] { 0, 255, 0, 128 }), new ScriptUiCornerState(0, 5, 0, 5),
+                    new ScriptUiPaddingState(4, 8, 4, 0), new[] { "hover", "leave", "click" }),
+                new ScriptUiElementState(
+                    "signal", Guid.Parse("33333333-3333-4333-8333-333333333333"), 1, "", 0, 0,
+                    new ScriptUiLengthState(10, 0, null), new ScriptUiLengthState(10, 0, null),
+                    new byte[] { 0, 255, 0, 255 }, new byte[] { 255, 255, 255, 255 },
+                    new ScriptUiBorderState(0, new byte[] { 255, 255, 255, 255 }), new ScriptUiCornerState(0, 0, 0, 0),
+                    new ScriptUiPaddingState(0, 0, 0, 0), Array.Empty<string>())
+            })),
+        ("ScriptUiEvent", new ScriptUiEvent(
+            Guid.Parse("11111111-1111-4111-8111-111111111111"), "button",
+            Guid.Parse("22222222-2222-4222-8222-222222222222"), 2, "hover")),
+        ("ScriptUiPointer", new ScriptUiPointer(
+            Guid.Parse("11111111-1111-4111-8111-111111111111"), 3, "down", 110, 965, 1920, 1080)),
+        ("ScriptUiPointerUp", new ScriptUiPointer(
+            Guid.Parse("11111111-1111-4111-8111-111111111111"), 3, "up", 110, 965, 1920, 1080))
     };
+
+    bool JsonMatches(JsonElement expected, JsonElement actual)
+    {
+        if (expected.ValueKind != actual.ValueKind)
+            return false;
+        if (expected.ValueKind == JsonValueKind.Number)
+            return expected.GetDouble() == actual.GetDouble();
+        if (expected.ValueKind == JsonValueKind.Object)
+        {
+            JsonProperty[] properties = expected.EnumerateObject().ToArray();
+            JsonProperty[] actualProperties = actual.EnumerateObject().ToArray();
+            if (properties.Length != actualProperties.Length)
+                return false;
+            foreach (JsonProperty property in properties)
+            {
+                if (!actual.TryGetProperty(property.Name, out JsonElement actualValue) || !JsonMatches(property.Value, actualValue))
+                    return false;
+            }
+            return true;
+        }
+        if (expected.ValueKind == JsonValueKind.Array)
+        {
+            JsonElement[] values = expected.EnumerateArray().ToArray();
+            JsonElement[] actualValues = actual.EnumerateArray().ToArray();
+            return values.Length == actualValues.Length && values.Zip(actualValues).All(pair => JsonMatches(pair.First, pair.Second));
+        }
+        return expected.ValueKind switch
+        {
+            JsonValueKind.String => expected.GetString() == actual.GetString(),
+            JsonValueKind.True or JsonValueKind.False => expected.GetBoolean() == actual.GetBoolean(),
+            JsonValueKind.Null => true,
+            _ => expected.GetRawText() == actual.GetRawText()
+        };
+    }
 
     foreach ((string name, object packet) in packets)
     {
+        if (name == "ScriptUiPointerUp")
+            continue;
         using JsonDocument envelope = JsonDocument.Parse(WsConnection.SerializeForTest(Guid.Empty, packet));
         Equal(name, envelope.RootElement.GetProperty("type").GetString(), nameof(BridgePacketPayloadsMatchSharedFixture));
         Equal(
-            JsonNode.Parse(fixture.RootElement.GetProperty(name).GetRawText())!.ToJsonString(),
-            JsonNode.Parse(envelope.RootElement.GetProperty("payload").GetRawText())!.ToJsonString(),
+            true,
+            JsonMatches(fixture.RootElement.GetProperty(name), envelope.RootElement.GetProperty("payload")),
             nameof(BridgePacketPayloadsMatchSharedFixture));
     }
+
+    using JsonDocument clear = JsonDocument.Parse(WsConnection.SerializeForTest(Guid.Empty, new ScriptUiSnapshot(null, 8, Array.Empty<ScriptUiElementState>())));
+    Equal("ScriptUiSnapshot", clear.RootElement.GetProperty("type").GetString(), nameof(BridgePacketPayloadsMatchSharedFixture));
+    Equal(
+        true,
+        JsonMatches(fixture.RootElement.GetProperty("ScriptUiClear"), clear.RootElement.GetProperty("payload")),
+        nameof(BridgePacketPayloadsMatchSharedFixture));
+    using JsonDocument pointerUp = JsonDocument.Parse(WsConnection.SerializeForTest(Guid.Empty, new ScriptUiPointer(
+        Guid.Parse("11111111-1111-4111-8111-111111111111"), 3, "up", 110, 965, 1920, 1080)));
+    Equal("ScriptUiPointer", pointerUp.RootElement.GetProperty("type").GetString(), nameof(BridgePacketPayloadsMatchSharedFixture));
+    Equal(
+        true,
+        JsonMatches(fixture.RootElement.GetProperty("ScriptUiPointerUp"), pointerUp.RootElement.GetProperty("payload")),
+        nameof(BridgePacketPayloadsMatchSharedFixture));
 
     Equal(
         "{\"type\":null,\"path\":null}",
@@ -2649,7 +2951,11 @@ static void StatePayloadRejectsUnsupportedIl2CppObjectWrappers()
     Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, new[] { "gameData.Value" }, out byte[] selectedPayload, out _), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
     Equal(0, selectedPayload.Length, nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
 
-    data = new Il2CppObjectFixture { Value = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(Il2CppSystem.Object)) };
+    Type il2CppObjectType = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("Il2Cppmscorlib"), AssemblyBuilderAccess.Run)
+        .DefineDynamicModule("main")
+        .DefineType("Il2CppSystem.Object", TypeAttributes.Public | TypeAttributes.Class)
+        .CreateType();
+    data = new Il2CppObjectFixture { Value = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(il2CppObjectType) };
     Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(data, new[] { "gameData" }, out _, out _), nameof(StatePayloadRejectsUnsupportedIl2CppObjectWrappers));
 }
 
@@ -2741,7 +3047,11 @@ static void StatePayloadExcludesIl2CppDelegatesAndUnityEvents()
 static void StatePayloadExcludesRuntimeTypesAtEveryBoundary()
 {
     Action callback = static () => { };
-    object unityObject = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(UnityEngine.Object));
+    Type unityObjectType = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("UnityRuntimeFixture"), AssemblyBuilderAccess.Run)
+        .DefineDynamicModule("main")
+        .DefineType("UnityEngine.Object", TypeAttributes.Public | TypeAttributes.Class)
+        .CreateType();
+    object unityObject = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(unityObjectType);
     var data = new ExcludedRuntimeFixture { Selected = callback, Unity = unityObject, Values = new[] { callback, unityObject } };
 
     Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData" }, out byte[] canonicalPayload, out _), nameof(StatePayloadExcludesRuntimeTypesAtEveryBoundary));

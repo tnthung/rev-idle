@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace RevIdle.ScoreTelemetry;
 
@@ -32,3 +33,72 @@ internal sealed record LockScript;
 internal sealed record LoadScript(string Path, bool Locked);
 internal sealed record RemoveScriptHistory(string Path);
 internal sealed record StateUpdate(string Phase, bool Capture, bool Locked = false, IReadOnlyList<string>? Scripts = null);
+internal sealed record ScriptUiLengthState(
+    double? Fixed,
+    double Min,
+    double? Max);
+internal sealed record ScriptUiBorderState(
+    double Thickness,
+    [property: JsonConverter(typeof(ScriptUiColorConverter))] byte[] Color);
+internal sealed record ScriptUiCornerState(
+    double TopLeft,
+    double TopRight,
+    double BottomLeft,
+    double BottomRight);
+internal sealed record ScriptUiPaddingState(
+    double Top,
+    double Right,
+    double Bottom,
+    double Left);
+internal sealed record ScriptUiElementState(
+    string Id,
+    Guid InstanceId,
+    ulong EventsVersion,
+    string Text,
+    double PosX,
+    double PosY,
+    ScriptUiLengthState LenX,
+    ScriptUiLengthState LenY,
+    [property: JsonConverter(typeof(ScriptUiColorConverter))] byte[] Color,
+    [property: JsonConverter(typeof(ScriptUiColorConverter))] byte[] TextColor,
+    ScriptUiBorderState Border,
+    ScriptUiCornerState Corner,
+    ScriptUiPaddingState Padding,
+    string[] Events);
+internal sealed record ScriptUiSnapshot(Guid? SessionId, ulong Revision, ScriptUiElementState[] Elements);
+internal sealed record ScriptUiEvent(Guid SessionId, string ElementId, Guid InstanceId, ulong EventsVersion, string Event);
+internal sealed record ScriptUiPointer(Guid SessionId, ulong PressId, string Phase, int X, int Y, int Width, int Height);
+
+internal sealed class ScriptUiColorConverter : JsonConverter<byte[]>
+{
+    public override byte[] Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.Null)
+            return Array.Empty<byte>();
+        if (reader.TokenType != JsonTokenType.StartArray)
+            throw new JsonException("Script UI colors must be arrays.");
+        List<byte> values = new();
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+        {
+            if (reader.TokenType != JsonTokenType.Number || !reader.TryGetByte(out byte value))
+                throw new JsonException("Script UI color channels must be bytes.");
+            values.Add(value);
+        }
+        if (reader.TokenType != JsonTokenType.EndArray)
+            throw new JsonException("Script UI color array is incomplete.");
+        return values.ToArray();
+    }
+
+    public override void Write(Utf8JsonWriter writer, byte[] value, JsonSerializerOptions options)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+        writer.WriteStartArray();
+        foreach (byte channel in value)
+            writer.WriteNumberValue(channel);
+        writer.WriteEndArray();
+    }
+}

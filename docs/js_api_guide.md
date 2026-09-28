@@ -15,7 +15,7 @@ export default async function() {
 }
 ```
 
-Returning ends only the current invocation. Module-level state survives later invocations. `rev.stop()` requests session termination after the current invocation; it does not return from the function or break a loop.
+Returning ends only the current invocation. Module-level state survives later invocations. `rev.stop()` terminates the entire session, including pending invocations and background work. Stop also interrupts synchronous JavaScript loops.
 
 ```javascript
 export default async function() {
@@ -69,7 +69,7 @@ Only named exports of the entry module are discovered. Hooks take no arguments, 
 | `onDisconnect()` | After a connection transition to disconnected. |
 | `beforePause()` | Immediately before a requested pause is applied. |
 | `afterResume()` | Immediately after a paused session resumes. |
-| `beforeStop()` | Before the session is destroyed, including stop, replacement, reload, exit, self-stop, or an uncaught invocation failure. |
+| `beforeStop()` | No longer invoked. Terminal cleanup is owned by the host. |
 
 ```javascript
 export function afterLoad() {
@@ -92,20 +92,16 @@ export function afterResume() {
   console.log("resumed");
 }
 
-export function beforeStop() {
-  console.log("stopping");
-}
-
 export default async function() {
   await rev.sleep(1000);
 }
 ```
 
-A connection transition can cancel an in-flight entry invocation. When connection hooks are exported, a disconnect keeps the session alive and normal invocation restarts after reconnection. Do not depend on `finally` blocks in a canceled invocation for lifecycle cleanup; use `onDisconnect` or `beforeStop`.
+Pause prevents new default invocations. The current invocation, detached promises, and UI callbacks continue. Connection notifications also preserve the current invocation; the existing connection rule still controls when another default call may start. There is at most one default invocation in flight.
 
-`rev.stop()` inside a hook has no effect on the session. Only a default invocation's stop request is observed.
+Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before each automatic loop iteration to wait during pause, especially before reading data used for the next action. Monitoring loops can omit the checkpoint. Game/window controls and ordinary `Action` calls remain available while paused. `Action.loopDetached()` checks for resume at each repetition.
 
-A pause can also cancel an in-flight invocation. Module state remains loaded and invocation restarts after resume. Host-controlled game/window actions are gated while paused: `click`, `clickn`, `scroll`, `drag`, `press`, `invoke`, `input`, `scrollIntoView`, `transfer`, `resize`, and clipboard writes do nothing, while clipboard reads return `""`. State requests, file methods, `shell`, `global`, console output, `sleep`, and `stop` are not gated.
+`rev.stop()` works from defaults, hooks, and background/UI callbacks. Stop, reload, replacement, exit, and uncaught default failures cancel the session and skip `beforeStop`. Host cleanup removes custom UI and releases input locks and ownership. It does not depend on JavaScript `finally`; perform script-specific cleanup explicitly before requesting Stop. Already-dispatched game actions may finish. Engine interruption cannot preempt a blocking native call such as synchronous `rev.shell` until that call returns.
 
 ## `rev`
 
@@ -135,8 +131,67 @@ A pause can also cancel an in-flight invocation. Module state remains loaded and
 | `rev.delete_file(path: string)` | `boolean` | Synchronously deletes a file; false means it did not exist. |
 | `rev.shell(command: string)` | `{ stdout: string, stderr: string }` | Synchronously runs `cmd.exe /D /S /C command` and captures both streams. |
 | `rev.sleep(milliseconds: number)` | `Promise<void>` | Waits using real elapsed time. |
-| `rev.stop()` | `void` | Requests termination after the current invocation. |
+| `rev.paused` | `boolean` | Live, read-only pause flag. |
+| `rev.ensureRunning()` | `Promise<void>` | Resolves while running; waits while paused; rejects with `script session stopped` on termination. |
+| `rev.stop()` | `void` | Terminates the entire session and interrupts JavaScript. |
+| `rev.ui` | element registry | Creates, replaces, updates, and removes session-owned UI. |
 | `rev.global` | property proxy | Stores process-local JSON values shared by all script sessions. |
+
+### Custom UI
+
+Create elements once in `afterLoad`. All definition fields also support later assignment:
+
+```javascript
+export function afterLoad() {
+  rev.ui.button = {
+    text: "Click Me", posX: 100, posY: -100,
+    lenX: { min: 100 }, lenY: 28,
+    color: [40, 40, 40],
+    border: { thickness: 2, color: [255, 0, 0, 180] },
+    corner: { radius: 5, topLeft: 0, bottomLeft: 0 },
+    padding: { thickness: 4, left: 0, right: 8 },
+    onHover() { rev.ui.button.color = [0, 120, 0]; },
+    onLeave() { rev.ui.button.color = [40, 40, 40]; },
+    async onClick() {
+      const button = rev.ui.button;
+      button.text = "You clicked me!";
+      await rev.sleep(1000);
+      if (rev.ui.button === button) button.text = "Click Me";
+    },
+  };
+  rev.ui.label = { text: "Ready", posX: 100, posY: -140 };
+  rev.ui.signal = { posX: 80, posY: -140, lenX: 12, lenY: 12, color: [0, 255, 0] };
+}
+
+export default function() {}
+```
+
+Use `delete rev.ui.button` to remove an element. Assigning a whole definition replaces its identity; field updates preserve it. Check identity after an `await` before updating a captured element. A write through a deleted/replaced proxy throws. Equal field writes are no-ops, including structurally equal colors/styles and identical handler functions. Changes publish snapshots asynchronously, independently of the 50 ms default-call delay; unchanged UI is not periodically resent.
+
+Colors use RGB or RGBA bytes. Lengths are fixed numbers or automatic `{ min, max }` bounds. Padding contributes to automatic size and is included in fixed sizes. Its `thickness` is the fallback for `top`, `right`, `bottom`, and `left`. Border is an external outline: it adds no size or hit area. Corner `radius` is the fallback for each named corner; explicit zero stays square. Replace compound fields as a whole, for example `rev.ui.button.border = { thickness: 1, color: [0, 255, 0] }`; nested writes throw. Text is plain, centered, and clipped inside the padded rounded box.
+
+Positive positions measure from the left/top; negative positions measure from the right/bottom to the element's far edge. Elements with handlers receive pointer entry, exit, and matching press/release clicks. Async handlers overlap after yielding. Handler errors are logged without unloading the script. Elements without handlers allow pointer hits through.
+
+UI remains visible and callbacks remain usable while paused. A monitor can update it during pause while maintenance waits:
+
+```javascript
+async function monitor() {
+  while (rev.ui.label) {
+    rev.ui.label.text = rev.paused ? "Paused" : "Running";
+    await rev.sleep(250);
+  }
+}
+
+async function maintenance() {
+  while (true) {
+    await rev.ensureRunning();
+    // Read fresh state and perform the next automatic action here.
+    await rev.sleep(1000);
+  }
+}
+```
+
+Start these tasks from `afterLoad` with `.catch(console.error)`. Stop/reload removes all session UI. Disconnect retains visuals but disables interaction until a fresh snapshot arrives. Capture also disables custom interaction. The exact field defaults and geometry rules are in the [UI design](superpowers/specs/2026-09-28-script-ui-design.md); `scripts/ui_demo.ts` provides manual checks without automatic game actions.
 
 ### State
 
@@ -202,7 +257,7 @@ export default async function() {
 }
 ```
 
-While an ownership token is alive and unreleased, and the script is active rather than paused, lock mode is forced for that session. Existing `rev` input functions are unchanged; a workflow must opt in, and nested helpers should not reacquire ownership. `release()` is idempotent, and `Symbol.dispose` performs the same release. Native Rust drop or garbage collection can release a forgotten token, but the timing is not guaranteed. Pausing temporarily unlocks player input while retaining the reservation; resuming re-locks it when the session still owns the token. Releasing a token preserves any existing manual lock. Stop or reload invalidates ownership and cancels waiters. `rev.stop()` still requests termination after the current invocation.
+While an ownership token is alive and unreleased, and the script is active rather than paused, lock mode is forced for that session. Ownership is opt-in, and nested helpers should not reacquire it. `release()` is idempotent, and `Symbol.dispose` performs the same release. Native Rust drop or garbage collection can release a forgotten token, but the timing is not guaranteed. Pausing unlocks player input while retaining the reservation; resuming re-locks it. A holder waiting at `ensureRunning()` retains its token and keeps other ownership callers waiting. Releasing a token preserves any existing manual lock. Stop or reload invalidates ownership and cancels waiters through host cleanup.
 
 ### Files, shell, and clipboard
 
@@ -458,8 +513,8 @@ import {
 
 ## Errors and cancellation
 
-Synchronous host failures throw and asynchronous failures reject. An uncaught default-invocation error logs the failure, calls `beforeStop`, and destroys the session. Library methods generally allow errors to propagate unless their implementation explicitly catches them.
+Synchronous host failures throw and asynchronous failures reject. An uncaught default-invocation error logs the failure and destroys the session through host cleanup, skipping `beforeStop`. UI callback errors are isolated unless the session has been stopped. Library methods generally allow errors to propagate unless their implementation explicitly catches them.
 
-Host stop, pause, disconnect, replacement, or shutdown can cancel an awaited invocation. Keep durable cleanup in lifecycle hooks and persistent cross-invocation data at module scope or in `rev.global`.
+Pause preserves awaited work; use `rev.ensureRunning()` where a loop should wait for resume. Keep cross-invocation data at module scope or in `rev.global`.
 
 Implementation references: [bindings](../client/src/script/bindings.rs), [session and hooks](../client/src/script/session.rs), [module loader](../client/src/script/loader.rs), [lifecycle](../client/src/script/lifecycle.rs), [state serializer](../plugin/src/StatePayload.cs), and [library modules](../scripts/lib).

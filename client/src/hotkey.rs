@@ -1,9 +1,8 @@
 use std::sync::mpsc as std_mpsc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
-use crate::app::PauseUpdate;
-use crate::app::ActionGate;
+use tokio::sync::watch;
+use crate::app::{ActionGate, PauseUpdate, ScriptCommandSink};
 use windows::Win32::{
     Foundation::{LPARAM, WPARAM},
     System::Threading::GetCurrentThreadId,
@@ -31,21 +30,21 @@ trait HotkeyPlatform {
 }
 
 #[cfg(test)]
-fn run_hotkey_loop<P: HotkeyPlatform>(
+fn run_hotkey_loop<P: HotkeyPlatform, S: ScriptCommandSink>(
     mut platform: P,
     gate: ActionGate,
     pause_tx: watch::Sender<PauseUpdate>,
-    command_tx: mpsc::Sender<crate::app::ScriptCommand>,
+    command_tx: S,
 ) -> Result<(), String> {
     platform.register()?;
     run_registered_hotkey_loop(platform, gate, pause_tx, command_tx)
 }
 
-fn run_registered_hotkey_loop<P: HotkeyPlatform>(
+fn run_registered_hotkey_loop<P: HotkeyPlatform, S: ScriptCommandSink>(
     mut platform: P,
     gate: ActionGate,
     pause_tx: watch::Sender<PauseUpdate>,
-    command_tx: mpsc::Sender<crate::app::ScriptCommand>,
+    command_tx: S,
 ) -> Result<(), String> {
     let mut result = Ok(());
     loop {
@@ -176,10 +175,10 @@ pub struct HotkeyWorker {
 }
 
 impl HotkeyWorker {
-    pub fn start(
+    pub fn start<S: ScriptCommandSink>(
         gate: ActionGate,
         pause_tx: watch::Sender<PauseUpdate>,
-        command_tx: mpsc::Sender<crate::app::ScriptCommand>,
+        command_tx: S,
     ) -> Result<Self, String> {
         let (startup_tx, startup_rx) = std_mpsc::channel();
         let handle = thread::spawn(move || {
@@ -239,7 +238,7 @@ impl Drop for HotkeyWorker {
 mod tests {
     use super::*;
     use std::sync::{Arc, atomic::Ordering};
-    use tokio::sync::watch;
+    use tokio::sync::{mpsc, watch};
 
     struct FakeHotkeyPlatform {
         events: Vec<HotkeyEvent>,

@@ -1,9 +1,13 @@
 use std::sync::{
-    atomic::{AtomicBool, AtomicU32, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     mpsc as std_mpsc,
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+use std::cell::RefCell;
+use crate::bridge::{ScriptUiPointer, ScriptUiPointerPhase, ScriptUiSnapshot};
+use tokio::sync::watch;
+use uuid::Uuid;
 
 use windows::Win32::{
     Foundation::{HINSTANCE, LPARAM, LRESULT, POINT, WPARAM},
@@ -19,7 +23,7 @@ use windows::Win32::{
     },
     UI::WindowsAndMessaging::{
         CallNextHookEx, GetForegroundWindow, GetMessageW, GetSystemMetrics, PeekMessageW,
-        PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK,
+        PostThreadMessageW, SetForegroundWindow, SetWindowsHookExW, UnhookWindowsHookEx, HHOOK,
         MSLLHOOKSTRUCT, MSG, PM_NOREMOVE, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
         SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WH_MOUSE_LL, WM_APP, WM_LBUTTONDOWN,
         WM_LBUTTONUP, WM_QUIT,
@@ -28,13 +32,15 @@ use windows::Win32::{
 
 use crate::{bridge::WsConnection, window};
 
-static CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
+// The low bit is capture enabled; the remaining bits identify the last arm.
+static CAPTURE_STATE: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_LEFT_BUTTON_DOWN: AtomicBool = AtomicBool::new(false);
 static CAPTURE_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
 
 const CAPTURE_MESSAGE: u32 = WM_APP + 1;
 const FOCUS_MESSAGE: u32 = WM_APP + 2;
+const SCRIPT_UI_MESSAGE: u32 = WM_APP + 3;
 const FOCUS_CLICK_EXTRA_INFO: usize = 0x52455646;
 
 /// Width/height (in client pixels) of the overlay's button row, bottom-right
@@ -45,16 +51,125 @@ const FOCUS_CLICK_EXTRA_INFO: usize = 0x52455646;
 const OVERLAY_CONTROLS_WIDTH: i32 = 168;
 const OVERLAY_CONTROLS_HEIGHT: i32 = 46;
 
+struct QueuedPointer {
+    pointer: ScriptUiPointer,
+    generation: u64,
+    capture_epoch: u64,
+}
+
+#[derive(Default)]
+struct PointerRelay {
+    sequence: u64,
+    pressed: Option<(u64, Option<(Uuid, u64)>)>,
+}
+
+impl PointerRelay {
+    fn decide(
+        &mut self,
+        down: bool,
+        up: bool,
+        location: Option<(i32, i32, i32, i32)>,
+        locked: bool,
+        capturing: bool,
+        route: Option<(Uuid, u64)>,
+    ) -> (bool, Option<QueuedPointer>) {
+        if capturing {
+            if let Some((_, target)) = &mut self.pressed { *target = None; }
+        }
+        let (press_id, target, phase) = if up {
+            match self.pressed.take() {
+                Some((id, target)) => (id, target.filter(|target| Some(*target) == route), ScriptUiPointerPhase::Up),
+                None => return (false, None),
+            }
+        } else if down && locked && !capturing && location.is_some_and(|(x, y, width, height)| !within_overlay_controls(x, y, width, height)) {
+            self.sequence += 1;
+            self.pressed = Some((self.sequence, route));
+            (self.sequence, route, ScriptUiPointerPhase::Down)
+        } else {
+            return (false, None);
+        };
+        let Some((session_id, generation)) = target else { return (true, None); };
+        let (x, y, width, height) = location.unwrap_or((0, 0, 0, 0));
+        (true, Some(QueuedPointer { generation, capture_epoch: 0, pointer: ScriptUiPointer { session_id, press_id, phase, x, y, width, height } }))
+    }
+}
+
+struct HookRelay {
+    snapshots: watch::Receiver<ScriptUiSnapshot>,
+    generations: watch::Receiver<u64>,
+    pointer: PointerRelay,
+    sender: tokio::sync::mpsc::Sender<QueuedPointer>,
+    release: Option<tokio::sync::mpsc::OwnedPermit<QueuedPointer>>,
+    capture_epoch: u64,
+}
+
+impl HookRelay {
+    fn enqueue(&mut self, packet: QueuedPointer) -> bool {
+        if packet.pointer.phase == ScriptUiPointerPhase::Down {
+            self.release = None;
+            // Reserve both phases before accepting the press. A full queue
+            // can reject a whole click, but cannot discard its release later.
+            let Ok(down) = self.sender.clone().try_reserve_owned() else { return false; };
+            let Ok(up) = self.sender.clone().try_reserve_owned() else { return false; };
+            self.release = Some(up);
+            down.send(packet);
+            true
+        } else if let Some(up) = self.release.take() {
+            up.send(packet);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+async fn relay_pointers(
+    connection: WsConnection,
+    snapshots: watch::Receiver<ScriptUiSnapshot>,
+    mut pointers: tokio::sync::mpsc::Receiver<QueuedPointer>,
+) {
+    while let Some(queued) = pointers.recv().await {
+        let session_id = queued.pointer.session_id;
+        let result = connection.send_for_generation(queued.pointer, queued.generation, || {
+            CaptureState.inactive_epoch() == Some(queued.capture_epoch)
+                && !CAPTURE_LEFT_BUTTON_DOWN.load(Ordering::Acquire)
+                && snapshots.borrow().session_id == Some(session_id)
+        }).await;
+        if let Err(error) = result {
+            eprintln!("[Script UI] pointer relay canceled: {error}");
+        }
+    }
+}
+
+thread_local! {
+    // The hook and message pump run on the same capture thread. No network
+    // work or async waits take place in the hook.
+    static SCRIPT_UI_RELAY: RefCell<Option<HookRelay>> = const { RefCell::new(None) };
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct CaptureState;
 
 impl CaptureState {
+    pub(crate) fn epoch(self) -> u64 {
+        CAPTURE_STATE.load(Ordering::Acquire) >> 1
+    }
+
+    pub(crate) fn inactive_epoch(self) -> Option<u64> {
+        let state = CAPTURE_STATE.load(Ordering::Acquire);
+        (state & 1 == 0).then_some(state >> 1)
+    }
+
     pub(crate) fn is_enabled(self) -> bool {
-        CAPTURE_ENABLED.load(Ordering::Acquire)
+        CAPTURE_STATE.load(Ordering::Acquire) & 1 != 0
     }
 
     pub(crate) fn set_enabled(self, enabled: bool) {
-        CAPTURE_ENABLED.store(enabled, Ordering::Release);
+        if enabled {
+            let _ = CAPTURE_STATE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| Some((state.wrapping_add(2) & !1) | 1));
+        } else {
+            CAPTURE_STATE.fetch_and(!1, Ordering::AcqRel);
+        }
     }
 }
 
@@ -87,12 +202,13 @@ fn is_left_button_up(message: WPARAM) -> bool {
     message.0 as u32 == WM_LBUTTONUP
 }
 
+#[cfg(test)]
 fn capture_event(enabled: bool, message: WPARAM, point: POINT) -> Option<POINT> {
     (enabled && is_left_button_down(message)).then_some(point)
 }
 
-fn claim_capture(enabled: &AtomicBool, message: WPARAM, in_bounds: bool) -> bool {
-    is_left_button_down(message) && in_bounds && enabled.swap(false, Ordering::AcqRel)
+fn claim_capture(state: &AtomicU64, message: WPARAM, in_bounds: bool) -> bool {
+    is_left_button_down(message) && in_bounds && state.fetch_and(!1, Ordering::AcqRel) & 1 != 0
 }
 
 /// Whether (x, y) within a client area of (width, height) falls inside the
@@ -125,6 +241,11 @@ fn decide_mouse_action(
         return MouseAction::Consume;
     }
 
+    if claim_capture(&CAPTURE_STATE, message, location.is_some()) {
+        CAPTURE_LEFT_BUTTON_DOWN.store(true, Ordering::Release);
+        return MouseAction::ConsumeAndNotify(point);
+    }
+
     if (is_left_button_down(message) || is_left_button_up(message)) && lock_enabled {
         match location {
             Some((x, y, width, height)) if !within_overlay_controls(x, y, width, height) => {
@@ -134,10 +255,6 @@ fn decide_mouse_action(
         }
     }
 
-    if claim_capture(&CAPTURE_ENABLED, message, location.is_some()) {
-        CAPTURE_LEFT_BUTTON_DOWN.store(true, Ordering::Release);
-        return MouseAction::ConsumeAndNotify(point);
-    }
     MouseAction::PassThrough
 }
 
@@ -153,11 +270,41 @@ unsafe extern "system" fn mouse_hook(
         }
         let point = hook_data.pt;
         let lock_enabled = LOCK_ENABLED.load(Ordering::Acquire);
-        let needs_location = (is_left_button_down(message) || is_left_button_up(message))
-            && (CAPTURE_ENABLED.load(Ordering::Acquire) || lock_enabled);
+        let needs_location = is_left_button_down(message) || is_left_button_up(message);
         let location = needs_location
             .then(|| window::screen_to_client_position(point.x, point.y).ok().flatten())
             .flatten();
+        let consumed = SCRIPT_UI_RELAY.with(|relay| {
+            let mut relay = relay.borrow_mut();
+            let Some(relay) = relay.as_mut() else { return false; };
+            let capture_epoch = CaptureState.epoch();
+            if relay.capture_epoch != capture_epoch {
+                relay.capture_epoch = capture_epoch;
+                relay.release = None;
+                if let Some((_, target)) = &mut relay.pointer.pressed { *target = None; }
+            }
+            let generation = *relay.generations.borrow();
+            let route = relay.snapshots.borrow().session_id.filter(|_| generation != 0).map(|id| (id, generation));
+            let (consumed, packet) = relay.pointer.decide(
+                is_left_button_down(message), is_left_button_up(message), location, lock_enabled,
+                CaptureState.is_enabled() || CAPTURE_LEFT_BUTTON_DOWN.load(Ordering::Acquire), route,
+            );
+            if let Some(mut packet) = packet {
+                packet.capture_epoch = capture_epoch;
+                let down = packet.pointer.phase == ScriptUiPointerPhase::Down;
+                if relay.enqueue(packet) {
+                    if down {
+                        let _ = unsafe { PostThreadMessageW(CAPTURE_THREAD_ID.load(Ordering::Acquire), SCRIPT_UI_MESSAGE, WPARAM(0), LPARAM(0)) };
+                    }
+                } else {
+                    let _ = unsafe { PostThreadMessageW(CAPTURE_THREAD_ID.load(Ordering::Acquire), SCRIPT_UI_MESSAGE, WPARAM(1), LPARAM(0)) };
+                    if let Some((_, target)) = &mut relay.pointer.pressed { *target = None; }
+                }
+            }
+            if is_left_button_up(message) { relay.release = None; }
+            consumed
+        });
+        if consumed { return LRESULT(1); }
         let action = decide_mouse_action(message, point, location, lock_enabled);
         if is_left_button_down(message)
             && location.is_some()
@@ -219,7 +366,7 @@ async fn describe_capture(connection: &WsConnection, x: i32, y: i32, width: i32,
     }
 }
 
-fn run_capture_loop(hook: HHOOK, connection: WsConnection, command_tx: tokio::sync::mpsc::Sender<crate::app::ScriptCommand>, runtime: tokio::runtime::Handle) -> Result<(), String> {
+fn run_capture_loop<S: crate::app::ScriptCommandSink>(hook: HHOOK, connection: WsConnection, command_tx: S, runtime: tokio::runtime::Handle) -> Result<(), String> {
     let mut result = Ok(());
     loop {
         let mut message = MSG::default();
@@ -231,7 +378,13 @@ fn run_capture_loop(hook: HHOOK, connection: WsConnection, command_tx: tokio::sy
         if !value.as_bool() {
             break;
         }
-        if message.message == FOCUS_MESSAGE
+        if message.message == SCRIPT_UI_MESSAGE {
+            if message.wParam.0 == 1 {
+                eprintln!("[Script UI] pointer queue full; canceled press");
+            } else if !CaptureState.is_enabled() && let Ok(window) = window::find_game_window() {
+                let _ = unsafe { SetForegroundWindow(window) };
+            }
+        } else if message.message == FOCUS_MESSAGE
             && let Ok(window) = window::find_game_window()
         {
             let foreground = unsafe { GetForegroundWindow() };
@@ -326,13 +479,20 @@ fn defer_worker_cleanup(handle: JoinHandle<Result<(), String>>, thread_id: u32) 
 pub(crate) struct CaptureWorker {
     thread_id: u32,
     handle: Option<JoinHandle<Result<(), String>>>,
+    relay: tokio::task::JoinHandle<()>,
 }
 
 impl CaptureWorker {
-    pub(crate) fn start(connection: WsConnection, command_tx: tokio::sync::mpsc::Sender<crate::app::ScriptCommand>) -> Result<Self, String> {
+    pub(crate) fn start<S: crate::app::ScriptCommandSink>(connection: WsConnection, command_tx: S, snapshots: watch::Receiver<ScriptUiSnapshot>) -> Result<Self, String> {
         let (startup_tx, startup_rx) = std_mpsc::channel();
         let runtime = tokio::runtime::Handle::current();
+        let (pointer_tx, pointer_rx) = tokio::sync::mpsc::channel(256);
+        let relay = runtime.spawn(relay_pointers(connection.clone(), snapshots.clone(), pointer_rx));
         let handle = thread::spawn(move || {
+            SCRIPT_UI_RELAY.with(|relay| *relay.borrow_mut() = Some(HookRelay {
+                snapshots, generations: connection.connection_generation(), pointer: PointerRelay::default(), sender: pointer_tx, release: None,
+                capture_epoch: CaptureState.epoch(),
+            }));
             let thread_id = unsafe { GetCurrentThreadId() };
             let mut message = MSG::default();
             let _ = unsafe { PeekMessageW(&mut message, None, 0, 0, PM_NOREMOVE) };
@@ -356,6 +516,7 @@ impl CaptureWorker {
                 }
             };
             let result = run_capture_loop(hook, connection, command_tx, runtime);
+            SCRIPT_UI_RELAY.with(|relay| *relay.borrow_mut() = None);
             CAPTURE_THREAD_ID.store(0, Ordering::Release);
             result
         });
@@ -364,16 +525,19 @@ impl CaptureWorker {
             .recv()
             .map_err(|error| format!("mouse capture startup handshake failed: {error}"))?;
         if let Err(error) = registration {
+            relay.abort();
             let _ = handle.join();
             return Err(error);
         }
         Ok(Self {
             thread_id,
             handle: Some(handle),
+            relay,
         })
     }
 
     pub(crate) fn shutdown(mut self) -> Result<(), String> {
+        self.relay.abort();
         CaptureState.set_enabled(false);
         CAPTURE_THREAD_ID.store(0, Ordering::Release);
         let post_result = post_quit(self.thread_id);
@@ -397,6 +561,7 @@ impl CaptureWorker {
 
 impl Drop for CaptureWorker {
     fn drop(&mut self) {
+        self.relay.abort();
         CaptureState.set_enabled(false);
         CAPTURE_THREAD_ID.store(0, Ordering::Release);
         if let Some(handle) = self.handle.take() {
@@ -415,6 +580,75 @@ mod tests {
     use super::*;
 
     const IN_GAME: Option<(i32, i32, i32, i32)> = Some((10, 20, 1920, 1080));
+
+    #[test]
+    fn pointer_queue_reserves_a_release_before_accepting_a_press() {
+        for capacity in [1, 2] {
+            let (sender, mut received) = tokio::sync::mpsc::channel(capacity);
+            let (_, generations) = watch::channel(1);
+            let mut relay = HookRelay {
+                snapshots: crate::bridge::ScriptUiPublisher::default().subscribe(), generations,
+                pointer: PointerRelay::default(), sender, release: None, capture_epoch: 0,
+            };
+            let route = Some((Uuid::new_v4(), 1));
+            let down = relay.pointer.decide(true, false, IN_GAME, true, false, route).1.unwrap();
+            let press_id = down.pointer.press_id;
+            assert_eq!(relay.enqueue(down), capacity == 2);
+            if capacity == 1 {
+                assert!(received.try_recv().is_err());
+                assert_eq!(relay.sender.capacity(), 1);
+            } else {
+                assert_eq!(relay.sender.capacity(), 0);
+                let up = relay.pointer.decide(false, true, IN_GAME, false, false, route).1.unwrap();
+                assert!(relay.enqueue(up));
+                for phase in [ScriptUiPointerPhase::Down, ScriptUiPointerPhase::Up] {
+                    let packet = received.try_recv().unwrap().pointer;
+                    assert_eq!(packet.phase, phase);
+                    assert_eq!(packet.press_id, press_id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn locked_custom_pointer_is_consumed_and_relayed() {
+        let mut relay = PointerRelay::default();
+        let route = Some((uuid::Uuid::new_v4(), 1));
+        let (consumed, down) = relay.decide(true, false, IN_GAME, true, false, route);
+        assert!(consumed);
+        let down = down.unwrap();
+        assert_eq!(down.pointer.phase, crate::bridge::ScriptUiPointerPhase::Down);
+        let (consumed, up) = relay.decide(false, true, IN_GAME, true, false, route);
+        assert!(consumed);
+        assert_eq!(up.unwrap().pointer.press_id, down.pointer.press_id);
+        assert!(!relay.decide(true, false, IN_GAME, false, false, route).0);
+        assert!(!relay.decide(true, false, Some((1850, 1060, 1920, 1080)), true, false, route).0);
+    }
+
+    #[test]
+    fn locked_pointer_release_keeps_press_ownership() {
+        let mut relay = PointerRelay::default();
+        let route = Some((uuid::Uuid::new_v4(), 1));
+        relay.decide(true, false, IN_GAME, true, false, route);
+        let (consumed, up) = relay.decide(false, true, None, false, false, route);
+        assert!(consumed);
+        assert_eq!(up.unwrap().pointer.width, 0);
+        relay.decide(true, false, IN_GAME, true, false, None);
+        assert!(relay.decide(false, true, IN_GAME, false, false, None).0);
+        relay.decide(true, false, IN_GAME, true, false, route);
+        let (consumed, up) = relay.decide(false, true, IN_GAME, false, false, Some((route.unwrap().0, 2)));
+        assert!(consumed && up.is_none());
+    }
+
+    #[test]
+    fn capture_takes_priority_over_script_ui() {
+        let mut relay = PointerRelay::default();
+        let route = Some((uuid::Uuid::new_v4(), 1));
+        assert!(!relay.decide(true, false, IN_GAME, true, true, route).0);
+        relay.decide(true, false, IN_GAME, true, false, route);
+        let (consumed, up) = relay.decide(false, true, IN_GAME, true, true, route);
+        assert!(consumed && up.is_none());
+    }
 
     #[test]
     fn captured_click_is_consumed_including_release_after_capture_stops() {
@@ -556,16 +790,16 @@ mod tests {
 
     #[test]
     fn capture_claim_disarms_before_coordinate_lookup() {
-        let enabled = AtomicBool::new(true);
+        let enabled = AtomicU64::new(3);
         assert!(claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), true));
-        assert!(!enabled.load(Ordering::Acquire));
+        assert_eq!(enabled.load(Ordering::Acquire), 2);
         assert!(!claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), true));
     }
 
     #[test]
     fn claim_capture_ignores_clicks_outside_the_game_window_and_stays_armed() {
-        let enabled = AtomicBool::new(true);
+        let enabled = AtomicU64::new(3);
         assert!(!claim_capture(&enabled, WPARAM(WM_LBUTTONDOWN as usize), false));
-        assert!(enabled.load(Ordering::Acquire));
+        assert_eq!(enabled.load(Ordering::Acquire), 3);
     }
 }

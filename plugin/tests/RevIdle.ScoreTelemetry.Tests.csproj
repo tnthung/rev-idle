@@ -17,6 +17,8 @@
     <Compile Include="..\src\Plugin.cs" Link="Plugin.cs" />
     <Compile Include="..\src\ControlBridge.cs" Link="ControlBridge.cs" />
     <Compile Include="..\src\ControlOverlay.cs" Link="ControlOverlay.cs" />
+    <Compile Include="..\src\ScriptUiBridge.cs" Link="ScriptUiBridge.cs" />
+    <Compile Include="..\src\ScriptUiOverlay.cs" Link="ScriptUiOverlay.cs" />
     <Compile Include="..\src\KeyboardInput.cs" Link="KeyboardInput.cs" />
     <Compile Include="..\src\UnityUiClickDispatcher.cs" Link="UnityUiClickDispatcher.cs" />
   </ItemGroup>

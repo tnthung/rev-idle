@@ -9,9 +9,11 @@ use std::{
     sync::{atomic::{AtomicBool, Ordering}, Arc},
     thread,
 };
-use tokio::sync::{mpsc, watch};
+#[cfg(test)]
+use tokio::sync::mpsc;
+use tokio::sync::watch;
 
-use crate::app::ScriptCommand;
+use crate::app::{ScriptCommand, ScriptCommandSink};
 use self::{
     editing::run_console_input,
     history::{history_path, load_history, save_history},
@@ -19,7 +21,7 @@ use self::{
     parsing::parse_command,
 };
 
-fn dispatch_line(line: &str, command_tx: &mpsc::Sender<ScriptCommand>) -> bool {
+fn dispatch_line<S: ScriptCommandSink>(line: &str, command_tx: &S) -> bool {
     if line.trim() == "clear" {
         print!("\x1B[2J\x1B[H");
         let _ = io::stdout().flush();
@@ -29,9 +31,7 @@ fn dispatch_line(line: &str, command_tx: &mpsc::Sender<ScriptCommand>) -> bool {
     match parse_command(line) {
         Ok(command) => {
             let should_exit = command == ScriptCommand::Exit;
-            if command_tx.blocking_send(command).is_err() {
-                return true;
-            }
+            command_tx.blocking_send(command);
             should_exit
         }
         Err(message) => {
@@ -41,8 +41,8 @@ fn dispatch_line(line: &str, command_tx: &mpsc::Sender<ScriptCommand>) -> bool {
     }
 }
 
-pub async fn run(
-    command_tx: mpsc::Sender<ScriptCommand>,
+pub async fn run<S: ScriptCommandSink>(
+    command_tx: S,
     mut shutdown: watch::Receiver<bool>,
     locked: Arc<AtomicBool>,
 ) -> io::Result<()> {
@@ -73,7 +73,6 @@ pub async fn run(
     let _ = tokio::task::spawn_blocking(move || handle.join()).await;
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

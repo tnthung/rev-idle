@@ -20,12 +20,24 @@ impl PauseUpdate {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct ActionGate {
     state: Arc<AtomicU64>,
+    updates: tokio::sync::watch::Sender<PauseUpdate>,
+}
+
+impl Default for ActionGate {
+    fn default() -> Self {
+        let (updates, _) = tokio::sync::watch::channel(PauseUpdate::initial());
+        Self { state: Arc::new(AtomicU64::new(0)), updates }
+    }
 }
 
 impl ActionGate {
+    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<PauseUpdate> {
+        self.updates.subscribe()
+    }
+
     pub(crate) fn is_paused(&self) -> bool {
         self.state.load(Ordering::Acquire) & PAUSED_BIT != 0
     }
@@ -53,7 +65,8 @@ impl ActionGate {
             return self.is_current(update);
         }
         let next = update.state.wrapping_add(1) & !PAUSED_BIT;
-        self.state
+        if self
+            .state
             .compare_exchange(
                 update.state,
                 next,
@@ -61,6 +74,20 @@ impl ActionGate {
                 Ordering::Acquire,
             )
             .is_ok()
+        {
+            let update = PauseUpdate { state: next };
+            self.updates.send_if_modified(|current| {
+                if current.state < update.state {
+                    *current = update;
+                    true
+                } else {
+                    false
+                }
+            });
+            true
+        } else {
+            false
+        }
     }
 
     fn update(&self, requested: impl Fn(bool) -> bool) -> PauseUpdate {
@@ -74,9 +101,37 @@ impl ActionGate {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
-                Ok(_) => return PauseUpdate { state: next },
+                Ok(_) => {
+                    let update = PauseUpdate { state: next };
+                    self.updates.send_if_modified(|current| {
+                        if current.state < update.state {
+                            *current = update;
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    return update;
+                }
                 Err(observed) => current = observed,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn subscribe_receives_only_monotonic_updates() {
+        let gate = ActionGate::default();
+        let mut updates = gate.subscribe();
+        let first = gate.set_paused(true);
+        assert_eq!(*updates.borrow_and_update(), first);
+        let second = gate.set_paused(false);
+        assert!(second.state > first.state);
+        updates.changed().await.unwrap();
+        assert_eq!(*updates.borrow(), second);
     }
 }

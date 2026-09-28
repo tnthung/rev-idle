@@ -1,10 +1,8 @@
-use super::{ClickCommand, DragCommand, PressCommand, ScrollCommand, WsConnection};
+use super::{ClickCommand, DragCommand, PressCommand, ScrollCommand, WsConnection, WsError};
 use crate::window::Axis;
 
-pub(crate) fn click(connection: &WsConnection, x: i32, y: i32, width: i32, height: i32) -> Result<(), String> {
-    connection
-        .try_send(ClickCommand { x, y, width, height })
-        .map_err(|error| error.to_string())
+pub(crate) fn click(connection: &WsConnection, x: i32, y: i32, width: i32, height: i32) -> Result<(), WsError> {
+    connection.try_send(ClickCommand { x, y, width, height })
 }
 
 pub(crate) fn scroll(
@@ -15,7 +13,7 @@ pub(crate) fn scroll(
     axis: Axis,
     width: i32,
     height: i32,
-) -> Result<(), String> {
+) -> Result<(), WsError> {
     connection
         .try_send(ScrollCommand {
             x,
@@ -28,7 +26,6 @@ pub(crate) fn scroll(
             width,
             height,
         })
-        .map_err(|error| error.to_string())
 }
 
 pub(crate) fn drag(
@@ -39,7 +36,7 @@ pub(crate) fn drag(
     end_y: i32,
     width: i32,
     height: i32,
-) -> Result<(), String> {
+) -> Result<(), WsError> {
     connection
         .try_send(DragCommand {
             start_x,
@@ -49,13 +46,10 @@ pub(crate) fn drag(
             width,
             height,
         })
-        .map_err(|error| error.to_string())
 }
 
-pub(crate) fn press(connection: &WsConnection, key: String) -> Result<(), String> {
-    connection
-        .try_send(PressCommand { key })
-        .map_err(|error| error.to_string())
+pub(crate) fn press(connection: &WsConnection, key: String) -> Result<(), WsError> {
+    connection.try_send(PressCommand { key })
 }
 
 #[cfg(test)]
@@ -107,7 +101,7 @@ mod tests {
     fn disconnected_input_command_fails_immediately() {
         assert_eq!(
             click(&WsConnection::disconnected_for_test(), 1, 2, 1280, 720).unwrap_err(),
-            "NotConnected",
+            WsError::NotConnected,
         );
     }
 }

@@ -1,8 +1,10 @@
 use super::{
     bindings::HostControls,
+    control::SessionControl,
     loader::ScriptModules,
+    ui::ScriptUiState,
 };
-use crate::bridge::WsConnection;
+use crate::bridge::{ScriptUiPublisher, WsConnection};
 use rquickjs::{
     convert::Coerced,
     function::Rest,
@@ -13,6 +15,7 @@ use rquickjs::{
     CaughtError,
     Class,
     Error,
+    Exception,
     Function,
     FromJs,
     Object,
@@ -21,7 +24,6 @@ use rquickjs::{
     Value,
 };
 use std::{
-    cell::Cell,
     io::{self, IsTerminal, Write},
     rc::Rc,
 };
@@ -85,19 +87,22 @@ pub(super) struct ScriptSession {
     after_load: Option<Persistent<Function<'static>>>,
     on_connect: Option<Persistent<Function<'static>>>,
     on_disconnect: Option<Persistent<Function<'static>>>,
-    before_stop: Option<Persistent<Function<'static>>>,
     before_pause: Option<Persistent<Function<'static>>>,
     after_resume: Option<Persistent<Function<'static>>>,
     parse: Persistent<Function<'static>>,
     freeze: Persistent<Function<'static>>,
+    ui: Option<Rc<ScriptUiState>>,
     context: AsyncContext,
-    _runtime: AsyncRuntime,
+    runtime: AsyncRuntime,
     connection: WsConnection,
+    session_control: SessionControl,
     pub(super) screen_ownership: Rc<super::ownership::ScreenOwnershipState>,
 }
 
 impl Drop for ScriptSession {
     fn drop(&mut self) {
+        self.session_control.stop();
+        self.ui.take();
         self.screen_ownership.close();
     }
 }
@@ -112,15 +117,39 @@ impl ScriptSession {
     /// also anchors relative `import`s from that script's own directory (see
     /// `ScriptModules`). Production callers pass the script's real
     /// path; tests pass a synthetic name since none of them import anything.
+    #[cfg(test)]
     pub(super) async fn new_with_connection(source: &str, name: &str, connection: WsConnection) -> Result<Self, String> {
+        Self::new_with_connection_and_control(
+            source,
+            name,
+            connection,
+            SessionControl::standalone(),
+            ScriptUiPublisher::default(),
+        )
+        .await
+    }
+
+    pub(super) async fn new_with_connection_and_control(
+        source: &str,
+        name: &str,
+        connection: WsConnection,
+        session_control: SessionControl,
+        ui_publisher: ScriptUiPublisher,
+    ) -> Result<Self, String> {
         let mut modules = ScriptModules::default();
         modules.insert(name, source.to_owned())?;
         let runtime = AsyncRuntime::new().map_err(|error| error.to_string())?;
         runtime.set_loader(modules.clone(), modules.clone()).await;
+        let interrupt_control = session_control.clone();
+        runtime
+            .set_interrupt_handler(Some(Box::new(move || interrupt_control.is_stopped())))
+            .await;
         let context = AsyncContext::full(&runtime).await.map_err(|error| error.to_string())?;
         let name = name.to_owned();
 
-        let (script, after_load, on_connect, on_disconnect, before_stop, before_pause, after_resume, parse, freeze) = context
+        let context_session_control = session_control.clone();
+        let context_ui_publisher = ui_publisher.clone();
+        let (script, after_load, on_connect, on_disconnect, before_pause, after_resume, parse, freeze, ui) = context
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<_> = async {
                     modules.install_stack_trace(&ctx)?;
@@ -158,6 +187,22 @@ impl ScriptSession {
                         ownership_prototype.get::<_, Function>("release")?,
                     )?;
 
+                    let ui = Rc::new(ScriptUiState::new(
+                        &ctx,
+                        context_ui_publisher,
+                        {
+                            let session_control = context_session_control.clone();
+                            move || session_control.is_stopped()
+                        },
+                    )?);
+
+                    if context_session_control.is_stopped() {
+                        return Err(Exception::throw_message(
+                            &ctx,
+                            SessionControl::error_message(),
+                        ));
+                    }
+
                     let (module, promise) = modules.load(&ctx, &name, None)?.eval()?;
                     promise.into_future::<()>().await?;
                     let namespace = module.namespace()?;
@@ -173,7 +218,6 @@ impl ScriptSession {
                     let after_load: Option<Function> = namespace.get("afterLoad").ok();
                     let on_connect: Option<Function> = namespace.get("onConnect").ok();
                     let on_disconnect: Option<Function> = namespace.get("onDisconnect").ok();
-                    let before_stop: Option<Function> = namespace.get("beforeStop").ok();
                     let before_pause: Option<Function> = namespace.get("beforePause").ok();
                     let after_resume: Option<Function> = namespace.get("afterResume").ok();
 
@@ -182,11 +226,11 @@ impl ScriptSession {
                         after_load.map(|hook| Persistent::save(&ctx, hook)),
                         on_connect.map(|hook| Persistent::save(&ctx, hook)),
                         on_disconnect.map(|hook| Persistent::save(&ctx, hook)),
-                        before_stop.map(|hook| Persistent::save(&ctx, hook)),
                         before_pause.map(|hook| Persistent::save(&ctx, hook)),
                         after_resume.map(|hook| Persistent::save(&ctx, hook)),
                         Persistent::save(&ctx, parse),
                         Persistent::save(&ctx, freeze),
+                        ui,
                     ))
                 }
                 .await;
@@ -200,14 +244,15 @@ impl ScriptSession {
             after_load,
             on_connect,
             on_disconnect,
-            before_stop,
             before_pause,
             after_resume,
             parse,
             freeze,
             context,
-            _runtime: runtime,
+            runtime,
             connection,
+            session_control,
+            ui: Some(ui),
             screen_ownership: Rc::default(),
         })
     }
@@ -224,6 +269,9 @@ impl ScriptSession {
         let connection = self.connection.clone();
         let parse = self.parse.clone();
         let freeze = self.freeze.clone();
+        let session_control = self.session_control.clone();
+        let ui = self.ui.as_ref().expect("script UI state must exist").clone();
+        let screen_ownership = self.screen_ownership.clone();
 
         self.context
             .async_with(async move |ctx| {
@@ -236,8 +284,9 @@ impl ScriptSession {
                         controls,
                         parse,
                         freeze,
-                        Rc::new(Cell::new(false)),
-                        self.screen_ownership.clone(),
+                        session_control,
+                        screen_ownership,
+                        ui,
                     )?;
                     ctx.globals().set("rev", rev)?;
                     let hook: Function = hook.restore(&ctx)?;
@@ -264,9 +313,71 @@ impl ScriptSession {
         self.run_hook(&self.on_disconnect, controls).await
     }
 
-    pub(super) async fn run_before_stop(&self, controls: HostControls) -> Result<(), String> {
+    pub(super) fn terminate(&self) {
+        self.session_control.stop();
         self.screen_ownership.close();
-        self.run_hook(&self.before_stop, controls).await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn dispatch_ui_event(
+        &self,
+        event: crate::bridge::ScriptUiEvent,
+        controls: HostControls,
+    ) -> Result<(), String> {
+        self.dispatch_ui_event_if_current(event, controls, || true).await
+    }
+
+    pub(super) async fn dispatch_ui_event_if_current(
+        &self,
+        event: crate::bridge::ScriptUiEvent,
+        controls: HostControls,
+        current: impl Fn() -> bool + 'static,
+    ) -> Result<(), String> {
+        if self.session_control.is_stopped() {
+            return Err(SessionControl::error_message().to_owned());
+        }
+        let connection = self.connection.clone();
+        let parse = self.parse.clone();
+        let freeze = self.freeze.clone();
+        let session_control = self.session_control.clone();
+        let ui = self.ui.as_ref().expect("script UI state must exist").clone();
+        let screen_ownership = self.screen_ownership.clone();
+        let element_id = event.element_id.clone();
+        let event_kind = event.event;
+
+        self.context
+            .async_with(async move |ctx| {
+                let result: rquickjs::Result<()> = async {
+                    let parse: Function = parse.restore(&ctx)?;
+                    let freeze: Function = freeze.restore(&ctx)?;
+                    let rev = super::bindings::create_rev(
+                        ctx.clone(),
+                        connection,
+                        controls,
+                        parse,
+                        freeze,
+                        session_control,
+                        screen_ownership,
+                        ui.clone(),
+                    )?;
+                    ctx.globals().set("rev", rev)?;
+                    if !current() {
+                        return Ok(());
+                    }
+                    let result = ui.dispatch(&ctx, &event)?;
+                    let _: Value = result.into_future().await?;
+                    Ok(())
+                }
+                .await;
+
+                result.map_err(|error| {
+                    format!(
+                        "{event_kind:?} handler for UI element {element_id:?}: {}",
+                        CaughtError::from_error(&ctx, error),
+                    )
+                })
+            })
+            .await
     }
 
     pub(super) async fn run_before_pause(&self, controls: HostControls) -> Result<(), String> {
@@ -281,17 +392,34 @@ impl ScriptSession {
         self.on_connect.is_some() || self.on_disconnect.is_some()
     }
 
+    pub(super) fn is_stopped(&self) -> bool {
+        self.session_control.is_stopped()
+    }
+
+    #[cfg(test)]
     pub(super) async fn invoke<S, C: Into<HostControls>>(
+        &self,
+        state: S,
+        controls: C,
+    ) -> Result<bool, String> {
+        self.invoke_classified(state, controls)
+            .await
+            .map_err(|error| error.message)
+    }
+
+    pub(super) async fn invoke_classified<S, C: Into<HostControls>>(
         &self,
         _state: S,
         controls: C,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, ScriptInvocationError> {
         let controls = controls.into();
         let script = self.script.clone();
         let parse = self.parse.clone();
         let freeze = self.freeze.clone();
-        let stop_requested = Rc::new(Cell::new(false));
-        let stop_request = stop_requested.clone();
+        let session_control = self.session_control.clone();
+        let ui = self.ui.as_ref().expect("script UI state must exist").clone();
+        let screen_ownership = self.screen_ownership.clone();
+        let connection = self.connection.clone();
 
         let result = self.context
             .async_with(async move |ctx| {
@@ -302,12 +430,13 @@ impl ScriptSession {
 
                     let rev = super::bindings::create_rev(
                         ctx.clone(),
-                        self.connection.clone(),
+                        connection,
                         controls.clone(),
                         parse.clone(),
                         freeze.clone(),
-                        stop_request,
-                        self.screen_ownership.clone(),
+                        session_control,
+                        screen_ownership,
+                        ui,
                     )?;
                     ctx.globals().set("rev", rev)?;
                     let result: MaybePromise = script.call(())?;
@@ -316,10 +445,38 @@ impl ScriptSession {
                 }
                 .await;
 
-                result.map_err(|error| CaughtError::from_error(&ctx, error).to_string())
+                result.map_err(|error| {
+                    let error = CaughtError::from_error(&ctx, error);
+                    let disconnected = match &error {
+                        CaughtError::Exception(exception) => exception
+                            .as_object()
+                            .get::<_, bool>("__revIdleDisconnectedTransport")
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    ScriptInvocationError {
+                        message: error.to_string(),
+                        disconnected,
+                    }
+                })
             })
             .await;
 
-        result.map(|()| stop_requested.get())
+        result.map(|()| false)
+    }
+
+    pub(super) fn drive(&self) -> impl std::future::Future<Output = ()> + use<> {
+        self.runtime.drive()
+    }
+}
+
+pub(super) struct ScriptInvocationError {
+    pub(super) message: String,
+    pub(super) disconnected: bool,
+}
+
+impl std::fmt::Display for ScriptInvocationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
     }
 }

@@ -1,20 +1,24 @@
 use super::{
     bindings::{BridgeMouseInput, HostControls, SharedMouse},
     history,
-    session::ScriptSession,
+    session::{ScriptInvocationError, ScriptSession},
 };
 #[cfg(test)]
 use super::State;
 use crate::{
     app::{ActionGate, PauseUpdate, ScriptCommand, StateUpdate},
-    bridge::{ConnectionEvent, WsConnection},
+    bridge::{ConnectionEvent, QueuedScriptUiEvent, ScriptUiPublisher, WsConnection},
     capture::{CaptureState, LockState},
+    script::ScriptControl,
     window::Win32WindowControl,
 };
-use futures_util::FutureExt;
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use std::{
     cell::RefCell,
+    collections::VecDeque,
+    future::Future,
     path::Path,
+    pin::Pin,
     rc::Rc,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -24,22 +28,61 @@ use std::{
 };
 use tokio::sync::{mpsc, watch};
 
-async fn load_path(path: &Path, connection: WsConnection) -> Result<(ScriptSession, std::path::PathBuf), String> {
+async fn load_path(
+    path: &Path,
+    connection: WsConnection,
+    script_control: &ScriptControl,
+    ui_publisher: &ScriptUiPublisher,
+) -> Result<(Rc<ScriptSession>, std::path::PathBuf), String> {
     let absolute_path = std::path::absolute(path)
         .map_err(|error| format!("failed to resolve {}: {error}", path.display()))?;
-    let source = tokio::fs::read_to_string(&absolute_path)
-        .await
-        .map_err(|error| format!("failed to read {}: {error}", absolute_path.display()))?;
+    let session_control = script_control.register_session();
+    let mut stopped = session_control.subscribe_stopped();
+    if *stopped.borrow_and_update() {
+        return Err(crate::script::SessionControl::error_message().to_owned());
+    }
+    let source = tokio::select! {
+        source = tokio::fs::read_to_string(&absolute_path) => source
+            .map_err(|error| format!("failed to read {}: {error}", absolute_path.display()))?,
+        _ = stopped.wait_for(|stopped| *stopped) => {
+            return Err(crate::script::SessionControl::error_message().to_owned());
+        }
+    };
+    if session_control.is_stopped() {
+        return Err(crate::script::SessionControl::error_message().to_owned());
+    }
 
-    ScriptSession::new_with_connection(&source, &absolute_path.to_string_lossy(), connection)
+    ScriptSession::new_with_connection_and_control(
+        &source,
+        &absolute_path.to_string_lossy(),
+        connection,
+        session_control,
+        ui_publisher.clone(),
+    )
         .await
-        .map(|session| (session, absolute_path.clone()))
+        .map(|session| (Rc::new(session), absolute_path.clone()))
         .map_err(|error| format!("failed to load {}: {error}", absolute_path.display()))
 }
 
+fn terminal_generation(control: &ScriptControl) -> u64 {
+    if control.terminal_pending() {
+        control.requested_generation()
+    } else {
+        control.request_internal_terminal()
+    }
+}
+
+fn unpack_command(command: ScriptCommand) -> (ScriptCommand, Option<u64>) {
+    match command {
+        ScriptCommand::Terminal { command, generation } => (*command, Some(generation)),
+        command => (command, None),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn run(
+pub(crate) async fn run_with_control(
     commands: mpsc::Receiver<ScriptCommand>,
+    ui_events: mpsc::Receiver<QueuedScriptUiEvent>,
     connection: WsConnection,
     hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
@@ -50,13 +93,16 @@ pub(crate) async fn run(
     capture_state: CaptureState,
     lock_state: LockState,
     state_updates: watch::Sender<StateUpdate>,
+    script_control: ScriptControl,
+    ui_publisher: ScriptUiPublisher,
 ) -> Result<(), String> {
     let mouse: SharedMouse = Rc::new(RefCell::new(BridgeMouseInput {
         connection: connection.clone(),
     }));
 
-    run_with_controls_and_lifecycle(
+    run_with_controls_and_lifecycle_with_control(
         commands,
+        ui_events,
         connection,
         hotkey_pauses,
         initial_path,
@@ -69,6 +115,8 @@ pub(crate) async fn run(
         lock_state,
         Some(history::history_path()),
         state_updates,
+        script_control,
+        ui_publisher,
     )
     .await
 }
@@ -174,8 +222,48 @@ pub(super) async fn run_with_controls_and_connection(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) async fn run_with_controls_and_lifecycle(
+    commands: mpsc::Receiver<ScriptCommand>,
+    connection: WsConnection,
+    hotkey_pauses: watch::Receiver<PauseUpdate>,
+    initial_path: Option<std::path::PathBuf>,
+    controls: HostControls,
+    loop_delay: Duration,
+    shutdown: watch::Receiver<bool>,
+    script_running: Arc<AtomicBool>,
+    console_locked: Arc<AtomicBool>,
+    capture_state: CaptureState,
+    lock_state: LockState,
+    script_history_path: Option<std::path::PathBuf>,
+    state_updates: watch::Sender<StateUpdate>,
+) -> Result<(), String> {
+    let (_ui_events_tx, ui_events) = mpsc::channel(1);
+    run_with_controls_and_lifecycle_with_control(
+        commands,
+        ui_events,
+        connection,
+        hotkey_pauses,
+        initial_path,
+        controls,
+        loop_delay,
+        shutdown,
+        script_running,
+        console_locked,
+        capture_state,
+        lock_state,
+        script_history_path,
+        state_updates,
+        ScriptControl::default(),
+        ScriptUiPublisher::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_with_controls_and_lifecycle_with_control(
     mut commands: mpsc::Receiver<ScriptCommand>,
+    mut ui_events: mpsc::Receiver<QueuedScriptUiEvent>,
     connection: WsConnection,
     mut hotkey_pauses: watch::Receiver<PauseUpdate>,
     initial_path: Option<std::path::PathBuf>,
@@ -188,6 +276,8 @@ pub(super) async fn run_with_controls_and_lifecycle(
     lock_state: LockState,
     script_history_path: Option<std::path::PathBuf>,
     state_updates: watch::Sender<StateUpdate>,
+    script_control: ScriptControl,
+    ui_publisher: ScriptUiPublisher,
 ) -> Result<(), String> {
     let mut current_path = initial_path;
     let (mut script_history, script_history_writable) = match script_history_path.as_deref() {
@@ -204,7 +294,9 @@ pub(super) async fn run_with_controls_and_lifecycle(
     let mut connected = false;
     let mut connection_events = None;
     let mut session = match current_path.clone() {
-        Some(path) => match load_path(&path, connection.clone()).await {
+        Some(path) => {
+            script_running.store(true, Ordering::Release);
+            match load_path(&path, connection.clone(), &script_control, &ui_publisher).await {
             Ok((session, absolute_path)) => {
                 session.screen_ownership.attach(lock_state, state_updates.clone());
                 connection_events = Some(connection.connection_events());
@@ -234,7 +326,8 @@ pub(super) async fn run_with_controls_and_lifecycle(
                 }
                 None
             }
-        },
+            }
+        }
         None => None,
     };
     script_running.store(session.is_some(), Ordering::Release);
@@ -250,27 +343,46 @@ pub(super) async fn run_with_controls_and_lifecycle(
         active.screen_ownership.set_paused(paused);
     }
     let mut hotkey_channel_open = true;
+    let mut terminal_updates = script_control.subscribe_terminal();
+    terminal_updates.borrow_and_update();
     // A non-stop command pulled off `commands` while an invocation was in
     // flight (see below) can't be pushed back onto the mpsc channel, so it
     // waits here and takes priority over the channel on the next iteration.
-    let mut pending_command: Option<ScriptCommand> = None;
+    let mut pending_command: Option<(ScriptCommand, Option<u64>)> = None;
     let mut script_history_strings = script_history
         .iter()
         .map(|path| path.to_string_lossy().into_owned())
         .collect::<Vec<_>>();
     let mut script_history_changed = !script_history_strings.is_empty();
     let mut script_history_checked_at = Instant::now();
+    let mut invocation: Option<Pin<Box<dyn Future<Output = Result<bool, ScriptInvocationError>>>>> = None;
+    let mut next_invocation_at = None;
+    let mut ui_events_open = true;
+    let mut pending_ui_events: VecDeque<QueuedScriptUiEvent> = VecDeque::new();
+    let mut callbacks: FuturesUnordered<Pin<Box<dyn Future<Output = Result<(), String>>>>> = FuturesUnordered::new();
 
     loop {
         if *shutdown.borrow() {
+            let generation = terminal_generation(&script_control);
+            drop(invocation.take());
+            callbacks.clear();
+            pending_ui_events.clear();
             drop(connection_events.take());
-            if let Some(active) = session.as_ref()
-                && let Err(error) = active.run_before_stop(controls.clone()).await
-            {
-                eprintln!("beforeStop hook failed: {error}");
+            if let Some(active) = session.as_ref() {
+                active.terminate();
             }
+            drop(session.take());
+            script_control.acknowledge_terminal(generation);
             script_running.store(false, Ordering::Release);
+            capture_state.set_enabled(false);
+            lock_state.set_enabled(false);
+            controls.actions_paused.set_paused(false);
+            console_locked.store(false, Ordering::Release);
             return Ok(());
+        }
+
+        if session.is_none() {
+            script_control.acknowledge_unpaired_terminal();
         }
 
         if script_history_checked_at.elapsed() >= Duration::from_secs(1) {
@@ -315,23 +427,65 @@ pub(super) async fn run_with_controls_and_lifecycle(
         // drift out of sync with them.
         console_locked.store(session.is_some() && !paused, Ordering::Release);
 
+        while let Some(event) = pending_ui_events.pop_front() {
+            let Some(active) = session.as_ref().cloned() else { break };
+            let generations = connection.connection_generation();
+            let capture_state = capture_state;
+            let capture_epoch = event.capture_epoch;
+            let generation = event.generation;
+            let controls = controls.clone();
+            callbacks.push(Box::pin(async move {
+                active
+                    .dispatch_ui_event_if_current(
+                        event.event,
+                        controls,
+                        move || {
+                            capture_state.inactive_epoch() == Some(capture_epoch)
+                                && *generations.borrow() == generation
+                        },
+                    )
+                    .await
+            }));
+        }
+
+        if invocation.is_none()
+            && next_invocation_at.is_none_or(|deadline| deadline <= tokio::time::Instant::now())
+            && session
+                .as_ref()
+                .is_some_and(|active| !active.is_stopped() && !paused && (connected || !active.has_connection_hooks()))
+        {
+            let active = session.as_ref().expect("eligible script session must exist").clone();
+            let controls = controls.clone();
+            invocation = Some(Box::pin(async move { active.invoke_classified((), controls).await }));
+            next_invocation_at = None;
+        }
+
+        let mut completed_invocation = None;
         let command = if let Some(command) = pending_command.take() {
             Some(command)
         } else if session
             .as_ref()
-            .is_some_and(|active| !paused && (connected || !active.has_connection_hooks()))
+            .is_some_and(|active| !active.is_stopped() && !paused && (connected || !active.has_connection_hooks()))
         {
             match commands.try_recv() {
-                Ok(command) => Some(command),
+                Ok(command) => Some(unpack_command(command)),
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    let generation = terminal_generation(&script_control);
+                    drop(invocation.take());
+                    callbacks.clear();
+                    pending_ui_events.clear();
                     drop(connection_events.take());
-                    if let Some(active) = session.as_ref()
-                        && let Err(error) = active.run_before_stop(controls.clone()).await
-                    {
-                        eprintln!("beforeStop hook failed: {error}");
+                    if let Some(active) = session.as_ref() {
+                        active.terminate();
                     }
+                    drop(session.take());
+                    script_control.acknowledge_terminal(generation);
                     script_running.store(false, Ordering::Release);
+                    capture_state.set_enabled(false);
+                    lock_state.set_enabled(false);
+                    controls.actions_paused.set_paused(false);
+                    console_locked.store(false, Ordering::Release);
                     return Ok(());
                 }
             }
@@ -340,30 +494,77 @@ pub(super) async fn run_with_controls_and_lifecycle(
                 biased;
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
+                        let generation = terminal_generation(&script_control);
+                        drop(invocation.take());
+                        callbacks.clear();
+                        pending_ui_events.clear();
                         drop(connection_events.take());
-                        if let Some(active) = session.as_ref()
-                            && let Err(error) = active.run_before_stop(controls.clone()).await
-                        {
-                            eprintln!("beforeStop hook failed: {error}");
+                        if let Some(active) = session.as_ref() {
+                            active.terminate();
                         }
+                        drop(session.take());
+                        script_control.acknowledge_terminal(generation);
                         script_running.store(false, Ordering::Release);
+                        capture_state.set_enabled(false);
+                        lock_state.set_enabled(false);
+                        controls.actions_paused.set_paused(false);
+                        console_locked.store(false, Ordering::Release);
                         return Ok(());
                     }
                     continue;
                 }
+                changed = terminal_updates.changed() => {
+                    let _ = changed;
+                    None
+                }
                 command = commands.recv() => match command {
-                    Some(command) => Some(command),
+                    Some(command) => {
+                        Some(unpack_command(command))
+                    },
                     None => {
+                        let generation = terminal_generation(&script_control);
+                        drop(invocation.take());
+                        callbacks.clear();
+                        pending_ui_events.clear();
                         drop(connection_events.take());
-                        if let Some(active) = session.as_ref()
-                            && let Err(error) = active.run_before_stop(controls.clone()).await
-                        {
-                            eprintln!("beforeStop hook failed: {error}");
+                        if let Some(active) = session.as_ref() {
+                            active.terminate();
                         }
+                        drop(session.take());
+                        script_control.acknowledge_terminal(generation);
                         script_running.store(false, Ordering::Release);
+                        capture_state.set_enabled(false);
+                        lock_state.set_enabled(false);
+                        controls.actions_paused.set_paused(false);
+                        console_locked.store(false, Ordering::Release);
                         return Ok(());
                     }
                 },
+                event = ui_events.recv(), if ui_events_open => {
+                    match event {
+                        Some(event) => pending_ui_events.push_back(event),
+                        None => ui_events_open = false,
+                    }
+                    None
+                }
+                callback = callbacks.next(), if !callbacks.is_empty() => {
+                    if let Some(Err(error)) = callback
+                        && !session.as_ref().is_some_and(|active| active.is_stopped())
+                    {
+                        eprintln!("[Script UI] callback failed: {error}");
+                    }
+                    None
+                }
+                result = async {
+                    match invocation.as_mut() {
+                        Some(future) => Some(future.await),
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    invocation = None;
+                    completed_invocation = result;
+                    None
+                }
                 changed = hotkey_pauses.changed(), if hotkey_channel_open => {
                     match changed {
                         Ok(()) => {
@@ -373,7 +574,7 @@ pub(super) async fn run_with_controls_and_lifecycle(
                                 &controls.actions_paused,
                                 &controls,
                                 &lock_state,
-                                session.as_ref(),
+                                session.as_ref().map(|value| &**value),
                                 &mut paused,
                             )
                             .await;
@@ -413,10 +614,73 @@ pub(super) async fn run_with_controls_and_lifecycle(
                     }
                     continue;
                 }
+                _ = async {
+                    match next_invocation_at {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                }, if invocation.is_none() && next_invocation_at.is_some() => {
+                    next_invocation_at = None;
+                    None
+                }
+                _ = async {
+                    match session.as_ref() {
+                        Some(active) => active.drive().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    tokio::task::yield_now().await;
+                    None
+                }
             }
         };
 
-        if let Some(command) = command {
+        if let Some(result) = completed_invocation {
+            let terminal = match result {
+                Ok(stop_requested) => stop_requested,
+                Err(error) => {
+                    if *connection.connection_generation().borrow() == 0 {
+                        connected = false;
+                    }
+                    if error.disconnected
+                        && session.as_ref().is_some_and(|active| active.has_connection_hooks())
+                    {
+                        false
+                    } else {
+                        eprintln!("script invocation failed: {error}");
+                        true
+                    }
+                }
+            };
+            if terminal {
+                next_invocation_at = None;
+                callbacks.clear();
+                pending_ui_events.clear();
+                connection_events = None;
+                if let Some(active) = session.as_ref() {
+                    active.terminate();
+                }
+                lock_state.set_enabled(false);
+                controls.actions_paused.set_paused(false);
+                session = None;
+                script_running.store(false, Ordering::Release);
+                console_locked.store(false, Ordering::Release);
+                paused = false;
+                println!("script stopped");
+                script_control.acknowledge_unpaired_terminal();
+            } else {
+                next_invocation_at = Some(tokio::time::Instant::now() + loop_delay);
+            }
+            continue;
+        }
+
+        if let Some((command, command_generation)) = command {
+            if command_generation.is_some_and(|generation| {
+                generation <= script_control.acknowledged_generation()
+                    || generation < script_control.requested_generation()
+            }) {
+                continue;
+            }
             match command {
                 ScriptCommand::RemoveFromHistory(path) => {
                     let history_len = script_history.len();
@@ -435,26 +699,31 @@ pub(super) async fn run_with_controls_and_lifecycle(
                     }
                 }
                 load @ (ScriptCommand::Load(_) | ScriptCommand::LoadLocked(_)) => {
+                    let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
+                    invocation = None;
+                    next_invocation_at = None;
+                    callbacks.clear();
+                    pending_ui_events.clear();
                     let (path, lock_after_load) = match load {
                         ScriptCommand::Load(path) => (path, false),
                         ScriptCommand::LoadLocked(path) => (path, true),
                         _ => unreachable!(),
                     };
                     drop(connection_events.take());
-                    if let Some(active) = session.as_ref()
-                        && let Err(error) = active.run_before_stop(controls.clone()).await
-                    {
-                        eprintln!("beforeStop hook failed: {error}");
+                    if let Some(active) = session.as_ref() {
+                        active.terminate();
                     }
                     capture_state.set_enabled(false);
                     lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
                     session = None;
+                    script_control.acknowledge_terminal(generation);
                     script_running.store(false, Ordering::Release);
                     paused = false;
                     current_path = Some(path);
+                    script_running.store(true, Ordering::Release);
                     if let Some(path) = current_path.clone() {
-                        match load_path(&path, connection.clone()).await {
+                        match load_path(&path, connection.clone(), &script_control, &ui_publisher).await {
                             Ok((loaded, absolute_path)) => {
                                 loaded.screen_ownership.attach(lock_state, state_updates.clone());
                                 connection_events = Some(connection.connection_events());
@@ -482,6 +751,7 @@ pub(super) async fn run_with_controls_and_lifecycle(
                                 println!("running {}", absolute_path.display());
                             }
                             Err(error) => {
+                                script_running.store(false, Ordering::Release);
                                 eprintln!("{error}");
                                 let history_len = script_history.len();
                                 script_history.retain(|entry| {
@@ -504,21 +774,25 @@ pub(super) async fn run_with_controls_and_lifecycle(
                     }
                 }
                 ScriptCommand::Reload | ScriptCommand::ReloadLocked => {
+                    let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
+                    invocation = None;
+                    callbacks.clear();
+                    pending_ui_events.clear();
                     let lock_after_load = matches!(command, ScriptCommand::ReloadLocked);
                     connection_events = None;
-                    if let Some(active) = session.as_ref()
-                        && let Err(error) = active.run_before_stop(controls.clone()).await
-                    {
-                        eprintln!("beforeStop hook failed: {error}");
+                    if let Some(active) = session.as_ref() {
+                        active.terminate();
                     }
                     capture_state.set_enabled(false);
                     lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
                     session = None;
+                    script_control.acknowledge_terminal(generation);
                     script_running.store(false, Ordering::Release);
                     paused = false;
+                    script_running.store(true, Ordering::Release);
                     if let Some(path) = current_path.clone() {
-                        match load_path(&path, connection.clone()).await {
+                        match load_path(&path, connection.clone(), &script_control, &ui_publisher).await {
                             Ok((loaded, absolute_path)) => {
                                 loaded.screen_ownership.attach(lock_state, state_updates.clone());
                                 connection_events = Some(connection.connection_events());
@@ -546,6 +820,7 @@ pub(super) async fn run_with_controls_and_lifecycle(
                                 println!("reloaded {}", absolute_path.display());
                             }
                             Err(error) => {
+                                script_running.store(false, Ordering::Release);
                                 eprintln!("{error}");
                                 let history_len = script_history.len();
                                 script_history.retain(|entry| {
@@ -625,18 +900,23 @@ pub(super) async fn run_with_controls_and_lifecycle(
                     }
                 }
                 ScriptCommand::Stop => {
+                    let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
+                    invocation = None;
+                    callbacks.clear();
+                    pending_ui_events.clear();
                     connection_events = None;
                     lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
                     if let Some(active) = session.as_ref() {
-                        if let Err(error) = active.run_before_stop(controls.clone()).await {
-                            eprintln!("beforeStop hook failed: {error}");
-                        }
+                        active.terminate();
                         session = None;
+                        script_control.acknowledge_terminal(generation);
                         script_running.store(false, Ordering::Release);
+                        console_locked.store(false, Ordering::Release);
                         paused = false;
                         println!("script stopped");
                     } else {
+                        script_control.acknowledge_terminal(generation);
                         println!("script is already stopped");
                     }
                 }
@@ -673,16 +953,21 @@ pub(super) async fn run_with_controls_and_lifecycle(
                     }
                 }
                 ScriptCommand::Exit => {
+                    let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
+                    drop(invocation.take());
+                    callbacks.clear();
+                    pending_ui_events.clear();
                     drop(connection_events.take());
-                    if let Some(active) = session.as_ref()
-                        && let Err(error) = active.run_before_stop(controls.clone()).await
-                    {
-                        eprintln!("beforeStop hook failed: {error}");
+                    if let Some(active) = session.as_ref() {
+                        active.terminate();
                     }
                     capture_state.set_enabled(false);
                     lock_state.set_enabled(false);
                     controls.actions_paused.set_paused(false);
+                    drop(session.take());
+                    script_control.acknowledge_terminal(generation);
                     script_running.store(false, Ordering::Release);
+                    console_locked.store(false, Ordering::Release);
                     return Ok(());
                 }
                 ScriptCommand::SetPaused(requested_paused) => {
@@ -693,13 +978,14 @@ pub(super) async fn run_with_controls_and_lifecycle(
                             &controls.actions_paused,
                             &controls,
                             &lock_state,
-                            session.as_ref(),
+                            session.as_ref().map(|value| &**value),
                             &mut paused,
                         )
                         .await;
                         disable_capture_if_running(&capture_state, session.is_some(), paused);
                     }
                 }
+                ScriptCommand::Terminal { .. } => unreachable!("terminal command must be unpacked before dispatch"),
             }
 
             continue;
@@ -714,7 +1000,7 @@ pub(super) async fn run_with_controls_and_lifecycle(
                         &controls.actions_paused,
                         &controls,
                         &lock_state,
-                        session.as_ref(),
+                        session.as_ref().map(|value| &**value),
                         &mut paused,
                     )
                     .await;
@@ -754,164 +1040,229 @@ pub(super) async fn run_with_controls_and_lifecycle(
             }
         }
 
-        let stop_requested = {
-            let Some(active) = session.as_ref() else {
-                continue;
-            };
-            let invocation = active.invoke((), controls.clone());
-            tokio::pin!(invocation);
-            tokio::select! {
-                biased;
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        drop(connection_events.take());
-                        if let Err(error) = active.run_before_stop(controls.clone()).await {
-                            eprintln!("beforeStop hook failed: {error}");
-                        }
-                        script_running.store(false, Ordering::Release);
-                        return Ok(());
-                    }
-                    false
-                }
-                // Dropping `invocation` here (by not polling it again) cancels
-                // whatever the script is awaiting, including rev.sleep, so
-                // Stop/Exit take effect immediately instead of waiting for the
-                // current invocation (and its sleep) to finish on its own.
-                command = commands.recv() => match command {
-                    Some(ScriptCommand::Stop) => {
-                        drop(connection_events.take());
-                        true
-                    }
-                    Some(ScriptCommand::Exit) => {
-                        drop(connection_events.take());
-                        if let Err(error) = active.run_before_stop(controls.clone()).await {
-                            eprintln!("beforeStop hook failed: {error}");
-                        }
-                        capture_state.set_enabled(false);
-                        controls.actions_paused.set_paused(false);
-                        script_running.store(false, Ordering::Release);
-                        return Ok(());
-                    }
-                    Some(other) => {
-                        pending_command = Some(other);
-                        false
-                    }
-                    None => {
-                        drop(connection_events.take());
-                        if let Err(error) = active.run_before_stop(controls.clone()).await {
-                            eprintln!("beforeStop hook failed: {error}");
-                        }
-                        script_running.store(false, Ordering::Release);
-                        return Ok(());
-                    }
-                },
-                // F8 flips the shared ActionGate immediately, from a separate
-                // thread, before this update is even published here — so by
-                // the time we observe it, the pause has already taken effect.
-                // Cancel the in-flight invocation right away (same trick as
-                // Stop/Exit below) instead of letting it run until its next
-                // rev.* call or its own completion. `changed()` marks the
-                // update as seen, so (unlike the plain command case) this
-                // arm must finish processing it itself rather than leaving
-                // it for the top of the loop to pick up.
-                changed = hotkey_pauses.changed(), if hotkey_channel_open => {
-                    if changed.is_err() {
-                        hotkey_channel_open = false;
-                    } else {
-                        let update = *hotkey_pauses.borrow_and_update();
-                        apply_hotkey_update_and_report(
-                            update,
-                            &controls.actions_paused,
-                            &controls,
-                            &lock_state,
-                            Some(active),
-                            &mut paused,
-                        )
-                        .await;
-                        disable_capture_if_running(&capture_state, true, paused);
-                    }
-                    false
-                }
-                event = async {
-                    match connection_events.as_mut() {
-                        Some(events) => events.recv().await,
-                        None => std::future::pending().await,
-                    }
-                } => {
-                    let invocation_result = invocation
-                        .as_mut()
-                        .now_or_never()
-                        .map(|result| (result, controls.actions_paused.is_paused()));
-                    let connection_lost = !matches!(event, Some(ConnectionEvent::Connected));
-                    match event {
-                        Some(ConnectionEvent::Connected) => {
-                            connected = true;
-                            if let Err(error) = active.run_on_connect(controls.clone()).await {
-                                eprintln!("onConnect hook failed: {error}");
-                            }
-                        }
-                        Some(ConnectionEvent::Disconnected) => {
-                            connected = false;
-                            if let Err(error) = active.run_on_disconnect(controls.clone()).await {
-                                eprintln!("onDisconnect hook failed: {error}");
-                            }
-                        }
-                        None => {
-                            connected = false;
-                            connection_events = None;
-                        }
-                    }
-                    match invocation_result {
-                        Some((Ok(stop_requested), _)) => stop_requested,
-                        _ if connection_lost && active.has_connection_hooks() => false,
-                        Some((Err(_), true)) => false,
-                        Some((Err(error), false)) => {
-                            eprintln!("script invocation failed: {error}");
-                            true
-                        }
-                        None => false,
-                    }
-                }
-                result = &mut invocation => {
-                    match result {
-                        Ok(stop_requested) => stop_requested,
-                        Err(_) if controls.actions_paused.is_paused() => {
-                            // A host action (rev.click/scroll/drag/...) can still
-                            // observe the gate flipping to paused in the narrow
-                            // window between the hotkey thread setting it and this
-                            // select noticing (see the hotkey_pauses branch below);
-                            // those calls no-op rather than throw, but treat any
-                            // stray rejection here the same way: an expected
-                            // interruption, not a script failure, so the session
-                            // stays alive instead of being stopped.
-                            false
-                        }
-                        Err(error) => {
-                            eprintln!("script invocation failed: {error}");
-                            true
-                        }
-                    }
-                }
-            }
+        let Some(active) = session.as_ref().cloned() else {
+            continue;
         };
-
-        if stop_requested {
+        if active.is_stopped() {
+            invocation = None;
+            next_invocation_at = None;
+            callbacks.clear();
+            pending_ui_events.clear();
             connection_events = None;
-            if let Some(active) = session.as_ref()
-                && let Err(error) = active.run_before_stop(controls.clone()).await
-            {
-                eprintln!("beforeStop hook failed: {error}");
-            }
+            active.terminate();
             lock_state.set_enabled(false);
             controls.actions_paused.set_paused(false);
             session = None;
             script_running.store(false, Ordering::Release);
             paused = false;
+            drop(active);
+            script_control.acknowledge_unpaired_terminal();
+            continue;
+        }
+        let drive = active.drive();
+        tokio::pin!(drive);
+        let mut terminal = None;
+        tokio::select! {
+            biased;
+            callback = callbacks.next(), if !callbacks.is_empty() => {
+                if let Some(Err(error)) = callback {
+                    if active.is_stopped() {
+                        terminal = Some(true);
+                    } else {
+                        eprintln!("[Script UI] callback failed: {error}");
+                    }
+                }
+            }
+            event = ui_events.recv(), if ui_events_open => {
+                match event {
+                    Some(event) => pending_ui_events.push_back(event),
+                    None => ui_events_open = false,
+                }
+            }
+            changed = terminal_updates.changed() => {
+                let _ = changed;
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    let generation = terminal_generation(&script_control);
+                    drop(invocation.take());
+                    callbacks.clear();
+                    pending_ui_events.clear();
+                    drop(connection_events.take());
+                    active.terminate();
+                    drop(session.take());
+                    script_control.acknowledge_terminal(generation);
+                    script_running.store(false, Ordering::Release);
+                    console_locked.store(false, Ordering::Release);
+                    return Ok(());
+                }
+            }
+            command = commands.recv() => match command {
+                Some(command) => {
+                    let (command, command_generation) = unpack_command(command);
+                    if command_generation.is_some_and(|generation| {
+                        generation <= script_control.acknowledged_generation()
+                            || generation < script_control.requested_generation()
+                    }) {
+                        continue;
+                    }
+                    match command {
+                        ScriptCommand::Stop => {
+                            let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
+                            invocation = None;
+                            callbacks.clear();
+                            pending_ui_events.clear();
+                            drop(connection_events.take());
+                            active.terminate();
+                            lock_state.set_enabled(false);
+                            controls.actions_paused.set_paused(false);
+                            session = None;
+                            script_control.acknowledge_terminal(generation);
+                            script_running.store(false, Ordering::Release);
+                            console_locked.store(false, Ordering::Release);
+                            paused = false;
+                            println!("script stopped");
+                        }
+                        ScriptCommand::Exit => {
+                            let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
+                            drop(invocation.take());
+                            callbacks.clear();
+                            pending_ui_events.clear();
+                            drop(connection_events.take());
+                            active.terminate();
+                            capture_state.set_enabled(false);
+                            lock_state.set_enabled(false);
+                            controls.actions_paused.set_paused(false);
+                            drop(session.take());
+                            script_control.acknowledge_terminal(generation);
+                            script_running.store(false, Ordering::Release);
+                            console_locked.store(false, Ordering::Release);
+                            return Ok(());
+                        }
+                        other => {
+                            pending_command = Some((other, command_generation));
+                        }
+                    }
+                }
+                None => {
+                    let generation = terminal_generation(&script_control);
+                    drop(invocation.take());
+                    callbacks.clear();
+                    pending_ui_events.clear();
+                    drop(connection_events.take());
+                    active.terminate();
+                    drop(session.take());
+                    script_control.acknowledge_terminal(generation);
+                    script_running.store(false, Ordering::Release);
+                    capture_state.set_enabled(false);
+                    lock_state.set_enabled(false);
+                    controls.actions_paused.set_paused(false);
+                    console_locked.store(false, Ordering::Release);
+                    return Ok(());
+                }
+            },
+            changed = hotkey_pauses.changed(), if hotkey_channel_open => {
+                if changed.is_err() {
+                    hotkey_channel_open = false;
+                } else {
+                    let update = *hotkey_pauses.borrow_and_update();
+                    apply_hotkey_update_and_report(
+                        update,
+                        &controls.actions_paused,
+                        &controls,
+                        &lock_state,
+                        Some(&active),
+                        &mut paused,
+                    ).await;
+                    disable_capture_if_running(&capture_state, true, paused);
+                }
+            }
+            event = async {
+                match connection_events.as_mut() {
+                    Some(events) => events.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match event {
+                    Some(ConnectionEvent::Connected) => {
+                        connected = true;
+                        if let Err(error) = active.run_on_connect(controls.clone()).await {
+                            eprintln!("onConnect hook failed: {error}");
+                        }
+                    }
+                    Some(ConnectionEvent::Disconnected) => {
+                        connected = false;
+                        if let Err(error) = active.run_on_disconnect(controls.clone()).await {
+                            eprintln!("onDisconnect hook failed: {error}");
+                        }
+                    }
+                    None => {
+                        connected = false;
+                        connection_events = None;
+                    }
+                }
+            }
+            _ = async {
+                match next_invocation_at {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending().await,
+                }
+            }, if invocation.is_none() && next_invocation_at.is_some() => {
+                next_invocation_at = None;
+            }
+            result = async {
+                match invocation.as_mut() {
+                    Some(future) => Some(future.await),
+                    None => std::future::pending().await,
+                }
+            } => {
+                invocation = None;
+                terminal = Some(match result.expect("invocation result must exist") {
+                    Ok(stop_requested) => stop_requested,
+                    Err(error) => {
+                        let disconnected = *connection.connection_generation().borrow() == 0;
+                        if disconnected {
+                            connected = false;
+                        }
+                        if error.disconnected && active.has_connection_hooks() {
+                            false
+                        } else {
+                            eprintln!("script invocation failed: {error}");
+                            true
+                        }
+                    }
+                });
+            }
+            _ = &mut drive => {}
+        }
+
+        if terminal == Some(true) {
+            invocation = None;
+            next_invocation_at = None;
+            callbacks.clear();
+            pending_ui_events.clear();
+            connection_events = None;
+            if let Some(active) = session.as_ref() {
+                active.terminate();
+            }
+            lock_state.set_enabled(false);
+            controls.actions_paused.set_paused(false);
+            session = None;
+            script_running.store(false, Ordering::Release);
+            console_locked.store(false, Ordering::Release);
+            paused = false;
             println!("script stopped");
+            drop(active);
+            script_control.acknowledge_unpaired_terminal();
             continue;
         }
 
-        tokio::time::sleep(loop_delay).await;
+        if terminal == Some(false) {
+            next_invocation_at = Some(tokio::time::Instant::now() + loop_delay);
+            continue;
+        }
+
+        tokio::task::yield_now().await;
     }
 }
 
