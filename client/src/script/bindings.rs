@@ -119,7 +119,7 @@ fn host_error(message: String) -> Error {
     Error::new_from_js_message("host control", "JavaScript", message)
 }
 
-fn bridge_error(ctx: &Ctx<'_>, message: String) -> Error {
+pub(super) fn bridge_error(ctx: &Ctx<'_>, message: String) -> Error {
     let disconnected = message == "NotConnected" || message == "Closed";
     match Exception::from_message(ctx.clone(), &message) {
         Ok(exception) => {
@@ -159,7 +159,7 @@ fn stopped_error(ctx: &Ctx<'_>) -> Error {
     Exception::throw_message(ctx, SessionControl::error_message())
 }
 
-fn reject_if_stopped<'js>(ctx: &Ctx<'js>, session: &SessionControl) -> rquickjs::Result<()> {
+pub(super) fn reject_if_stopped<'js>(ctx: &Ctx<'js>, session: &SessionControl) -> rquickjs::Result<()> {
     if session.is_stopped() {
         Err(stopped_error(ctx))
     } else {

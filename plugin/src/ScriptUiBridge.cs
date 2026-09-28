@@ -1,5 +1,98 @@
 namespace RevIdle.ScoreTelemetry;
 
+internal sealed class ScriptUiMeasurementQueue
+{
+    private sealed record Entry(ScriptUiMeasureReq Request, long Generation, TaskCompletionSource<ScriptUiMeasureRes> Completion);
+
+    private readonly object _gate = new();
+    private readonly Queue<Entry> _entries = new();
+
+    internal async Task<ScriptUiMeasureRes> Enqueue(ScriptUiMeasureReq request, long generation, CancellationToken cancellationToken)
+    {
+        Entry entry = new(request, generation, new TaskCompletionSource<ScriptUiMeasureRes>(TaskCreationOptions.RunContinuationsAsynchronously));
+        using CancellationTokenRegistration registration = cancellationToken.Register(() => entry.Completion.TrySetCanceled(cancellationToken));
+        lock (_gate)
+        {
+            if (!entry.Completion.Task.IsCompleted)
+            {
+                if (_entries.Count >= 256)
+                    throw new InvalidOperationException("Script UI measurement queue is full.");
+                _entries.Enqueue(entry);
+            }
+        }
+        return await entry.Completion.Task.ConfigureAwait(false);
+    }
+
+    internal void Flush(long generation, ScriptUiSnapshot? snapshot, Func<ScriptUiMeasureReq, ScriptUiMeasureRes?>? resolve)
+    {
+        List<(Entry Entry, ScriptUiMeasureRes? Result, Exception? Error)> completed = new();
+        lock (_gate)
+        {
+            int count = _entries.Count;
+            for (int index = 0; index < count; index++)
+            {
+                Entry entry = _entries.Dequeue();
+                if (entry.Completion.Task.IsCompleted)
+                    continue;
+                if (entry.Generation != generation)
+                {
+                    completed.Add((entry, null, new InvalidOperationException("Script UI connection generation changed.")));
+                    continue;
+                }
+                if (snapshot is null || snapshot.Revision < entry.Request.Revision)
+                {
+                    _entries.Enqueue(entry);
+                    continue;
+                }
+                if (snapshot.SessionId != entry.Request.SessionId)
+                {
+                    completed.Add((entry, null, new InvalidOperationException("Script UI session changed before measurement.")));
+                    continue;
+                }
+                ScriptUiElementState? element = snapshot.Elements.FirstOrDefault(item => item.Id == entry.Request.ElementId);
+                if (element is null || element.InstanceId != entry.Request.InstanceId)
+                {
+                    completed.Add((entry, null, new InvalidOperationException("Script UI element was replaced before measurement.")));
+                    continue;
+                }
+                ScriptUiMeasureRes? result = resolve?.Invoke(entry.Request);
+                if (result is null)
+                {
+                    _entries.Enqueue(entry);
+                    continue;
+                }
+                completed.Add((entry, result, null));
+            }
+        }
+        foreach ((Entry entry, ScriptUiMeasureRes? result, Exception? error) in completed)
+        {
+            if (error is not null)
+                entry.Completion.TrySetException(error);
+            else
+                entry.Completion.TrySetResult(result!);
+        }
+    }
+
+    internal void Clear(long generation, Exception error)
+    {
+        List<Entry> cleared = new();
+        lock (_gate)
+        {
+            int count = _entries.Count;
+            for (int index = 0; index < count; index++)
+            {
+                Entry entry = _entries.Dequeue();
+                if (generation == 0 || entry.Generation != generation)
+                    cleared.Add(entry);
+                else
+                    _entries.Enqueue(entry);
+            }
+        }
+        foreach (Entry entry in cleared)
+            entry.Completion.TrySetException(error);
+    }
+}
+
 internal sealed class ScriptUiBridge
 {
     private readonly WsConnection _connection;
@@ -12,6 +105,7 @@ internal sealed class ScriptUiBridge
     private long _observedConnectionGeneration;
     private ScriptUiOverlay? _overlay;
     private readonly Queue<(ScriptUiPointer Pointer, long Generation)> _pointers = new();
+    private readonly ScriptUiMeasurementQueue _measurements = new();
 
     internal ScriptUiBridge(WsConnection connection, Action<string>? log = null)
     {
@@ -42,6 +136,19 @@ internal sealed class ScriptUiBridge
                 }
             }
             return Task.CompletedTask;
+        });
+        connection.Handler<ScriptUiMeasureReq>(async (context, packet) =>
+        {
+            if (context.CancellationToken.IsCancellationRequested ||
+                context.Generation == 0 ||
+                _connection.ConnectionGeneration != context.Generation ||
+                packet.SessionId == Guid.Empty ||
+                packet.InstanceId == Guid.Empty ||
+                string.IsNullOrEmpty(packet.ElementId))
+                throw new InvalidOperationException("Script UI measurement request is invalid or stale.");
+            ObserveConnectionGeneration();
+            ScriptUiMeasureRes result = await _measurements.Enqueue(packet, context.Generation, context.CancellationToken).ConfigureAwait(false);
+            await context.Send(result).ConfigureAwait(false);
         });
     }
 
@@ -157,6 +264,20 @@ internal sealed class ScriptUiBridge
             _pointers.Clear();
     }
 
+    internal void FlushMeasurements()
+    {
+        ObserveConnectionGeneration();
+        long generation = _connection.ConnectionGeneration;
+        ScriptUiSnapshot? snapshot;
+        ScriptUiOverlay? overlay;
+        lock (_gate)
+        {
+            snapshot = _snapshotGeneration == generation ? _snapshot : null;
+            overlay = _overlay;
+        }
+        _measurements.Flush(generation, snapshot, overlay is null ? null : overlay.TryGetMeasurement);
+    }
+
     private bool EventsEnabledFor(long generation)
     {
         ObserveConnectionGeneration();
@@ -183,6 +304,10 @@ internal sealed class ScriptUiBridge
             }
         }
         overlay?.ClearPendingPointers();
+        if (generation == 0)
+            _measurements.Clear(0, new InvalidOperationException("Script UI connection closed."));
+        else if (generation != _snapshotGeneration)
+            _measurements.Clear(generation, new InvalidOperationException("Script UI connection generation changed."));
     }
 
     private bool AcceptSnapshot(ScriptUiSnapshot? snapshot, long generation)

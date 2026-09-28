@@ -1,5 +1,6 @@
-use crate::bridge::{ScriptUiEvent, ScriptUiPublisher};
-use rquickjs::{Ctx, Function, Object, Persistent, Value, promise::MaybePromise};
+use super::{bindings::{bridge_error, reject_if_stopped}, control::SessionControl};
+use crate::bridge::{ScriptUiEvent, ScriptUiMeasureReq, ScriptUiPublisher, WsConnection};
+use rquickjs::{Ctx, Exception, Function, Object, Persistent, Value, function::Async, promise::MaybePromise};
 use uuid::Uuid;
 
 pub(super) struct ScriptUiState {
@@ -9,13 +10,16 @@ pub(super) struct ScriptUiState {
 }
 
 impl ScriptUiState {
-    pub(super) fn new(
-        ctx: &Ctx<'_>,
+    pub(super) fn new<'js>(
+        ctx: &Ctx<'js>,
         publisher: ScriptUiPublisher,
-        stopped: impl Fn() -> bool + 'static,
+        connection: WsConnection,
+        session: SessionControl,
     ) -> rquickjs::Result<Self> {
         let session_id = Uuid::new_v4();
         let publish = publisher.clone();
+        let measurements = publisher.subscribe();
+        let stopped = session.clone();
         let factory: Function = ctx.eval(include_str!("ui.js"))?;
         let api: Object = factory.call((
             Function::new(ctx.clone(), move |json: String| {
@@ -26,8 +30,26 @@ impl ScriptUiState {
                 Ok::<(), rquickjs::Error>(())
             })?,
             Function::new(ctx.clone(), || Uuid::new_v4().to_string())?,
-            Function::new(ctx.clone(), stopped)?,
+            Function::new(ctx.clone(), move || stopped.is_stopped())?,
             session_id.to_string(),
+            Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, element_id: String, instance_id: String, width: bool| {
+                let revision = measurements.borrow().revision;
+                let connection = connection.clone();
+                let session = session.clone();
+                async move {
+                    reject_if_stopped(&ctx, &session)?;
+                    let instance_id = Uuid::parse_str(&instance_id)
+                        .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
+                    let measured = connection.request(ScriptUiMeasureReq { session_id, revision, element_id, instance_id })
+                        .await
+                        .map_err(|error| bridge_error(&ctx, error.to_string()))?;
+                    reject_if_stopped(&ctx, &session)?;
+                    if !measured.width.is_finite() || measured.width < 0.0 || !measured.height.is_finite() || measured.height < 0.0 {
+                        return Err(Exception::throw_message(&ctx, "invalid UI dimensions"));
+                    }
+                    Ok(if width { measured.width } else { measured.height })
+                }
+            }))?,
         ))?;
         publisher.replace(session_id, Vec::new());
         Ok(Self { api: Persistent::save(ctx, api), session_id, publisher })
@@ -243,7 +265,9 @@ mod tests {
         let runtime = Runtime::new().unwrap();
         let context = Context::full(&runtime).unwrap();
         let publisher = crate::bridge::ScriptUiPublisher::default();
-        let ui = context.with(|ctx| super::ScriptUiState::new(&ctx, publisher, || false).unwrap());
+        let ui = context.with(|ctx| super::ScriptUiState::new(
+            &ctx, publisher, crate::bridge::WsConnection::disconnected_for_test(), crate::script::control::SessionControl::standalone(),
+        ).unwrap());
         context.with(|ctx| {
             ctx.globals().set("ui", ui.registry(&ctx).unwrap()).unwrap();
             ctx.eval::<(), _>("ui.a = {text: 'root', onClick() { ui.a.text = 'clicked'; }};").unwrap();
@@ -362,6 +386,87 @@ mod tests {
             ui.__proto__ = { text: 'prototype key' }; ui.constructor = {};
             assert(ui.__proto__.text === 'prototype key' && Object.getPrototypeOf(ui) === null);
         "#);
+    }
+
+    #[test]
+    fn ui_dimensions_are_readonly_methods_not_definition_fields() {
+        check(r#"
+            ui.a = { text: 'measure me' };
+            assert(typeof ui.a.width === 'function' && typeof ui.a.height === 'function');
+            assert(ui.a.width === ui.a.width && 'width' in ui.a && 'height' in ui.a);
+            assert(Object.keys(ui.a).join() === 'text');
+            throws(() => ui.a.width = () => 10);
+            throws(() => delete ui.a.height);
+            throws(() => ui.b = { width: () => 10 });
+            assert(snapshots.length === 1);
+        "#);
+    }
+
+    #[tokio::test]
+    async fn ui_dimensions_request_current_revision_and_reject_stale_elements() {
+        use crate::script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession};
+        use futures_util::{SinkExt, StreamExt};
+        use std::{cell::RefCell, rc::Rc, time::Duration};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(Rc::new(RefCell::new(Vec::new()))))) as SharedMouse).into();
+        controls.actions_paused.set_paused(true);
+        let (address, server) = crate::bridge::test_support::raw_server().await;
+        let connection = crate::bridge::WsConnection::connect_for_test(address, Duration::from_millis(10), Duration::from_secs(1));
+        let publisher = crate::bridge::ScriptUiPublisher::default();
+        let snapshots = publisher.subscribe();
+        let session = ScriptSession::new_with_connection_and_control(
+            r#"
+                export default async function() {
+                    rev.ui.a = { text: 'initial', padding: { thickness: 3 }, border: { thickness: 9 } };
+                    rev.ui.a.text = 'updated';
+                    const original = rev.ui.a;
+                    if (await original.width() !== 123.5 || await original.height() !== 27.25)
+                        throw new Error('wrong dimensions');
+                    delete rev.ui.a;
+                    async function rejects(read) {
+                        try { await read(); } catch (error) {
+                            if (error.message.includes('no longer exists')) return;
+                            throw error;
+                        }
+                        throw new Error('stale measurement accepted');
+                    }
+                    await rejects(() => original.width());
+                    rev.ui.a = { text: 'replacement' };
+                    await rejects(() => original.height());
+                    const pending = rev.ui.a.width();
+                    rev.ui.a = { text: 'newer replacement' };
+                    await rejects(() => pending);
+                }
+            "#,
+            "ui-dimensions.js", connection.clone(), SessionControl::standalone(), publisher,
+        ).await.unwrap();
+        let mut socket = server.await.unwrap();
+        let peer = async {
+            for index in 0..3 {
+                let message = tokio::time::timeout(Duration::from_secs(2), socket.next()).await.unwrap().unwrap().unwrap();
+                let envelope: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                assert_eq!(envelope["type"], "ScriptUiMeasureReq");
+                assert_eq!(envelope["payload"]["elementId"], "a");
+                let snapshot = snapshots.borrow();
+                assert_eq!(envelope["payload"]["sessionId"], snapshot.session_id.unwrap().to_string());
+                if index < 2 {
+                    assert_eq!(snapshot.elements[0].text, "updated");
+                    assert_eq!(envelope["payload"]["revision"], snapshot.revision);
+                    assert_eq!(envelope["payload"]["instanceId"], snapshot.elements[0].instance_id.to_string());
+                } else {
+                    assert!(envelope["payload"]["revision"].as_u64().unwrap() < snapshot.revision);
+                    assert_ne!(envelope["payload"]["instanceId"], snapshot.elements[0].instance_id.to_string());
+                }
+                drop(snapshot);
+                socket.send(Message::Text(serde_json::json!({
+                    "uuid": envelope["uuid"], "type": "ScriptUiMeasureRes", "payload": { "width": 123.5, "height": 27.25 },
+                }).to_string().into())).await.unwrap();
+            }
+        };
+        let (result, ()) = tokio::join!(session.invoke((), controls), peer);
+        result.unwrap();
+        connection.shutdown().await;
     }
 
     #[test]

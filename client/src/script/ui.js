@@ -1,4 +1,4 @@
-(function (publish, identity, stopped, sessionId) {
+(function (publish, identity, stopped, sessionId, measure) {
     // Capture host machinery before the user module can change its realm.
     const { create, keys, hasOwn, freeze, setPrototypeOf } = Object;
     const { ownKeys, apply } = Reflect;
@@ -151,11 +151,21 @@
             for (let i = 0; i < fields.length; i++) values[fields[i]] = validate(fields[i], definition[fields[i]]);
             if (stopped()) throw new NativeError('script session stopped');
             const element = { values, instanceId: identity(), eventsVersion: 1, proxy: null };
+            async function dimension(width) {
+                if (stopped()) throw new NativeError('script session stopped');
+                if (get(key) !== element) throw new NativeError('UI element no longer exists');
+                const size = await measure(key, element.instanceId, width);
+                if (stopped()) throw new NativeError('script session stopped');
+                if (get(key) !== element) throw new NativeError('UI element no longer exists');
+                return size;
+            }
+            const methods = { __proto__: null, width: () => dimension(true), height: () => dimension(false) };
             element.proxy = new NativeProxy(create(null), {
-                get(_, field) { return hasOwn(values, field) ? values[field] : hasOwn(defaults, field) ? defaults[field] : undefined; },
-                has(_, field) { return hasOwn(values, field) || hasOwn(defaults, field); },
+                get(_, field) { return hasOwn(methods, field) ? methods[field] : hasOwn(values, field) ? values[field] : hasOwn(defaults, field) ? defaults[field] : undefined; },
+                has(_, field) { return hasOwn(methods, field) || hasOwn(values, field) || hasOwn(defaults, field); },
                 ownKeys() { return keys(values); },
                 getOwnPropertyDescriptor(_, field) {
+                    if (hasOwn(methods, field)) return { configurable: true, enumerable: false, writable: false, value: methods[field] };
                     return hasOwn(values, field) ? { configurable: true, enumerable: true, writable: true, value: values[field] } : undefined;
                 },
                 set(_, field, value) {
@@ -175,6 +185,7 @@
                 deleteProperty(_, field) {
                     if (stopped()) throw new NativeError('script session stopped');
                     if (get(key) !== element) throw new NativeError('UI element no longer exists');
+                    if (hasOwn(methods, field)) throw new NativeTypeError('UI methods are read-only');
                     if (!hasOwn(values, field)) return true;
                     const nextValues = { __proto__: null, ...values };
                     delete nextValues[field];

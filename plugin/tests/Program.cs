@@ -54,6 +54,10 @@ ScriptUiTextMeasurementIncludesGlyphOverhang();
 ScriptUiRoundedHitTestMatchesRelay();
 ScriptUiPointerRequiresMatchingLiveInstance();
 ScriptUiPointerRejectsStaleConnection();
+await ScriptUiMeasurementQueueWaitsForAppliedSnapshot();
+await ScriptUiMeasurementQueueRejectsStaleInstance();
+await ScriptUiMeasurementQueueRemovesCancelledRequest();
+await ScriptUiMeasurementQueueRejectsOldGeneration();
 await BridgeStateHandlerPreservesMixedJsonAndSelectedKeys();
 await BridgeStateHandlerReportsMissingData();
 await BridgeStateHandlerReportsInvalidPath();
@@ -135,7 +139,7 @@ await WsHandlerCanInitiateNestedRequestWithoutAwait();
 await WsMalformedCorrelatedRemoteErrorFailsPromptly();
 await WsTimeoutRemovalRaceAwaitsWinningCompletion();
 await WsLateRemoteErrorIsReportedBeforeTombstoneDiscard();
-System.Console.WriteLine("132 tests passed.");
+System.Console.WriteLine("136 tests passed.");
 
 static void ClientProcessConsumesConsoleClearWithoutLoggingIt()
 {
@@ -421,6 +425,73 @@ static void ScriptUiPointerRejectsStaleConnection()
     Equal(false, bridge.AcceptsPointer(new ScriptUiPointer(Guid.NewGuid(), 1, "down", 1, 1, 1920, 1080), 4), testName);
 }
 
+static async Task ScriptUiMeasurementQueueWaitsForAppliedSnapshot()
+{
+    const string testName = nameof(ScriptUiMeasurementQueueWaitsForAppliedSnapshot);
+    ScriptUiMeasurementQueue queue = new();
+    Guid session = Guid.NewGuid();
+    Guid instance = Guid.NewGuid();
+    Task<ScriptUiMeasureRes> result = queue.Enqueue(new ScriptUiMeasureReq(session, 7, "button", instance), 3, CancellationToken.None);
+    queue.Flush(3, null, null);
+    Equal(false, result.IsCompleted, testName);
+    queue.Flush(3, new ScriptUiSnapshot(session, 6, new[] { ScriptUiTestElement("button") with { InstanceId = instance } }),
+        _ => throw new Exception("An older snapshot must not be measured."));
+    Equal(false, result.IsCompleted, testName);
+    queue.Flush(3, new ScriptUiSnapshot(session, 7, new[] { ScriptUiTestElement("button") with { InstanceId = instance } }), null);
+    Equal(false, result.IsCompleted, testName);
+    queue.Flush(3, new ScriptUiSnapshot(session, 8, new[] { ScriptUiTestElement("button") with { InstanceId = instance } }),
+        _ => new ScriptUiMeasureRes(123.5, 27.25));
+    ScriptUiMeasureRes measured = await result;
+    Equal(123.5, measured.Width, testName);
+    Equal(27.25, measured.Height, testName);
+}
+
+static async Task ScriptUiMeasurementQueueRejectsStaleInstance()
+{
+    const string testName = nameof(ScriptUiMeasurementQueueRejectsStaleInstance);
+    ScriptUiMeasurementQueue queue = new();
+    Guid session = Guid.NewGuid();
+    foreach (ScriptUiSnapshot snapshot in new[] {
+        new ScriptUiSnapshot(session, 7, new[] { ScriptUiTestElement("button") }),
+        new ScriptUiSnapshot(session, 7, Array.Empty<ScriptUiElementState>()),
+        new ScriptUiSnapshot(Guid.NewGuid(), 7, new[] { ScriptUiTestElement("button") }),
+        new ScriptUiSnapshot(null, 7, Array.Empty<ScriptUiElementState>())
+    })
+    {
+        Task<ScriptUiMeasureRes> result = queue.Enqueue(new ScriptUiMeasureReq(session, 7, "button", Guid.NewGuid()), 3, CancellationToken.None);
+        queue.Flush(3, snapshot, _ => throw new Exception("A stale element must not be measured."));
+        await ThrowsAsync<InvalidOperationException>(() => result, testName);
+    }
+}
+
+static async Task ScriptUiMeasurementQueueRemovesCancelledRequest()
+{
+    const string testName = nameof(ScriptUiMeasurementQueueRemovesCancelledRequest);
+    ScriptUiMeasurementQueue queue = new();
+    using CancellationTokenSource cancellation = new();
+    Guid session = Guid.NewGuid();
+    Guid instance = Guid.NewGuid();
+    Task<ScriptUiMeasureRes>[] pending = Enumerable.Range(0, 256)
+        .Select(_ => queue.Enqueue(new ScriptUiMeasureReq(session, 7, "button", instance), 3, cancellation.Token)).ToArray();
+    await ThrowsAsync<InvalidOperationException>(() => queue.Enqueue(new ScriptUiMeasureReq(session, 7, "button", instance), 3, CancellationToken.None), testName);
+    cancellation.Cancel();
+    await ThrowsAsync<TaskCanceledException>(() => Task.WhenAll(pending), testName);
+    queue.Flush(3, null, _ => throw new Exception("A cancelled request must not be measured."));
+    Task<ScriptUiMeasureRes> result = queue.Enqueue(new ScriptUiMeasureReq(session, 7, "button", instance), 3, CancellationToken.None);
+    queue.Flush(3, new ScriptUiSnapshot(session, 7, new[] { ScriptUiTestElement("button") with { InstanceId = instance } }), _ => new ScriptUiMeasureRes(1, 2));
+    Equal(2d, (await result).Height, testName);
+}
+
+static async Task ScriptUiMeasurementQueueRejectsOldGeneration()
+{
+    const string testName = nameof(ScriptUiMeasurementQueueRejectsOldGeneration);
+    ScriptUiMeasurementQueue queue = new();
+    Guid session = Guid.NewGuid();
+    Task<ScriptUiMeasureRes> result = queue.Enqueue(new ScriptUiMeasureReq(session, 7, "button", Guid.NewGuid()), 2, CancellationToken.None);
+    queue.Flush(3, null, null);
+    await ThrowsAsync<InvalidOperationException>(() => result, testName);
+}
+
 static ScriptUiElementState ScriptUiTestElement(string id)
     => new(
         id,
@@ -542,6 +613,10 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("ScriptUiEvent", new ScriptUiEvent(
             Guid.Parse("11111111-1111-4111-8111-111111111111"), "button",
             Guid.Parse("22222222-2222-4222-8222-222222222222"), 2, "hover")),
+        ("ScriptUiMeasureReq", new ScriptUiMeasureReq(
+            Guid.Parse("11111111-1111-4111-8111-111111111111"), 7, "button",
+            Guid.Parse("22222222-2222-4222-8222-222222222222"))),
+        ("ScriptUiMeasureRes", new ScriptUiMeasureRes(123.5, 27.25)),
         ("ScriptUiPointer", new ScriptUiPointer(
             Guid.Parse("11111111-1111-4111-8111-111111111111"), 3, "down", 110, 965, 1920, 1080)),
         ("ScriptUiPointerUp", new ScriptUiPointer(

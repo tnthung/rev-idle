@@ -149,6 +149,7 @@ impl ScriptSession {
 
         let context_session_control = session_control.clone();
         let context_ui_publisher = ui_publisher.clone();
+        let context_connection = connection.clone();
         let (script, after_load, on_connect, on_disconnect, before_pause, after_resume, parse, freeze, ui) = context
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<_> = async {
@@ -190,10 +191,8 @@ impl ScriptSession {
                     let ui = Rc::new(ScriptUiState::new(
                         &ctx,
                         context_ui_publisher,
-                        {
-                            let session_control = context_session_control.clone();
-                            move || session_control.is_stopped()
-                        },
+                        context_connection,
+                        context_session_control.clone(),
                     )?);
 
                     if context_session_control.is_stopped() {

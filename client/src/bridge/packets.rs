@@ -110,6 +110,34 @@ impl Packet for ScriptUiPointer {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ScriptUiMeasureReq {
+    pub(crate) session_id: Uuid,
+    pub(crate) revision: u64,
+    pub(crate) element_id: String,
+    pub(crate) instance_id: Uuid,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScriptUiMeasureRes {
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+}
+
+impl Packet for ScriptUiMeasureReq {
+    const TYPE: &'static str = "ScriptUiMeasureReq";
+}
+
+impl Packet for ScriptUiMeasureRes {
+    const TYPE: &'static str = "ScriptUiMeasureRes";
+}
+
+impl Requestable for ScriptUiMeasureReq {
+    type Response = ScriptUiMeasureRes;
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct StateReq {
     pub(crate) keys: Vec<String>,
 }
@@ -373,6 +401,10 @@ mod tests {
         assert_eq!(serde_json::to_value(clear).unwrap(), fixture["ScriptUiClear"]);
         let event: ScriptUiEvent = serde_json::from_value(fixture["ScriptUiEvent"].clone()).unwrap();
         assert_eq!(serde_json::to_value(event).unwrap(), fixture["ScriptUiEvent"]);
+        let measure: ScriptUiMeasureReq = serde_json::from_value(fixture["ScriptUiMeasureReq"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(measure).unwrap(), fixture["ScriptUiMeasureReq"]);
+        let measured: ScriptUiMeasureRes = serde_json::from_value(fixture["ScriptUiMeasureRes"].clone()).unwrap();
+        assert_eq!(serde_json::to_value(measured).unwrap(), fixture["ScriptUiMeasureRes"]);
         for key in ["ScriptUiPointer", "ScriptUiPointerUp"] {
             let pointer: ScriptUiPointer = serde_json::from_value(fixture[key].clone()).unwrap();
             assert_eq!(serde_json::to_value(pointer).unwrap(), fixture[key]);

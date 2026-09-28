@@ -422,6 +422,7 @@ public sealed class ScoreTicker : MonoBehaviour
                 else
                     scriptUiBridge.FlushPointers();
             }
+            scriptUiBridge.FlushMeasurements();
         }
         if (Plugin.ControlBridge is ControlBridge bridge)
         {

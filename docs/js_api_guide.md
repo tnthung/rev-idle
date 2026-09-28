@@ -175,6 +175,8 @@ Use `alignX: "left" | "center" | "right"` and `alignY: "top" | "center" | "botto
 
 Set `font` to an installed system font family name, for example `font: "Consolas"` or `rev.ui.label.font = "Arial"`. Names are case-insensitive. Empty, omitted, or deleted `font` uses the default overlay font; unavailable fonts fall back with a warning. Font changes recalculate automatic width and height. Text remains 14px.
 
+Use `await rev.ui.label.width()` and `await rev.ui.label.height()` to read the calculated box size in pixels, including padding and excluding border. Each call waits for Unity to apply the changes made before the call; later changes may also be included. Reads work while paused or hidden by F6. They reject if the element is deleted/replaced before the read completes, the session stops, or the bridge disconnects or times out. These are host-provided read-only methods, not definition fields. Their declarations are optional so object-literal definitions can omit them; projects with `strictNullChecks` can use `element.width!()` and `element.height!()` on a live element.
+
 Positive positions measure from the left/top; negative positions measure from the right/bottom to the element's far edge. Elements with handlers receive pointer entry, exit, and matching press/release clicks. Async handlers overlap after yielding. Handler errors are logged without unloading the script. Elements without handlers allow pointer hits through.
 
 Press F6 while the game is focused to hide or show all script-created UI. Hidden widgets keep their state and receive script updates, but do not receive pointer events. The control bar stays visible.

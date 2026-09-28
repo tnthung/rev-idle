@@ -287,6 +287,8 @@ internal sealed class ScriptUiOverlay : IDisposable
     private static bool _scriptUiImageRegistered;
     private Guid? _sessionId;
     private bool _eventsEnabled;
+    private Guid? _appliedSessionId;
+    private ulong? _appliedRevision;
     private int _viewportWidth;
     private int _viewportHeight;
     private bool _disposed;
@@ -365,6 +367,8 @@ internal sealed class ScriptUiOverlay : IDisposable
     {
         if (_disposed)
             return;
+        _appliedSessionId = null;
+        _appliedRevision = null;
         bool eventsEnabled = connectionAvailable && !capture && visible && snapshot?.SessionId is not null;
         if (!eventsEnabled)
         {
@@ -467,6 +471,17 @@ internal sealed class ScriptUiOverlay : IDisposable
             if (font != null)
                 UnityEngine.Object.Destroy(font);
         }
+        _appliedSessionId = sessionId;
+        _appliedRevision = snapshot.Revision;
+    }
+
+    internal ScriptUiMeasureRes? TryGetMeasurement(ScriptUiMeasureReq request)
+    {
+        if (_disposed || _appliedSessionId != request.SessionId || _sessionId != request.SessionId || _appliedRevision is not ulong appliedRevision || appliedRevision < request.Revision)
+            return null;
+        if (!_byInstance.TryGetValue(request.InstanceId, out ElementView? view) || view.StateId != request.ElementId)
+            return null;
+        return new ScriptUiMeasureRes(view.Layout.Box.width, view.Layout.Box.height);
     }
 
     internal bool HandlePointer(ScriptUiPointer pointer)
@@ -636,6 +651,8 @@ internal sealed class ScriptUiOverlay : IDisposable
 
     private void ClearElements()
     {
+        _appliedSessionId = null;
+        _appliedRevision = null;
         foreach (ElementView view in _elements)
             view.Dispose();
         _elements.Clear();
@@ -751,6 +768,7 @@ internal sealed class ScriptUiOverlay : IDisposable
 
         internal GameObject Root => _object;
         internal Guid InstanceId => _state.InstanceId;
+        internal string StateId => _state.Id;
         internal ulong EventsVersion => _state.EventsVersion;
         internal ScriptUiLayout Layout { get; private set; }
         internal bool HasEvents => _state.Events is { Length: > 0 };
