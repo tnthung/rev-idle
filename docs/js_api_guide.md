@@ -177,6 +177,8 @@ Set `font` to an installed system font family name, for example `font: "Consolas
 
 Positive positions measure from the left/top; negative positions measure from the right/bottom to the element's far edge. Elements with handlers receive pointer entry, exit, and matching press/release clicks. Async handlers overlap after yielding. Handler errors are logged without unloading the script. Elements without handlers allow pointer hits through.
 
+Press F6 while the game is focused to hide or show all script-created UI. Hidden widgets keep their state and receive script updates, but do not receive pointer events. The control bar stays visible.
+
 UI remains visible and callbacks remain usable while paused. A monitor can update it during pause while maintenance waits:
 
 ```javascript

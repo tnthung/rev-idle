@@ -391,6 +391,7 @@ public sealed class ScoreTicker : MonoBehaviour
 
     private ControlOverlay? _controlOverlay;
     private ScriptUiOverlay? _scriptUiOverlay;
+    private bool _scriptUiVisible = true;
 
     public ScoreTicker(IntPtr pointer) : base(pointer)
     {
@@ -398,6 +399,9 @@ public sealed class ScoreTicker : MonoBehaviour
 
     public void Update()
     {
+        bool scriptUiVisibilityChanged = Application.isFocused && Input.GetKeyDown(KeyCode.F6);
+        if (scriptUiVisibilityChanged)
+            _scriptUiVisible = !_scriptUiVisible;
         if (Application.isFocused && Input.GetKeyDown(KeyCode.F7))
         {
             nint consoleWindow = Plugin.GetConsoleWindow();
@@ -412,8 +416,8 @@ public sealed class ScoreTicker : MonoBehaviour
             {
                 scriptUiBridge.AttachOverlay(_scriptUiOverlay);
                 bool capture = Plugin.ControlBridge?.State?.Capture == true;
-                _scriptUiOverlay.Apply(scriptUiBridge.Snapshot, scriptUiBridge.EventsEnabled, capture);
-                if (capture)
+                _scriptUiOverlay.Apply(scriptUiBridge.Snapshot, scriptUiBridge.EventsEnabled, capture, _scriptUiVisible);
+                if (capture || !_scriptUiVisible || scriptUiVisibilityChanged)
                     scriptUiBridge.ClearQueuedPointers();
                 else
                     scriptUiBridge.FlushPointers();

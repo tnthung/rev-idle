@@ -361,14 +361,20 @@ internal sealed class ScriptUiOverlay : IDisposable
         return font;
     }
 
-    internal void Apply(ScriptUiSnapshot? snapshot, bool connectionAvailable, bool capture)
+    internal void Apply(ScriptUiSnapshot? snapshot, bool connectionAvailable, bool capture, bool visible)
     {
         if (_disposed)
             return;
-        bool eventsEnabled = connectionAvailable && !capture && snapshot?.SessionId is not null;
+        bool eventsEnabled = connectionAvailable && !capture && visible && snapshot?.SessionId is not null;
         if (!eventsEnabled)
+        {
             _pressed.Clear();
+            foreach (ElementView view in _elements)
+                view.SetEventsEnabled(false);
+        }
         _eventsEnabled = eventsEnabled;
+        if (_root.activeSelf != visible)
+            _root.SetActive(visible);
         if (snapshot?.SessionId is not Guid sessionId)
         {
             _sessionId = null;
