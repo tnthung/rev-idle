@@ -360,7 +360,7 @@ internal sealed class ScriptUiBridge
                 new ScriptUiPaddingState(element.Padding.Top, element.Padding.Right, element.Padding.Bottom, element.Padding.Left),
                 element.Events.ToArray(),
                 element.Hidden,
-                element.BasedOn)).ToArray());
+                element.BasedOn) { Size = element.Size }).ToArray());
 
     private static string? Validate(ScriptUiSnapshot? snapshot)
     {
@@ -382,8 +382,8 @@ internal sealed class ScriptUiBridge
                 return "element ids must be nonempty and unique";
             if (element.InstanceId == Guid.Empty || !instances.Add(element.InstanceId))
                 return $"element '{element.Id}' has an empty or duplicate instanceId";
-            if (element.Text is null || element.Font is null || element.BasedOn is null || !double.IsFinite(element.PosX) || !double.IsFinite(element.PosY))
-                return $"element '{element.Id}' has invalid text, font, or position";
+            if (element.Text is null || element.Font is null || element.Size <= 0 || element.BasedOn is null || !double.IsFinite(element.PosX) || !double.IsFinite(element.PosY))
+                return $"element '{element.Id}' has invalid text, font, size, or position";
             if (element.AlignX is not ("left" or "center" or "right") || element.AlignY is not ("top" or "center" or "bottom"))
                 return $"element '{element.Id}' has invalid alignment";
             string? lengthError = ValidateLength(element.LenX, $"{element.Id}.lenX") ?? ValidateLength(element.LenY, $"{element.Id}.lenY");

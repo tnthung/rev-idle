@@ -24,6 +24,7 @@ pub(crate) struct ScriptUiElementState {
     pub(crate) based_on: String,
     pub(crate) text: String,
     pub(crate) font: String,
+    pub(crate) size: i32,
     pub(crate) align_x: String,
     pub(crate) align_y: String,
     pub(crate) pos_x: f64,
@@ -406,6 +407,7 @@ mod tests {
         let snapshot: ScriptUiSnapshot = serde_json::from_value(fixture["ScriptUiSnapshot"].clone()).unwrap();
         assert_eq!(snapshot.elements[0].padding.right, 8.0);
         assert_eq!(snapshot.elements[0].based_on, "scene:7/Panel[0]");
+        assert_eq!(snapshot.elements[0].size, 18);
         assert_eq!(snapshot.elements[0].corner.top_left, 0.0);
         assert_eq!(snapshot.elements[0].border.color, [0, 255, 0, 128]);
         assert_eq!(serde_json::to_value(snapshot).unwrap(), fixture["ScriptUiSnapshot"]);

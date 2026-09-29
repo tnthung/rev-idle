@@ -279,7 +279,7 @@ internal sealed class ScriptUiOverlay : IDisposable
     private Font? _font;
     private TextGenerator? _textGenerator;
     private readonly Dictionary<string, Font?> _scriptFonts = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<(string Text, Font Font), ScriptUiTextMeasurement> _textMeasurements = new();
+    private readonly Dictionary<(string Text, Font Font, int Size), ScriptUiTextMeasurement> _textMeasurements = new();
     private ulong _textMeasurementRevision;
     private readonly Func<ScriptUiEvent, bool> _sendEvent;
     private readonly Action<string>? _log;
@@ -423,7 +423,7 @@ internal sealed class ScriptUiOverlay : IDisposable
             fonts[index] = ResolveFont(element.Font);
             if (element.Font.Length > 0)
                 requestedFonts.Add(element.Font);
-            if (fonts[index] == null || !TryMeasure(element.Text, fonts[index], out measurements[index]))
+            if (fonts[index] == null || !TryMeasure(element.Text, fonts[index], element.Size, out measurements[index]))
             {
                 _font = null;
                 _eventsEnabled = false;
@@ -629,14 +629,14 @@ internal sealed class ScriptUiOverlay : IDisposable
         return resolved != null ? resolved : _font;
     }
 
-    private bool TryMeasure(string text, Font? font, out ScriptUiTextMeasurement measured)
+    private bool TryMeasure(string text, Font? font, int size, out ScriptUiTextMeasurement measured)
     {
         measured = default;
         if (string.IsNullOrEmpty(text))
             return true;
         if (font == null)
             return false;
-        if (_textMeasurements.TryGetValue((text, font), out measured))
+        if (_textMeasurements.TryGetValue((text, font, size), out measured))
             return true;
         try
         {
@@ -644,14 +644,14 @@ internal sealed class ScriptUiOverlay : IDisposable
             TextGenerationSettings settings = new()
             {
                 font = font,
-                fontSize = FontSize,
+                fontSize = size,
                 lineSpacing = 1,
                 scaleFactor = 1,
                 textAnchor = TextAnchor.UpperLeft,
                 alignByGeometry = false,
                 resizeTextForBestFit = false,
-                resizeTextMinSize = FontSize,
-                resizeTextMaxSize = FontSize,
+                resizeTextMinSize = size,
+                resizeTextMaxSize = size,
                 verticalOverflow = VerticalWrapMode.Overflow,
                 horizontalOverflow = HorizontalWrapMode.Overflow,
                 updateBounds = true,
@@ -683,7 +683,7 @@ internal sealed class ScriptUiOverlay : IDisposable
             measured = new ScriptUiTextMeasurement(width, height, minY, maxY);
             if (!float.IsFinite(measured.Height))
                 throw new InvalidOperationException("Font geometry returned a non-finite size.");
-            _textMeasurements[(text, font)] = measured;
+            _textMeasurements[(text, font, size)] = measured;
             return true;
         }
         catch (Exception exception)
@@ -832,6 +832,7 @@ internal sealed class ScriptUiOverlay : IDisposable
             Layout = ScriptUiGeometry.Calculate(state, viewportWidth, viewportHeight, measuredText.Width, measuredText.Height, _anchor);
             _text.text = state.Text;
             _text.font = font;
+            _text.fontSize = state.Size;
             _text.alignment = (state.AlignX, state.AlignY) switch
             {
                 ("left", "top") => TextAnchor.UpperLeft,

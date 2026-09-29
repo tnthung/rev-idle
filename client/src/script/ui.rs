@@ -566,6 +566,33 @@ mod tests {
     }
 
     #[test]
+    fn ui_registry_size_updates_and_resets_without_replacing_element() {
+        check(r#"
+            ui.a = { text: 'default', onClick() {} };
+            const original = ui.a, first = snapshots.at(-1)[0];
+            assert(ui.a.size === 14 && first.size === 14);
+            ui.a.size = 24;
+            assert(ui.a === original && ui.a.size === 24);
+            assert(snapshots.at(-1)[0].size === 24);
+            assert(snapshots.at(-1)[0].instanceId === first.instanceId && snapshots.at(-1)[0].eventsVersion === first.eventsVersion);
+            const count = snapshots.length;
+            ui.a.size = 24;
+            for (const value of [null, undefined, 0, -1, 1.5, Infinity, 2147483648, '14', {}, [], new Number(14)]) {
+                throws(() => ui.a.size = value);
+                throws(() => ui.a = { text: 'invalid replacement', size: value });
+            }
+            assert(ui.a === original && ui.a.size === 24 && snapshots.length === count);
+            delete ui.a.size;
+            assert(ui.a.size === 14 && snapshots.at(-1)[0].size === 14);
+            const resetCount = snapshots.length;
+            delete ui.a.size; ui.a.size = 14;
+            assert(snapshots.length === resetCount);
+            ui.b = { text: 'large', size: 32 };
+            assert(snapshots.at(-1)[1].size === 32);
+        "#);
+    }
+
+    #[test]
     fn ui_registry_hidden_defaults_updates_and_remains_reactive() {
         check(r#"
             ui.a = { text: 'visible', onClick() {} };

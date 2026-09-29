@@ -160,7 +160,7 @@ export function afterLoad() {
       if (rev.ui.button === button) button.text = "Click Me";
     },
   };
-  rev.ui.label = { text: "Ready", font: "Consolas", posX: 100, posY: -140 };
+  rev.ui.label = { text: "Ready", font: "Consolas", size: 18, posX: 100, posY: -140 };
   rev.ui.signal = { posX: 80, posY: -140, lenX: 12, lenY: 12, color: [0, 255, 0] };
 }
 
@@ -173,7 +173,7 @@ Colors use RGB or RGBA bytes. Lengths are fixed numbers or automatic `{ min, max
 
 Use `alignX: "left" | "center" | "right"` and `alignY: "top" | "center" | "bottom"` to place text within its padded content area. Defaults are `"left"` and `"center"`. Assign either field to update an existing element, or delete it to restore the default. Alignment does not change automatic size or the element's position.
 
-Set `font` to an installed system font family name, for example `font: "Consolas"` or `rev.ui.label.font = "Arial"`. Names are case-insensitive. Empty, omitted, or deleted `font` uses the default overlay font; unavailable fonts fall back with a warning. Font changes recalculate automatic width and height. Text remains 14px.
+Set `font` to an installed system font family name, for example `font: "Consolas"` or `rev.ui.label.font = "Arial"`. Names are case-insensitive. Empty, omitted, or deleted `font` uses the default overlay font; unavailable fonts fall back with a warning. Set `size` to an integer pixel size from `1` through `2,147,483,647`; omitted or deleted `size` defaults to `14`. Font and size changes recalculate automatic width and height.
 
 Use `await rev.ui.label.width()` and `await rev.ui.label.height()` to read the calculated box size in pixels, including padding and excluding border. Use `await rev.ui.label.globalXPos()` and `await rev.ui.label.globalYPos()` to read the calculated left/top position in top-left screen pixels. Each call waits for Unity to apply the changes made before the call; later changes may also be included. Reads work while paused or hidden by F6. They reject if the element is deleted/replaced before the read completes, the session stops, or the bridge disconnects or times out. Position reads also reject while `basedOn` is inaccessible; width and height remain available. These are host-provided read-only methods, not definition fields. Their declarations are optional so object-literal definitions can omit them; projects with `strictNullChecks` can use non-null assertions on a live element.
 

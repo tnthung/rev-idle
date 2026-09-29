@@ -69,7 +69,10 @@ internal sealed record ScriptUiElementState(
     ScriptUiPaddingState Padding,
     string[] Events,
     bool Hidden = false,
-    string BasedOn = "");
+    string BasedOn = "")
+{
+    public int Size { get; init; } = 14;
+}
 internal sealed record ScriptUiSnapshot(Guid? SessionId, ulong Revision, ScriptUiElementState[] Elements);
 internal sealed record ScriptUiEvent(Guid SessionId, string ElementId, Guid InstanceId, ulong EventsVersion, string Event);
 internal sealed record ScriptUiPointer(Guid SessionId, ulong PressId, string Phase, int X, int Y, int Width, int Height);

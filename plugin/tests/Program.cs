@@ -199,6 +199,7 @@ static void ScriptUiSnapshotValidatesAlignmentAndClonesState()
         AlignY = "bottom",
         Hidden = true,
         Font = "Consolas",
+        Size = 18,
         TextColor = new byte[] { 1, 2, 3, 4 },
         Events = new[] { "click" }
     };
@@ -210,9 +211,16 @@ static void ScriptUiSnapshotValidatesAlignmentAndClonesState()
     Equal("bottom", cloned.AlignY, testName);
     Equal(true, cloned.Hidden, testName);
     Equal("Consolas", cloned.Font, testName);
+    Equal(18, cloned.Size, testName);
     Equal((byte)1, cloned.TextColor[0], testName);
     Equal("click", cloned.Events[0], testName);
+    JsonSerializerOptions options = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    JsonObject oldElementJson = JsonSerializer.SerializeToNode(ScriptUiTestElement("old"), options)!.AsObject();
+    oldElementJson.Remove("size");
+    Equal(14, oldElementJson.Deserialize<ScriptUiElementState>(options)!.Size, testName);
     Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { ScriptUiTestElement("bad") with { Font = null! } }), 1), testName);
+    Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { ScriptUiTestElement("bad") with { Size = 0 } }), 1), testName);
+    Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { ScriptUiTestElement("bad") with { Size = -1 } }), 1), testName);
     Equal(false, bridge.TryAcceptSnapshot(new ScriptUiSnapshot(session, 2, new[] { ScriptUiTestElement("bad") with { AlignY = null! } }), 1), testName);
     Equal((ulong)1, bridge.Snapshot!.Revision, testName);
     ulong revision = 1;
@@ -623,7 +631,7 @@ static void BridgePacketPayloadsMatchSharedFixture()
                     new ScriptUiLengthState(null, 100, 300), new ScriptUiLengthState(20, 0, null),
                     new byte[] { 255, 0, 0, 255 }, new byte[] { 255, 255, 255, 255 },
                     new ScriptUiBorderState(2, new byte[] { 0, 255, 0, 128 }), new ScriptUiCornerState(0, 5, 0, 5),
-                    new ScriptUiPaddingState(4, 8, 4, 0), new[] { "hover", "leave", "click" }) with { BasedOn = "scene:7/Panel[0]" },
+                    new ScriptUiPaddingState(4, 8, 4, 0), new[] { "hover", "leave", "click" }) with { BasedOn = "scene:7/Panel[0]", Size = 18 },
                 new ScriptUiElementState(
                     "signal", Guid.Parse("33333333-3333-4333-8333-333333333333"), 1, "", "", "left", "center", 0, 0,
                     new ScriptUiLengthState(10, 0, null), new ScriptUiLengthState(10, 0, null),
