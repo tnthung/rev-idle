@@ -26,4 +26,4 @@
 - [x] Support typescript.
 - [x] Generate state manual when install.
 - [x] Custom UI injection with script.
-- [ ] Extend capture mode to support getting the path of other UI elements.
+- [x] Extend capture mode to support getting the path of other UI elements.

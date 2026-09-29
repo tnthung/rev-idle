@@ -17,6 +17,7 @@ use windows::Win32::{
         Threading::GetCurrentThreadId,
     },
     UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_CONTROL,
         SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_ABSOLUTE,
         MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
         MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
@@ -39,6 +40,7 @@ static CAPTURE_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
 
 const CAPTURE_MESSAGE: u32 = WM_APP + 1;
+const CAPTURE_RECT_TRANSFORM_MESSAGE: u32 = WM_APP + 4;
 const FOCUS_MESSAGE: u32 = WM_APP + 2;
 const SCRIPT_UI_MESSAGE: u32 = WM_APP + 3;
 const FOCUS_CLICK_EXTRA_INFO: usize = 0x52455646;
@@ -328,10 +330,15 @@ unsafe extern "system" fn mouse_hook(
             MouseAction::ConsumeAndNotify(point) => {
                 let thread_id = CAPTURE_THREAD_ID.load(Ordering::Acquire);
                 if thread_id != 0 {
+                    let capture_message = if (unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) } as u16 & 0x8000) != 0 {
+                        CAPTURE_RECT_TRANSFORM_MESSAGE
+                    } else {
+                        CAPTURE_MESSAGE
+                    };
                     let _ = unsafe {
                         PostThreadMessageW(
                             thread_id,
-                            CAPTURE_MESSAGE,
+                            capture_message,
                             WPARAM(point.x as u32 as usize),
                             LPARAM(point.y as isize),
                         )
@@ -350,18 +357,37 @@ fn post_quit(thread_id: u32) -> Result<(), String> {
         .map_err(|error| format!("PostThreadMessageW failed: {error}"))
 }
 
-async fn describe_capture(connection: &WsConnection, x: i32, y: i32, width: i32, height: i32, write_clipboard: impl FnOnce(&str) -> Result<(), String>) -> Vec<String> {
+async fn describe_capture(connection: &WsConnection, x: i32, y: i32, width: i32, height: i32, include_rect_transform: bool, write_clipboard: impl FnOnce(&str) -> Result<(), String>) -> Vec<String> {
     use crate::bridge::UiPathTarget;
 
-    match crate::bridge::request_ui_path(connection, x, y, width, height).await {
-        Ok(UiPathTarget { target_type: Some(target_type), path: Some(path) })
-            if target_type == "button" || target_type == "checkbox" || target_type == "input" || target_type == "slot" => {
-            if let Err(error) = write_clipboard(&path) {
-                return vec![format!("click: {x}, {y}; {target_type}: {path:?}; clipboard write failed: {error}")];
+    match crate::bridge::request_ui_path(connection, x, y, width, height, include_rect_transform).await {
+        Ok(UiPathTarget { target_type, path, rect_transform_path }) => {
+            let normal = match (target_type.as_deref(), path.as_deref()) {
+                (Some(target_type), Some(path)) if target_type == "button" || target_type == "checkbox" || target_type == "input" || target_type == "slot" =>
+                    Some((target_type, path)),
+                _ => None,
+            };
+            if include_rect_transform && let Some(rect_transform_path) = rect_transform_path {
+                if let Err(error) = write_clipboard(&rect_transform_path) {
+                    return vec![format!("click: {x}, {y}; rectTransform: {rect_transform_path:?}; clipboard write failed: {error}")];
+                }
+                let mut lines = vec![format!("click: {x}, {y}")];
+                if let Some((target_type, path)) = normal {
+                    lines[0] = format!("click: {x}, {y}; {target_type}: {path:?}");
+                }
+                lines.push(format!("rectTransform: {rect_transform_path:?}"));
+                lines.push("Copied to clipboard".to_owned());
+                return lines;
             }
-            vec![format!("click: {x}, {y}; {target_type}: {path:?}"), "Copied to clipboard".to_owned()]
+            if let Some((target_type, path)) = normal {
+                if let Err(error) = write_clipboard(path) {
+                    return vec![format!("click: {x}, {y}; {target_type}: {path:?}; clipboard write failed: {error}")];
+                }
+                vec![format!("click: {x}, {y}; {target_type}: {path:?}"), "Copied to clipboard".to_owned()]
+            } else {
+                vec![format!("click: {x}, {y}")]
+            }
         }
-        Ok(_) => vec![format!("click: {x}, {y}")],
         Err(error) => vec![format!("click: {x}, {y}; lookup failed: {error}")],
     }
 }
@@ -437,8 +463,9 @@ fn run_capture_loop<S: crate::app::ScriptCommandSink>(hook: HHOOK, connection: W
                     };
                 }
             }
-        } else if message.message == CAPTURE_MESSAGE {
+        } else if message.message == CAPTURE_MESSAGE || message.message == CAPTURE_RECT_TRANSFORM_MESSAGE {
             let _ = command_tx.blocking_send(crate::app::ScriptCommand::CaptureConsumed);
+            let include_rect_transform = message.message == CAPTURE_RECT_TRANSFORM_MESSAGE;
             let point = POINT {
                 x: message.wParam.0 as u32 as i32,
                 y: message.lParam.0 as i32,
@@ -449,7 +476,7 @@ fn run_capture_loop<S: crate::app::ScriptCommandSink>(hook: HHOOK, connection: W
             {
                 let connection = connection.clone();
                 runtime.spawn(async move {
-                    for line in describe_capture(&connection, x, y, width, height, |path| {
+                    for line in describe_capture(&connection, x, y, width, height, include_rect_transform, |path| {
                         window::WindowControl::write_clipboard(&window::Win32WindowControl, path)
                     }).await { println!("{line}"); }
                 });
@@ -717,13 +744,17 @@ mod tests {
         use std::{cell::RefCell, rc::Rc};
         use tokio_tungstenite::tungstenite::Message;
 
-        for (response_type, payload, expected, copied_path) in [
-            ("UiPathRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP"}), vec!["click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Buy DTP")),
-            ("UiPathRes", json!({"type":"slot","path":"scene:1/Canvas[0]/Slot"}), vec!["click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Slot")),
-            ("UiPathRes", json!({"type":"checkbox","path":"scene:1/Canvas[0]/Checkbox"}), vec!["click: 123, 456; checkbox: \"scene:1/Canvas[0]/Checkbox\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Checkbox")),
-            ("UiPathRes", json!({"type":"input","path":"scene:1/Canvas[0]/Input"}), vec!["click: 123, 456; input: \"scene:1/Canvas[0]/Input\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Input")),
-            ("UiPathRes", json!({"type":null,"path":null}), vec!["click: 123, 456".to_owned()], None),
-            ("RemoteError", json!({"message":"no EventSystem"}), vec!["click: 123, 456; lookup failed: Remote(\"no EventSystem\")".to_owned()], None),
+        for (include_rect_transform, response_type, payload, expected, copied_path) in [
+            (false, "UiPathRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP","rectTransformPath":null}), vec!["click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Buy DTP")),
+            (false, "UiPathRes", json!({"type":"slot","path":"scene:1/Canvas[0]/Slot","rectTransformPath":null}), vec!["click: 123, 456; slot: \"scene:1/Canvas[0]/Slot\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Slot")),
+            (false, "UiPathRes", json!({"type":"checkbox","path":"scene:1/Canvas[0]/Checkbox","rectTransformPath":null}), vec!["click: 123, 456; checkbox: \"scene:1/Canvas[0]/Checkbox\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Checkbox")),
+            (false, "UiPathRes", json!({"type":"input","path":"scene:1/Canvas[0]/Input","rectTransformPath":null}), vec!["click: 123, 456; input: \"scene:1/Canvas[0]/Input\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Input")),
+            (true, "UiPathRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP","rectTransformPath":null}), vec!["click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Buy DTP")),
+            (false, "UiPathRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP","rectTransformPath":"scene:1/Canvas[0]/Stray"}), vec!["click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Buy DTP")),
+            (true, "UiPathRes", json!({"type":"button","path":"scene:1/Canvas[0]/Buy DTP","rectTransformPath":"scene:1/Canvas[0]/Buy DTP/Text"}), vec!["click: 123, 456; button: \"scene:1/Canvas[0]/Buy DTP\"".to_owned(), "rectTransform: \"scene:1/Canvas[0]/Buy DTP/Text\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Buy DTP/Text")),
+            (true, "UiPathRes", json!({"type":null,"path":null,"rectTransformPath":"scene:1/Canvas[0]/Panel"}), vec!["click: 123, 456".to_owned(), "rectTransform: \"scene:1/Canvas[0]/Panel\"".to_owned(), "Copied to clipboard".to_owned()], Some("scene:1/Canvas[0]/Panel")),
+            (false, "UiPathRes", json!({"type":null,"path":null,"rectTransformPath":null}), vec!["click: 123, 456".to_owned()], None),
+            (false, "RemoteError", json!({"message":"no EventSystem"}), vec!["click: 123, 456; lookup failed: Remote(\"no EventSystem\")".to_owned()], None),
         ] {
             let (address, peer_rx) = raw_server().await;
             let connection = WsConnection::connect_for_test(
@@ -737,7 +768,7 @@ mod tests {
                 .unwrap();
             let copied = Rc::new(RefCell::new(None));
             let copied_for_callback = copied.clone();
-            let description = super::describe_capture(&connection, 123, 456, 1920, 1080, |path| {
+            let description = super::describe_capture(&connection, 123, 456, 1920, 1080, include_rect_transform, |path| {
                 *copied_for_callback.borrow_mut() = Some(path.to_owned());
                 Ok(())
             });
@@ -754,7 +785,7 @@ mod tests {
             .unwrap();
             let request: Value = serde_json::from_str(message.into_text().unwrap().as_ref()).unwrap();
             assert_eq!(request.get("type"), Some(&json!("UiPathReq")));
-            assert_eq!(request.get("payload"), Some(&json!({ "x": 123, "y": 456, "width": 1920, "height": 1080 })));
+            assert_eq!(request.get("payload"), Some(&json!({ "x": 123, "y": 456, "width": 1920, "height": 1080, "includeRectTransform": include_rect_transform })));
             peer.send(Message::Text(
                 json!({
                     "uuid": request["uuid"],

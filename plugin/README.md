@@ -89,7 +89,7 @@ Rendering snapshots are sent only after changes and on reconnect. Disconnected v
 
 ## Capture, invoke, and transfer UI elements
 
-Run `capture` in the client and click an element. Capture consumes one click, then turns itself off. It prints client coordinates followed by `button: "<path>"`, `checkbox: "<path>"`, `input: "<path>"`, or `slot: "<path>"`, copies a valid path to the clipboard, and prints `Copied to clipboard`. It checks buttons first, then checkboxes, input fields, and drop slots, including their parent objects. If none exists, it prints only coordinates and leaves the clipboard unchanged. Use the copied paths in scripts:
+Run `capture` in the client and click an element. Capture consumes one click, then turns itself off. It prints client coordinates followed by `button: "<path>"`, `checkbox: "<path>"`, `input: "<path>"`, or `slot: "<path>"`, copies a valid path to the clipboard, and prints `Copied to clipboard`. It checks buttons first, then checkboxes, input fields, and drop slots, including their parent objects. Hold Ctrl while clicking to also print `rectTransform: "<path>"` for the first non-overlay raycast object's own `RectTransform`; if raycasts do not expose one, it falls back to the top visible active `Graphic` under the pointer, including graphics with `raycastTarget` disabled. That path is copied to the clipboard and can be used as `basedOn` in `rev.ui.*`. Ctrl capture still returns the normal target when one exists, and returns only the RectTransform path when no whitelisted target exists. If no path exists, it prints only coordinates and leaves the clipboard unchanged. Use the copied paths in scripts:
 
 ```javascript
 await rev.invoke(buttonPath);

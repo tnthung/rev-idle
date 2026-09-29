@@ -5,8 +5,8 @@ namespace RevIdle.ScoreTelemetry;
 
 internal sealed record StateReq(IReadOnlyList<string> Keys) : IRequest<StateRes>;
 internal sealed record StateRes(JsonElement Value);
-internal sealed record UiPathReq(int X, int Y, int Width, int Height) : IRequest<UiPathRes>;
-internal sealed record UiPathRes(string? Type, string? Path);
+internal sealed record UiPathReq(int X, int Y, int Width, int Height, bool IncludeRectTransform = false) : IRequest<UiPathRes>;
+internal sealed record UiPathRes(string? Type, string? Path, string? RectTransformPath = null);
 internal sealed record InvokeReq(string Path) : IRequest<InvokeRes>;
 internal sealed record InvokeRes;
 internal sealed record ScrollIntoViewReq(string Path) : IRequest<ScrollIntoViewRes>;

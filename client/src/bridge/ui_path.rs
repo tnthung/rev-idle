@@ -5,6 +5,7 @@ pub(crate) struct UiPathTarget {
     #[serde(rename = "type")]
     pub(crate) target_type: Option<String>,
     pub(crate) path: Option<String>,
+    pub(crate) rect_transform_path: Option<String>,
 }
 
 #[cfg(test)]
@@ -33,7 +34,7 @@ mod tests {
             .unwrap();
         let request = tokio::spawn({
             let connection = connection.clone();
-            async move { request_ui_path(&connection, 123, -45, 1920, 1080).await }
+            async move { request_ui_path(&connection, 123, -45, 1920, 1080, false).await }
         });
         let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
             .await
@@ -44,7 +45,7 @@ mod tests {
         assert_eq!(envelope.get("type"), Some(&json!("UiPathReq")));
         assert_eq!(
             envelope.get("payload"),
-            Some(&json!({ "x": 123, "y": -45, "width": 1920, "height": 1080 })),
+            Some(&json!({ "x": 123, "y": -45, "width": 1920, "height": 1080, "includeRectTransform": false })),
         );
         peer.send(Message::Text(
             json!({
@@ -64,6 +65,7 @@ mod tests {
         let target = request.await.unwrap().unwrap();
         assert_eq!(target.target_type.as_deref(), Some("slot"));
         assert_eq!(target.path.as_deref(), Some("scene:1/Canvas[0]/Inventory/3"));
+        assert_eq!(target.rect_transform_path, None);
         connection.shutdown().await;
     }
 }
@@ -74,13 +76,15 @@ pub(crate) async fn request_ui_path(
     y: i32,
     width: i32,
     height: i32,
+    include_rect_transform: bool,
 ) -> Result<UiPathTarget, String> {
-    let UiPathRes { target_type, path } = connection
-        .request(UiPathReq { x, y, width, height })
+    let UiPathRes { target_type, path, rect_transform_path } = connection
+        .request(UiPathReq { x, y, width, height, include_rect_transform })
         .await
         .map_err(|error| error.to_string())?;
     Ok(UiPathTarget {
         target_type,
         path,
+        rect_transform_path,
     })
 }

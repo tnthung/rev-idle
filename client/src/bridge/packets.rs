@@ -161,6 +161,8 @@ pub(crate) struct UiPathReq {
     pub(crate) y: i32,
     pub(crate) width: i32,
     pub(crate) height: i32,
+    #[serde(rename = "includeRectTransform", default)]
+    pub(crate) include_rect_transform: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -168,6 +170,8 @@ pub(crate) struct UiPathRes {
     #[serde(rename = "type")]
     pub(crate) target_type: Option<String>,
     pub(crate) path: Option<String>,
+    #[serde(rename = "rectTransformPath", default)]
+    pub(crate) rect_transform_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -459,13 +463,14 @@ mod tests {
             ),
             (
                 UiPathReq::TYPE,
-                serde_json::to_value(UiPathReq { x: 123, y: -45, width: 1920, height: 1080 }).unwrap(),
+                serde_json::to_value(UiPathReq { x: 123, y: -45, width: 1920, height: 1080, include_rect_transform: false }).unwrap(),
             ),
             (
                 UiPathRes::TYPE,
                 serde_json::to_value(UiPathRes {
                     target_type: Some("slot".to_owned()),
                     path: Some("scene:1/Canvas[0]/Inventory/3".to_owned()),
+                    rect_transform_path: None,
                 })
                 .unwrap(),
             ),
@@ -570,9 +575,10 @@ mod tests {
             serde_json::to_value(UiPathRes {
                 target_type: None,
                 path: None,
+                rect_transform_path: None,
             })
             .unwrap(),
-            serde_json::json!({ "type": null, "path": null }),
+            serde_json::json!({ "type": null, "path": null, "rectTransformPath": null }),
         );
     }
 }

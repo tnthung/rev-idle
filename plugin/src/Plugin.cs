@@ -69,10 +69,10 @@ public sealed class Plugin : BasePlugin
             connection,
             getData,
             getWindow,
-            (window, x, y, width, height) =>
+            (window, x, y, width, height, includeRectTransform) =>
             {
-                bool success = UnityUiClickDispatcher.TryFindUiPath(x, y, width, height, out string? type, out string? path, out string error);
-                return (success, type, path, error);
+                bool success = UnityUiClickDispatcher.TryFindUiPath(x, y, width, height, includeRectTransform, out string? type, out string? path, out string? rectTransformPath, out string error);
+                return (success, type, path, rectTransformPath, error);
             },
             path =>
             {
@@ -109,7 +109,7 @@ public sealed class Plugin : BasePlugin
         WsConnection connection,
         Func<object?> getData,
         Func<nint> getWindow,
-        Func<nint, int, int, int, int, (bool Success, string? Type, string? Path, string Error)> capture,
+        Func<nint, int, int, int, int, bool, (bool Success, string? Type, string? Path, string? RectTransformPath, string Error)> capture,
         Func<string, (bool Success, string Error)> invoke,
         Func<string, string, (bool Success, string Error)> transfer,
         Func<nint, ClickCommand, (bool Success, string Error)> click,
@@ -140,10 +140,10 @@ public sealed class Plugin : BasePlugin
         connection.Handler<UiPathReq>(async (context, packet) =>
         {
             nint window = getWindow();
-            (bool success, string? type, string? path, string error) = capture(window, packet.X, packet.Y, packet.Width, packet.Height);
+            (bool success, string? type, string? path, string? rectTransformPath, string error) = capture(window, packet.X, packet.Y, packet.Width, packet.Height, packet.IncludeRectTransform);
             if (!success)
                 throw new InvalidOperationException(error);
-            await context.Send(new UiPathRes(type, path));
+            await context.Send(new UiPathRes(type, path, rectTransformPath));
         });
         connection.Handler<InvokeReq>(async (context, packet) =>
         {

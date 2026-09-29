@@ -705,7 +705,7 @@ static void BridgePacketPayloadsMatchSharedFixture()
         nameof(BridgePacketPayloadsMatchSharedFixture));
 
     Equal(
-        "{\"type\":null,\"path\":null}",
+        "{\"type\":null,\"path\":null,\"rectTransformPath\":null}",
         JsonSerializer.Serialize(new UiPathRes(null, null), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
         nameof(BridgePacketPayloadsMatchSharedFixture));
 }
@@ -819,13 +819,13 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
         Volatile.Write(ref windowThread, Environment.CurrentManagedThreadId);
         return (nint)0x1234;
     },
-    (window, x, y, width, height) =>
+    (window, x, y, width, height, includeRectTransform) =>
     {
         Volatile.Write(ref captureThread, Environment.CurrentManagedThreadId);
         captureWindow = window;
         captureX = x;
         captureY = y;
-        return (true, "slot", "captured", "");
+        return (true, "slot", "captured", includeRectTransform ? "captured/RectTransform" : null, "");
     },
     path =>
     {
@@ -852,7 +852,7 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
             server,
             peer,
             (nint)0x5678,
-            $"{{\"uuid\":\"{captureUuid}\",\"type\":\"UiPathReq\",\"payload\":{{\"x\":123,\"y\":-45,\"width\":1920,\"height\":1080}}}}",
+            $"{{\"uuid\":\"{captureUuid}\",\"type\":\"UiPathReq\",\"payload\":{{\"x\":123,\"y\":-45,\"width\":1920,\"height\":1080,\"includeRectTransform\":true}}}}",
             thread =>
             {
                 if (Volatile.Read(ref captureThread) == 0)
@@ -863,6 +863,7 @@ static async Task BridgeUiHandlersReportCorrelatedErrorsOnPumpThread()
             Equal("UiPathRes", capture.RootElement.GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
             Equal("slot", capture.RootElement.GetProperty("payload").GetProperty("type").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
             Equal("captured", capture.RootElement.GetProperty("payload").GetProperty("path").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
+            Equal("captured/RectTransform", capture.RootElement.GetProperty("payload").GetProperty("rectTransformPath").GetString(), nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
         }
         Equal(capturePumpThread, windowThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
         Equal(capturePumpThread, captureThread, nameof(BridgeUiHandlersReportCorrelatedErrorsOnPumpThread));
@@ -914,7 +915,7 @@ static async Task BridgeScrollIntoViewHandlerRespondsOnPumpThread()
     int pumpThread = 0;
     string? targetPath = null;
     Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () => 0,
-        (_, _, _, _, _) => (true, null, null, ""),
+        (_, _, _, _, _, _) => (true, null, null, null, ""),
         _ => (true, ""), (_, _) => (true, ""),
         (_, _) => (true, ""), (_, _) => (true, ""), (_, _) => (true, ""),
         scrollIntoView: path =>
@@ -957,7 +958,7 @@ static async Task BridgeInputHandlerRespondsOnPumpThread()
     string? targetPath = null;
     string? targetText = null;
     Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () => 0,
-        (_, _, _, _, _) => (true, null, null, ""),
+        (_, _, _, _, _, _) => (true, null, null, null, ""),
         _ => (true, ""), (_, _) => (true, ""),
         (_, _) => (true, ""), (_, _) => (true, ""), (_, _) => (true, ""),
         input: (path, text) =>
@@ -1006,7 +1007,7 @@ static async Task BridgeSlotHandlerReturnsDataNullAndErrorsOnPumpThread()
     int handlerThread = 0;
     int pumpThread = 0;
     Plugin.RegisterHandlers(server, () => new BridgeStateFixture(), () => 0,
-        (_, _, _, _, _) => (true, null, null, ""),
+        (_, _, _, _, _, _) => (true, null, null, null, ""),
         _ => (true, ""), (_, _) => (true, ""),
         (_, _) => (true, ""), (_, _) => (true, ""), (_, _) => (true, ""),
         slot: path =>
@@ -1904,7 +1905,7 @@ static async Task BridgeInputHandlersRunOnPumpThread()
         server,
         () => new BridgeStateFixture(),
         () => 0,
-        (window, x, y, width, height) => (true, null, null, ""),
+        (window, x, y, width, height, includeRectTransform) => (true, null, null, null, ""),
         path => (true, ""),
         (source, destination) => (true, ""),
         (window, command) =>

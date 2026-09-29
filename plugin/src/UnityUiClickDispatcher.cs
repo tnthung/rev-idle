@@ -128,10 +128,11 @@ internal static class UnityUiClickDispatcher
         return true;
     }
 
-    internal static bool TryFindUiPath(int x, int y, int width, int height, out string? type, out string? path, out string result)
+    internal static bool TryFindUiPath(int x, int y, int width, int height, bool includeRectTransform, out string? type, out string? path, out string? rectTransformPath, out string result)
     {
         type = null;
         path = null;
+        rectTransformPath = null;
         if (!TryMapToUnity(x, y, width, height, Screen.width, Screen.height, out float unityX, out float unityY))
         {
             result = $"invalid bounds at ({x}, {y})";
@@ -148,6 +149,61 @@ internal static class UnityUiClickDispatcher
         var pointerData = new PointerEventData(eventSystem) { position = new Vector2(unityX, unityY) };
         var raycasts = new Il2CppSystem.Collections.Generic.List<RaycastResult>();
         eventSystem.RaycastAll(pointerData, raycasts);
+        bool IsPluginOverlay(GameObject target)
+        {
+            for (Transform? current = target.transform; current is not null; current = current.parent)
+            {
+                if (current.name == "RevIdle Script Controls" || current.name == "RevIdle Script UI")
+                    return true;
+            }
+            return false;
+        }
+
+        string? FindTopGraphicPath(Vector2 screenPoint)
+        {
+            int bestRenderOrder = int.MinValue;
+            int bestDepth = int.MinValue;
+            string? bestPath = null;
+            foreach (Graphic graphic in Resources.FindObjectsOfTypeAll<Graphic>())
+            {
+                Canvas? canvas = graphic.canvas;
+                Canvas? rootCanvas = canvas?.rootCanvas;
+                if (canvas is null || rootCanvas is null || !graphic.gameObject.scene.IsValid() || !canvas.isActiveAndEnabled ||
+                    !rootCanvas.isActiveAndEnabled || IsPluginOverlay(rootCanvas.gameObject) || !graphic.isActiveAndEnabled ||
+                    !graphic.gameObject.activeInHierarchy || IsPluginOverlay(graphic.gameObject) || graphic.canvasRenderer.cull ||
+                    graphic.canvasRenderer.GetInheritedAlpha() <= 0f)
+                    continue;
+                Camera? camera = rootCanvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : rootCanvas.worldCamera;
+                if (rootCanvas.renderMode != RenderMode.ScreenSpaceOverlay && camera is null)
+                    continue;
+                if (!RectTransformUtility.RectangleContainsScreenPoint(graphic.rectTransform, screenPoint, camera) ||
+                    !graphic.Raycast(screenPoint, camera))
+                    continue;
+                string graphicPath = GetPath(graphic.gameObject);
+                if (bestPath is null || rootCanvas.renderOrder > bestRenderOrder ||
+                    rootCanvas.renderOrder == bestRenderOrder && (graphic.depth > bestDepth ||
+                    graphic.depth == bestDepth && string.CompareOrdinal(graphicPath, bestPath) > 0))
+                {
+                    bestRenderOrder = rootCanvas.renderOrder;
+                    bestDepth = graphic.depth;
+                    bestPath = graphicPath;
+                }
+            }
+            return bestPath;
+        }
+
+        if (includeRectTransform)
+        {
+            for (int index = 0; index < raycasts.Count; index++)
+            {
+                GameObject? candidate = raycasts[index].gameObject;
+                if (candidate is null || IsPluginOverlay(candidate) || candidate.GetComponent<RectTransform>() is null)
+                    continue;
+                rectTransformPath = GetPath(candidate);
+                break;
+            }
+            rectTransformPath ??= FindTopGraphicPath(new Vector2(unityX, unityY));
+        }
         for (int index = 0; index < raycasts.Count; index++)
         {
             GameObject? candidate = raycasts[index].gameObject;
