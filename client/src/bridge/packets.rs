@@ -18,6 +18,8 @@ pub(crate) struct ScriptUiElementState {
     pub(crate) id: String,
     pub(crate) instance_id: Uuid,
     pub(crate) events_version: u64,
+    #[serde(default)]
+    pub(crate) hidden: bool,
     pub(crate) text: String,
     pub(crate) font: String,
     pub(crate) align_x: String,
@@ -409,6 +411,15 @@ mod tests {
             let pointer: ScriptUiPointer = serde_json::from_value(fixture[key].clone()).unwrap();
             assert_eq!(serde_json::to_value(pointer).unwrap(), fixture[key]);
         }
+    }
+
+    #[test]
+    fn script_ui_hidden_defaults_false_when_omitted() {
+        let fixture: Value = serde_json::from_str(include_str!("../../../protocol/fixtures/bridge-packets.json")).unwrap();
+        let mut element = fixture["ScriptUiSnapshot"]["elements"][0].clone();
+        element.as_object_mut().unwrap().remove("hidden");
+        let element: ScriptUiElementState = serde_json::from_value(element).unwrap();
+        assert_eq!(serde_json::to_value(element).unwrap()["hidden"], false);
     }
 
     #[test]

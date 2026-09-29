@@ -196,6 +196,7 @@ static void ScriptUiSnapshotValidatesAlignmentAndClonesState()
     {
         AlignX = "right",
         AlignY = "bottom",
+        Hidden = true,
         Font = "Consolas",
         TextColor = new byte[] { 1, 2, 3, 4 },
         Events = new[] { "click" }
@@ -206,6 +207,7 @@ static void ScriptUiSnapshotValidatesAlignmentAndClonesState()
     ScriptUiElementState cloned = bridge.Snapshot!.Elements[0];
     Equal("right", cloned.AlignX, testName);
     Equal("bottom", cloned.AlignY, testName);
+    Equal(true, cloned.Hidden, testName);
     Equal("Consolas", cloned.Font, testName);
     Equal((byte)1, cloned.TextColor[0], testName);
     Equal("click", cloned.Events[0], testName);

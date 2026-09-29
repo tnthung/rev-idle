@@ -418,7 +418,7 @@ mod tests {
         let session = ScriptSession::new_with_connection_and_control(
             r#"
                 export default async function() {
-                    rev.ui.a = { text: 'initial', padding: { thickness: 3 }, border: { thickness: 9 } };
+                    rev.ui.a = { text: 'initial', hidden: true, padding: { thickness: 3 }, border: { thickness: 9 } };
                     rev.ui.a.text = 'updated';
                     const original = rev.ui.a;
                     if (await original.width() !== 123.5 || await original.height() !== 27.25)
@@ -493,6 +493,30 @@ mod tests {
             assert(snapshots.length === resetCount);
             ui.b = { text: 'named', font: 'Noto Sans CJK TC' };
             assert(snapshots.at(-1)[1].font === 'Noto Sans CJK TC');
+        "#);
+    }
+
+    #[test]
+    fn ui_registry_hidden_defaults_updates_and_remains_reactive() {
+        check(r#"
+            ui.a = { text: 'visible', onClick() {} };
+            const original = ui.a, first = snapshots.at(-1)[0];
+            assert(ui.a.hidden === false && first.hidden === false);
+            ui.a.hidden = true;
+            assert(ui.a === original && ui.a.hidden === true && snapshots.at(-1)[0].hidden === true);
+            ui.a.text = 'updated while hidden';
+            assert(ui.a === original && snapshots.at(-1)[0].hidden === true && snapshots.at(-1)[0].text === 'updated while hidden');
+            const count = snapshots.length;
+            ui.a.hidden = true;
+            for (const value of [null, undefined, 0, 1, '', {}, [], new Boolean(true)]) {
+                throws(() => ui.a.hidden = value);
+                throws(() => ui.b = { hidden: value });
+            }
+            assert(ui.a === original && ui.a.hidden === true && snapshots.length === count);
+            delete ui.a.hidden;
+            assert(ui.a.hidden === false && snapshots.at(-1)[0].hidden === false);
+            ui.b = { hidden: true };
+            assert(ui.b.hidden === true && snapshots.at(-1)[1].hidden === true);
         "#);
     }
 

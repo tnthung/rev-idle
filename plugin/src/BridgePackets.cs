@@ -67,7 +67,8 @@ internal sealed record ScriptUiElementState(
     ScriptUiBorderState Border,
     ScriptUiCornerState Corner,
     ScriptUiPaddingState Padding,
-    string[] Events);
+    string[] Events,
+    bool Hidden = false);
 internal sealed record ScriptUiSnapshot(Guid? SessionId, ulong Revision, ScriptUiElementState[] Elements);
 internal sealed record ScriptUiEvent(Guid SessionId, string ElementId, Guid InstanceId, ulong EventsVersion, string Event);
 internal sealed record ScriptUiPointer(Guid SessionId, ulong PressId, string Phase, int X, int Y, int Width, int Height);

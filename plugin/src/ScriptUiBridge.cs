@@ -358,7 +358,8 @@ internal sealed class ScriptUiBridge
                 new ScriptUiBorderState(element.Border.Thickness, element.Border.Color.ToArray()),
                 new ScriptUiCornerState(element.Corner.TopLeft, element.Corner.TopRight, element.Corner.BottomLeft, element.Corner.BottomRight),
                 new ScriptUiPaddingState(element.Padding.Top, element.Padding.Right, element.Padding.Bottom, element.Padding.Left),
-                element.Events.ToArray())).ToArray());
+                element.Events.ToArray(),
+                element.Hidden)).ToArray());
 
     private static string? Validate(ScriptUiSnapshot? snapshot)
     {

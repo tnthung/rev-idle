@@ -33,7 +33,7 @@
     "sessionId": "11111111-1111-4111-8111-111111111111", "revision": 7,
     "elements": [
       {
-        "id": "button", "instanceId": "22222222-2222-4222-8222-222222222222", "eventsVersion": 2,
+        "id": "button", "instanceId": "22222222-2222-4222-8222-222222222222", "eventsVersion": 2, "hidden": false,
         "text": "Click Me", "font": "Consolas", "alignX": "left", "alignY": "center", "posX": 100.0, "posY": -100.0,
         "lenX": { "fixed": null, "min": 100.0, "max": 300.0 }, "lenY": { "fixed": 20.0, "min": 0.0, "max": null },
         "color": [255, 0, 0, 255], "textColor": [255, 255, 255, 255],
@@ -43,7 +43,7 @@
         "events": ["hover", "leave", "click"]
       },
       {
-        "id": "signal", "instanceId": "33333333-3333-4333-8333-333333333333", "eventsVersion": 1,
+        "id": "signal", "instanceId": "33333333-3333-4333-8333-333333333333", "eventsVersion": 1, "hidden": false,
         "text": "", "font": "", "alignX": "left", "alignY": "center", "posX": 0.0, "posY": 0.0,
         "lenX": { "fixed": 10.0, "min": 0.0, "max": null }, "lenY": { "fixed": 10.0, "min": 0.0, "max": null },
         "color": [0, 255, 0, 255], "textColor": [255, 255, 255, 255],

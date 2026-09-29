@@ -771,7 +771,7 @@ internal sealed class ScriptUiOverlay : IDisposable
         internal string StateId => _state.Id;
         internal ulong EventsVersion => _state.EventsVersion;
         internal ScriptUiLayout Layout { get; private set; }
-        internal bool HasEvents => _state.Events is { Length: > 0 };
+        internal bool HasEvents => !_state.Hidden && _state.Events is { Length: > 0 };
 
         internal void Apply(ScriptUiElementState state, int viewportWidth, int viewportHeight, ScriptUiTextMeasurement measuredText, Font font)
         {
@@ -801,7 +801,7 @@ internal sealed class ScriptUiOverlay : IDisposable
             _fill.color = new Color32(state.Color[0], state.Color[1], state.Color[2], state.Color[3]);
             _outline.color = new Color32(state.Border.Color[0], state.Border.Color[1], state.Border.Color[2], state.Border.Color[3]);
             _text.gameObject.SetActive(Layout.Content.width > 0 && Layout.Content.height > measuredText.Top + measuredText.Bottom && state.Text.Length > 0);
-            _object.SetActive(Layout.Box.width > 0 && Layout.Box.height > 0);
+            _object.SetActive(!state.Hidden && Layout.Box.width > 0 && Layout.Box.height > 0);
             _background.SetGeometry(new ScriptUiRect(0, 0, Layout.Box.width, Layout.Box.height), Layout.Radii);
             _outline.SetGeometry(new ScriptUiRect(0, 0, Layout.Outline.width, Layout.Outline.height), Layout.OutlineRadii, new ScriptUiRect(Layout.BorderThickness, Layout.BorderThickness, Layout.Box.width, Layout.Box.height), Layout.Radii);
             UpdateTransforms(viewportWidth, viewportHeight);
@@ -818,7 +818,7 @@ internal sealed class ScriptUiOverlay : IDisposable
             if (_disposed)
                 return;
             Layout = ScriptUiGeometry.Calculate(_state, viewportWidth, viewportHeight, _measuredText.Width, _measuredText.Height);
-            _object.SetActive(Layout.Box.width > 0 && Layout.Box.height > 0);
+            _object.SetActive(!_state.Hidden && Layout.Box.width > 0 && Layout.Box.height > 0);
             _background.SetGeometry(new ScriptUiRect(0, 0, Layout.Box.width, Layout.Box.height), Layout.Radii);
             _outline.SetGeometry(new ScriptUiRect(0, 0, Layout.Outline.width, Layout.Outline.height), Layout.OutlineRadii, new ScriptUiRect(Layout.BorderThickness, Layout.BorderThickness, Layout.Box.width, Layout.Box.height), Layout.Radii);
             UpdateTransforms(viewportWidth, viewportHeight);
