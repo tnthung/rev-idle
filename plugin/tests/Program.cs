@@ -48,6 +48,7 @@ ScriptUiSnapshotReplacesAtomically();
 ScriptUiSnapshotValidatesAlignmentAndClonesState();
 ScriptUiDisconnectRetainsVisualStateButDisablesEvents();
 ScriptUiLayoutUsesViewportAnchorsAndPadding();
+ScriptUiLayoutUsesMountedParentAnchors();
 ScriptUiOutlineAndCornerGeometry();
 ScriptUiPaddingLayout();
 ScriptUiTextMeasurementIncludesGlyphOverhang();
@@ -266,6 +267,22 @@ static void ScriptUiLayoutUsesViewportAnchorsAndPadding()
     Equal(140f, layout.Box.width, testName);
 }
 
+static void ScriptUiLayoutUsesMountedParentAnchors()
+{
+    const string testName = nameof(ScriptUiLayoutUsesMountedParentAnchors);
+    ScriptUiElementState element = ScriptUiTestElement("mounted") with
+    {
+        BasedOn = "scene:1/Panel[0]",
+        PosX = -10,
+        PosY = -5,
+        LenX = new ScriptUiLengthState(40, 0, null),
+        LenY = new ScriptUiLengthState(20, 0, null)
+    };
+    ScriptUiLayout layout = ScriptUiGeometry.Calculate(element, 1920, 1080, 0, 0, new ScriptUiRect(100, 200, 300, 150));
+    Equal(350f, layout.Box.xMin, testName);
+    Equal(325f, layout.Box.yMin, testName);
+}
+
 static void ScriptUiOutlineAndCornerGeometry()
 {
     const string testName = nameof(ScriptUiOutlineAndCornerGeometry);
@@ -442,7 +459,7 @@ static async Task ScriptUiMeasurementQueueWaitsForAppliedSnapshot()
     queue.Flush(3, new ScriptUiSnapshot(session, 7, new[] { ScriptUiTestElement("button") with { InstanceId = instance } }), null);
     Equal(false, result.IsCompleted, testName);
     queue.Flush(3, new ScriptUiSnapshot(session, 8, new[] { ScriptUiTestElement("button") with { InstanceId = instance } }),
-        _ => new ScriptUiMeasureRes(123.5, 27.25));
+        _ => new ScriptUiMeasureRes(123.5, 27.25, null, null));
     ScriptUiMeasureRes measured = await result;
     Equal(123.5, measured.Width, testName);
     Equal(27.25, measured.Height, testName);
@@ -480,7 +497,7 @@ static async Task ScriptUiMeasurementQueueRemovesCancelledRequest()
     await ThrowsAsync<TaskCanceledException>(() => Task.WhenAll(pending), testName);
     queue.Flush(3, null, _ => throw new Exception("A cancelled request must not be measured."));
     Task<ScriptUiMeasureRes> result = queue.Enqueue(new ScriptUiMeasureReq(session, 7, "button", instance), 3, CancellationToken.None);
-    queue.Flush(3, new ScriptUiSnapshot(session, 7, new[] { ScriptUiTestElement("button") with { InstanceId = instance } }), _ => new ScriptUiMeasureRes(1, 2));
+    queue.Flush(3, new ScriptUiSnapshot(session, 7, new[] { ScriptUiTestElement("button") with { InstanceId = instance } }), _ => new ScriptUiMeasureRes(1, 2, null, null));
     Equal(2d, (await result).Height, testName);
 }
 
@@ -512,7 +529,9 @@ static ScriptUiElementState ScriptUiTestElement(string id)
         new ScriptUiBorderState(0, new byte[] { 255, 255, 255, 255 }),
         new ScriptUiCornerState(0, 0, 0, 0),
         new ScriptUiPaddingState(0, 0, 0, 0),
-        Array.Empty<string>());
+        Array.Empty<string>(),
+        false,
+        "");
 
 static void ClientProcessBuildsNonInteractableLaunchArguments()
 {
@@ -604,7 +623,7 @@ static void BridgePacketPayloadsMatchSharedFixture()
                     new ScriptUiLengthState(null, 100, 300), new ScriptUiLengthState(20, 0, null),
                     new byte[] { 255, 0, 0, 255 }, new byte[] { 255, 255, 255, 255 },
                     new ScriptUiBorderState(2, new byte[] { 0, 255, 0, 128 }), new ScriptUiCornerState(0, 5, 0, 5),
-                    new ScriptUiPaddingState(4, 8, 4, 0), new[] { "hover", "leave", "click" }),
+                    new ScriptUiPaddingState(4, 8, 4, 0), new[] { "hover", "leave", "click" }) with { BasedOn = "scene:7/Panel[0]" },
                 new ScriptUiElementState(
                     "signal", Guid.Parse("33333333-3333-4333-8333-333333333333"), 1, "", "", "left", "center", 0, 0,
                     new ScriptUiLengthState(10, 0, null), new ScriptUiLengthState(10, 0, null),
@@ -618,7 +637,7 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("ScriptUiMeasureReq", new ScriptUiMeasureReq(
             Guid.Parse("11111111-1111-4111-8111-111111111111"), 7, "button",
             Guid.Parse("22222222-2222-4222-8222-222222222222"))),
-        ("ScriptUiMeasureRes", new ScriptUiMeasureRes(123.5, 27.25)),
+        ("ScriptUiMeasureRes", new ScriptUiMeasureRes(123.5, 27.25, 321.5, 654.25)),
         ("ScriptUiPointer", new ScriptUiPointer(
             Guid.Parse("11111111-1111-4111-8111-111111111111"), 3, "down", 110, 965, 1920, 1080)),
         ("ScriptUiPointerUp", new ScriptUiPointer(

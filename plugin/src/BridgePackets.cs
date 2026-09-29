@@ -68,12 +68,13 @@ internal sealed record ScriptUiElementState(
     ScriptUiCornerState Corner,
     ScriptUiPaddingState Padding,
     string[] Events,
-    bool Hidden = false);
+    bool Hidden = false,
+    string BasedOn = "");
 internal sealed record ScriptUiSnapshot(Guid? SessionId, ulong Revision, ScriptUiElementState[] Elements);
 internal sealed record ScriptUiEvent(Guid SessionId, string ElementId, Guid InstanceId, ulong EventsVersion, string Event);
 internal sealed record ScriptUiPointer(Guid SessionId, ulong PressId, string Phase, int X, int Y, int Width, int Height);
 internal sealed record ScriptUiMeasureReq(Guid SessionId, ulong Revision, string ElementId, Guid InstanceId) : IRequest<ScriptUiMeasureRes>;
-internal sealed record ScriptUiMeasureRes(double Width, double Height);
+internal sealed record ScriptUiMeasureRes(double Width, double Height, double? GlobalX, double? GlobalY);
 
 internal sealed class ScriptUiColorConverter : JsonConverter<byte[]>
 {

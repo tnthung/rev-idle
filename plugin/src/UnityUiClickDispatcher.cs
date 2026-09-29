@@ -389,7 +389,7 @@ internal static class UnityUiClickDispatcher
         return $"scene:{target.scene.handle}/{path}";
     }
 
-    private static GameObject? FindByPath(string path)
+    internal static GameObject? FindByPath(string path)
     {
         if (!TryParseHierarchyPath(path, out int sceneHandle, out (string Name, int SiblingIndex)[] segments))
             return null;

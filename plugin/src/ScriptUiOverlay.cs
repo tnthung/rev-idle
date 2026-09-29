@@ -86,7 +86,8 @@ internal static class ScriptUiGeometry
         float viewportWidth,
         float viewportHeight,
         float measuredTextWidth,
-        float measuredTextHeight)
+        float measuredTextHeight,
+        ScriptUiRect? anchor = null)
     {
         float leftPadding = (float)element.Padding.Left;
         float rightPadding = (float)element.Padding.Right;
@@ -94,8 +95,9 @@ internal static class ScriptUiGeometry
         float bottomPadding = (float)element.Padding.Bottom;
         float width = ResolveLength(element.LenX, MathF.Max(0, measuredTextWidth) + leftPadding + rightPadding);
         float height = ResolveLength(element.LenY, MathF.Max(0, measuredTextHeight) + topPadding + bottomPadding);
-        float left = Limit(element.PosX >= 0 ? (double)element.PosX : viewportWidth + element.PosX - width);
-        float top = Limit(element.PosY >= 0 ? (double)element.PosY : viewportHeight + element.PosY - height);
+        ScriptUiRect parent = anchor ?? new ScriptUiRect(0, 0, viewportWidth, viewportHeight);
+        float left = Limit(element.PosX >= 0 ? parent.xMin + element.PosX : parent.xMax + element.PosX - width);
+        float top = Limit(element.PosY >= 0 ? parent.yMin + element.PosY : parent.yMax + element.PosY - height);
         ScriptUiRect box = new(left, top, width, height);
         float half = MathF.Min(width, height) / 2;
         ScriptUiRadii radii = new(
@@ -447,7 +449,11 @@ internal sealed class ScriptUiOverlay : IDisposable
                 _byInstance[element.InstanceId] = view;
             }
             view.SetSession(sessionId);
-            view.Apply(element, width, height, measurements[index], fonts[index]!);
+            ScriptUiRect? anchor = string.IsNullOrEmpty(element.BasedOn) ? null : TryGetMountedAnchor(element.BasedOn);
+            view.Apply(element, width, height, measurements[index], fonts[index]!, anchor);
+            if (!view.Accessible)
+                foreach (ulong pressId in _pressed.Where(item => item.Value.InstanceId == view.InstanceId).Select(item => item.Key).ToArray())
+                    _pressed.Remove(pressId);
             view.SetEventsEnabled(_eventsEnabled);
             view.Root.transform.SetSiblingIndex(index);
             retained.Add(element.InstanceId);
@@ -481,7 +487,7 @@ internal sealed class ScriptUiOverlay : IDisposable
             return null;
         if (!_byInstance.TryGetValue(request.InstanceId, out ElementView? view) || view.StateId != request.ElementId)
             return null;
-        return new ScriptUiMeasureRes(view.Layout.Box.width, view.Layout.Box.height);
+        return new ScriptUiMeasureRes(view.Layout.Box.width, view.Layout.Box.height, view.Accessible ? view.Layout.Box.xMin : null, view.Accessible ? view.Layout.Box.yMin : null);
     }
 
     internal bool HandlePointer(ScriptUiPointer pointer)
@@ -505,7 +511,12 @@ internal sealed class ScriptUiOverlay : IDisposable
             _viewportWidth = viewportWidth;
             _viewportHeight = viewportHeight;
             foreach (ElementView view in _elements)
+            {
                 view.Reflow(_viewportWidth, _viewportHeight);
+                if (!view.Accessible)
+                    foreach (ulong pressId in _pressed.Where(item => item.Value.InstanceId == view.InstanceId).Select(item => item.Key).ToArray())
+                        _pressed.Remove(pressId);
+            }
         }
         if (pointer.Phase is not ("down" or "up"))
             return false;
@@ -548,6 +559,40 @@ internal sealed class ScriptUiOverlay : IDisposable
                 return view;
         }
         return null;
+    }
+
+    private static ScriptUiRect? TryGetMountedAnchor(string path)
+    {
+        GameObject? target = UnityUiClickDispatcher.FindByPath(path);
+        RectTransform? rect = target?.GetComponent<RectTransform>();
+        if (target is null || rect is null || !target.activeInHierarchy)
+            return null;
+        Canvas? canvas = rect.GetComponentInParent<Canvas>()?.rootCanvas;
+        if (canvas is null)
+            return null;
+        Camera? camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
+        if (canvas.renderMode != RenderMode.ScreenSpaceOverlay && camera is null)
+            return null;
+        var corners = new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppStructArray<Vector3>(4);
+        rect.GetWorldCorners(corners);
+        Vector3 first = RectTransformUtility.WorldToScreenPoint(camera, corners[0]);
+        float xMin = first.x;
+        float xMax = first.x;
+        float yMin = Screen.height - first.y;
+        float yMax = yMin;
+        for (int index = 1; index < corners.Length; index++)
+        {
+            Vector3 screen = RectTransformUtility.WorldToScreenPoint(camera, corners[index]);
+            float x = screen.x;
+            float y = Screen.height - screen.y;
+            xMin = MathF.Min(xMin, x);
+            xMax = MathF.Max(xMax, x);
+            yMin = MathF.Min(yMin, y);
+            yMax = MathF.Max(yMax, y);
+        }
+        if (!float.IsFinite(xMin) || !float.IsFinite(xMax) || !float.IsFinite(yMin) || !float.IsFinite(yMax) || xMax <= xMin || yMax <= yMin)
+            return null;
+        return new ScriptUiRect(xMin, yMin, xMax - xMin, yMax - yMin);
     }
 
     private Font? ResolveFont(string requested)
@@ -700,6 +745,7 @@ internal sealed class ScriptUiOverlay : IDisposable
         private readonly EventTrigger _trigger;
         private ScriptUiElementState _state = null!;
         private ScriptUiTextMeasurement _measuredText;
+        private ScriptUiRect? _anchor;
         private bool _eventsEnabled;
         private bool _nativePressed;
         private bool _nativeInside;
@@ -771,16 +817,19 @@ internal sealed class ScriptUiOverlay : IDisposable
         internal string StateId => _state.Id;
         internal ulong EventsVersion => _state.EventsVersion;
         internal ScriptUiLayout Layout { get; private set; }
-        internal bool HasEvents => !_state.Hidden && _state.Events is { Length: > 0 };
+        internal bool Accessible { get; private set; } = true;
+        internal bool HasEvents => Accessible && !_state.Hidden && _state.Events is { Length: > 0 };
 
-        internal void Apply(ScriptUiElementState state, int viewportWidth, int viewportHeight, ScriptUiTextMeasurement measuredText, Font font)
+        internal void Apply(ScriptUiElementState state, int viewportWidth, int viewportHeight, ScriptUiTextMeasurement measuredText, Font font, ScriptUiRect? anchor)
         {
             bool eventsChanged = _state is null ||
                 _state.EventsVersion != state.EventsVersion ||
                 !_state.Events.SequenceEqual(state.Events);
             _state = state;
             _measuredText = measuredText;
-            Layout = ScriptUiGeometry.Calculate(state, viewportWidth, viewportHeight, measuredText.Width, measuredText.Height);
+            _anchor = anchor;
+            Accessible = string.IsNullOrEmpty(state.BasedOn) || anchor is not null;
+            Layout = ScriptUiGeometry.Calculate(state, viewportWidth, viewportHeight, measuredText.Width, measuredText.Height, _anchor);
             _text.text = state.Text;
             _text.font = font;
             _text.alignment = (state.AlignX, state.AlignY) switch
@@ -801,7 +850,7 @@ internal sealed class ScriptUiOverlay : IDisposable
             _fill.color = new Color32(state.Color[0], state.Color[1], state.Color[2], state.Color[3]);
             _outline.color = new Color32(state.Border.Color[0], state.Border.Color[1], state.Border.Color[2], state.Border.Color[3]);
             _text.gameObject.SetActive(Layout.Content.width > 0 && Layout.Content.height > measuredText.Top + measuredText.Bottom && state.Text.Length > 0);
-            _object.SetActive(!state.Hidden && Layout.Box.width > 0 && Layout.Box.height > 0);
+            _object.SetActive(Accessible && !state.Hidden && Layout.Box.width > 0 && Layout.Box.height > 0);
             _background.SetGeometry(new ScriptUiRect(0, 0, Layout.Box.width, Layout.Box.height), Layout.Radii);
             _outline.SetGeometry(new ScriptUiRect(0, 0, Layout.Outline.width, Layout.Outline.height), Layout.OutlineRadii, new ScriptUiRect(Layout.BorderThickness, Layout.BorderThickness, Layout.Box.width, Layout.Box.height), Layout.Radii);
             UpdateTransforms(viewportWidth, viewportHeight);
@@ -817,11 +866,14 @@ internal sealed class ScriptUiOverlay : IDisposable
         {
             if (_disposed)
                 return;
-            Layout = ScriptUiGeometry.Calculate(_state, viewportWidth, viewportHeight, _measuredText.Width, _measuredText.Height);
-            _object.SetActive(!_state.Hidden && Layout.Box.width > 0 && Layout.Box.height > 0);
+            _anchor = string.IsNullOrEmpty(_state.BasedOn) ? null : TryGetMountedAnchor(_state.BasedOn);
+            Accessible = string.IsNullOrEmpty(_state.BasedOn) || _anchor is not null;
+            Layout = ScriptUiGeometry.Calculate(_state, viewportWidth, viewportHeight, _measuredText.Width, _measuredText.Height, _anchor);
+            _object.SetActive(Accessible && !_state.Hidden && Layout.Box.width > 0 && Layout.Box.height > 0);
             _background.SetGeometry(new ScriptUiRect(0, 0, Layout.Box.width, Layout.Box.height), Layout.Radii);
             _outline.SetGeometry(new ScriptUiRect(0, 0, Layout.Outline.width, Layout.Outline.height), Layout.OutlineRadii, new ScriptUiRect(Layout.BorderThickness, Layout.BorderThickness, Layout.Box.width, Layout.Box.height), Layout.Radii);
             UpdateTransforms(viewportWidth, viewportHeight);
+            SetEventsEnabled(_eventsEnabled);
         }
 
         internal bool HasEvent(string name)

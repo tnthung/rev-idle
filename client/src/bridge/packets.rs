@@ -20,6 +20,8 @@ pub(crate) struct ScriptUiElementState {
     pub(crate) events_version: u64,
     #[serde(default)]
     pub(crate) hidden: bool,
+    #[serde(default)]
+    pub(crate) based_on: String,
     pub(crate) text: String,
     pub(crate) font: String,
     pub(crate) align_x: String,
@@ -121,10 +123,14 @@ pub(crate) struct ScriptUiMeasureReq {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ScriptUiMeasureRes {
     pub(crate) width: f64,
     pub(crate) height: f64,
+    #[serde(default)]
+    pub(crate) global_x: Option<f64>,
+    #[serde(default)]
+    pub(crate) global_y: Option<f64>,
 }
 
 impl Packet for ScriptUiMeasureReq {
@@ -395,6 +401,7 @@ mod tests {
         let fixture: Value = serde_json::from_str(include_str!("../../../protocol/fixtures/bridge-packets.json")).unwrap();
         let snapshot: ScriptUiSnapshot = serde_json::from_value(fixture["ScriptUiSnapshot"].clone()).unwrap();
         assert_eq!(snapshot.elements[0].padding.right, 8.0);
+        assert_eq!(snapshot.elements[0].based_on, "scene:7/Panel[0]");
         assert_eq!(snapshot.elements[0].corner.top_left, 0.0);
         assert_eq!(snapshot.elements[0].border.color, [0, 255, 0, 128]);
         assert_eq!(serde_json::to_value(snapshot).unwrap(), fixture["ScriptUiSnapshot"]);
@@ -406,6 +413,8 @@ mod tests {
         let measure: ScriptUiMeasureReq = serde_json::from_value(fixture["ScriptUiMeasureReq"].clone()).unwrap();
         assert_eq!(serde_json::to_value(measure).unwrap(), fixture["ScriptUiMeasureReq"]);
         let measured: ScriptUiMeasureRes = serde_json::from_value(fixture["ScriptUiMeasureRes"].clone()).unwrap();
+        assert_eq!(measured.global_x, Some(321.5));
+        assert_eq!(measured.global_y, Some(654.25));
         assert_eq!(serde_json::to_value(measured).unwrap(), fixture["ScriptUiMeasureRes"]);
         for key in ["ScriptUiPointer", "ScriptUiPointerUp"] {
             let pointer: ScriptUiPointer = serde_json::from_value(fixture[key].clone()).unwrap();
