@@ -25,4 +25,5 @@
 - [x] Click on mask should bring the game to foreground.
 - [x] Support typescript.
 - [x] Generate state manual when install.
-- [ ] Custom UI injection with script.
+- [x] Custom UI injection with script.
+- [ ] Extend capture mode to support getting the path of other UI elements.
