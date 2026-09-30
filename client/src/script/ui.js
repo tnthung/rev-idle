@@ -1,6 +1,6 @@
 (function (host) {
     // Capture host machinery before the user module can change this realm.
-    const { create, keys, hasOwn, freeze } = Object;
+    const { create, keys, hasOwn, freeze, setPrototypeOf } = Object;
     const { ownKeys } = Reflect;
     const { isFinite, isInteger } = Number;
     const { isArray } = Array;
@@ -178,16 +178,16 @@
             if (callback === null) {
                 host.handlerClear(name, instance, event);
                 delete elementCallbacks[event];
-                return undefined;
+                return proxy;
             }
             const previous = elementCallbacks[event];
             if (previous !== undefined && previous.callback === callback) {
                 const status = host.handlerStatus(previous.registration);
-                if (status === 'pending' || status === 'active') return undefined;
+                if (status === 'pending' || status === 'active') return proxy;
             }
             const registration = host.handlerRegister(name, instance, event, callback);
             elementCallbacks[event] = { callback, registration };
-            return undefined;
+            return proxy;
         };
         eventMethods.setOnClick = method('click');
         eventMethods.setOnHover = method('hover');
@@ -255,7 +255,10 @@
         return proxy;
     }
 
-    const registry = new NativeProxy(create(null), {
+    const registry = new NativeProxy(setPrototypeOf((name, definition) => {
+        if (typeof name !== 'string' || name.length === 0) throw new NativeTypeError('UI names must be nonempty strings');
+        return elementProxy(name, host.define(name, prepareDefinition(definition)));
+    }, null), {
         get(_, key) {
             if (typeof key !== 'string') return undefined;
             const instance = host.lookup(key);
@@ -266,14 +269,9 @@
         getOwnPropertyDescriptor(_, key) {
             if (typeof key !== 'string') return undefined;
             const instance = host.lookup(key);
-            return instance === undefined ? undefined : { configurable: true, enumerable: true, writable: true, value: elementProxy(key, instance) };
+            return instance === undefined ? undefined : { configurable: true, enumerable: true, writable: false, value: elementProxy(key, instance) };
         },
-        set(_, key, definition) {
-            if (typeof key !== 'string' || key.length === 0) throw new NativeTypeError('UI names must be nonempty strings');
-            const instance = host.define(key, prepareDefinition(definition));
-            elementProxy(key, instance);
-            return true;
-        },
+        set() { throw new NativeTypeError('Create or update UI elements with rev.ui(name, attributes)'); },
         deleteProperty(_, key) {
             ensureLive();
             if (typeof key === 'string') host.remove(key);

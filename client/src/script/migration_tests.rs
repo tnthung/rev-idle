@@ -26,7 +26,7 @@ impl WindowControl for NoopWindow {
 async fn two_runtime_migrated_history_ui_uses_element_states() {
     let source = r#"
       export function afterLoad() {
-        rev.ui.lastHistory = { text: "Last Run: Loading...", states: { expanded: true, expandedText: "", collapsedText: "" } };
+        rev.ui('lastHistory', { text: "Last Run: Loading...", states: { expanded: true, expandedText: "", collapsedText: "" } });
         rev.ui.lastHistory.setOnClick(function() {
           this.states.expanded = this.states.expanded !== true;
           this.text = this.states.expanded ? this.states.expandedText : this.states.collapsedText;
@@ -104,9 +104,9 @@ async fn two_runtime_migrated_history_ui_uses_element_states() {
 async fn two_runtime_migrated_demo_monitor_survives_pause() {
     let source = r#"
       export function afterLoad() {
-        rev.ui.main = { text: "main-idle" };
-        rev.ui.monitor = { text: "monitor-0" };
-        rev.ui.button = { text: "click-0", states: { clicks: 0 } };
+        rev.ui('main', { text: "main-idle" });
+        rev.ui('monitor', { text: "monitor-0" });
+        rev.ui('button', { text: "click-0", states: { clicks: 0 } });
         rev.ui.button.setOnClick(function() {
           this.states.clicks = this.states.clicks + 1;
           this.text = `click-${this.states.clicks}`;

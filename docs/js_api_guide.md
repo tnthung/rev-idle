@@ -139,16 +139,16 @@ Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before 
 | `rev.ensureRunning()` | `Promise<void>` | Resolves while running; waits while paused; rejects with `script session stopped` on termination. |
 | `rev.stop()` | `void` | Terminates the entire session and interrupts JavaScript. |
 | `rev.daemon` | `Record<string, RevDaemon \| undefined>` | Assign a function to register a background daemon; `delete rev.daemon.name` retires it. Reads are for presence checks and do not return the installed function. |
-| `rev.ui` | element registry | Creates, replaces, updates, and removes session-owned UI. |
+| `rev.ui` | callable element registry | `rev.ui(name, attrs)` creates or patches session-owned UI; `delete rev.ui.name` removes it. |
 | `rev.global` | property proxy | Stores process-local JSON values shared by all script sessions. |
 
 ### Custom UI
 
-Create elements once in `afterLoad`. All definition fields also support later assignment:
+Create or patch elements with `rev.ui(name, attrs)` in `afterLoad`. The call returns the live element, so callback setters can be chained:
 
 ```javascript
 export function afterLoad() {
-  rev.ui.button = {
+  rev.ui("button", {
     text: "Click Me", posX: 100, posY: -100,
     alignX: "center", alignY: "center",
     lenX: { min: 100 }, lenY: 28,
@@ -157,23 +157,22 @@ export function afterLoad() {
     corner: { radius: 5, topLeft: 0, bottomLeft: 0 },
     padding: { thickness: 4, left: 0, right: 8 },
     states: { clicks: 0 },
-  };
-  rev.ui.button.setOnHover!(function() { this.color = [0, 120, 0]; });
-  rev.ui.button.setOnLeave!(function() { this.color = [40, 40, 40]; });
-  rev.ui.button.setOnClick!(async function() {
-    this.states.clicks = typeof this.states.clicks === "number" ? this.states.clicks + 1 : 1;
-    this.text = "You clicked me!";
-    await rev.sleep(1000);
-    if (rev.ui.button === this) this.text = "Click Me";
-  });
-  rev.ui.label = { text: "Ready", font: "Consolas", size: 18, posX: 100, posY: -140 };
-  rev.ui.signal = { posX: 80, posY: -140, lenX: 12, lenY: 12, color: [0, 255, 0] };
+  }).setOnHover(function() { this.color = [0, 120, 0]; })
+    .setOnLeave(function() { this.color = [40, 40, 40]; })
+    .setOnClick(async function() {
+      this.states.clicks = typeof this.states.clicks === "number" ? this.states.clicks + 1 : 1;
+      this.text = "You clicked me!";
+      await rev.sleep(1000);
+      if (rev.ui.button === this) this.text = "Click Me";
+    });
+  rev.ui("label", { text: "Ready", font: "Consolas", size: 18, posX: 100, posY: -140 });
+  rev.ui("signal", { posX: 80, posY: -140, lenX: 12, lenY: 12, color: [0, 255, 0] });
 }
 
 export default function() {}
 ```
 
-Use `delete rev.ui.button` to remove an element. Assigning a whole definition replaces its identity; field updates preserve it. Check identity after an `await` before updating a captured element. A write through a deleted/replaced proxy throws. Configure callbacks only with `setOnClick`, `setOnHover`, and `setOnLeave`; pass `null` to clear one. Callback properties are absent, and definitions cannot supply or override host methods. Equal field writes are no-ops, including structurally equal colors/styles and identical handler functions. Changes publish snapshots asynchronously, independently of the 50 ms default-call delay; unchanged UI is not periodically resent.
+Use `delete rev.ui.button` to remove an element. Calling `rev.ui` for an existing name patches only the supplied fields, preserving its identity, callbacks, and omitted fields. Compound attributes such as `border`, `corner`, `padding`, and `states` replace the whole value when supplied. All supplied attributes are validated before any patch is applied. Whole-registry assignment such as `rev.ui.button = { ... }` throws; use the callable form for creation and updates. Check identity after an `await` before updating a captured element. A write through a deleted proxy throws. Configure callbacks only with `setOnClick`, `setOnHover`, and `setOnLeave`; each returns the same element and accepts `null` to clear one. Callback properties are absent, and definitions cannot supply or override host methods. Equal field writes are no-ops, including structurally equal colors/styles and identical handler functions. Changes publish snapshots asynchronously, independently of the 50 ms default-call delay; unchanged UI is not periodically resent.
 
 Colors use RGB or RGBA bytes. Lengths are fixed numbers or automatic `{ min, max }` bounds. Padding contributes to automatic size and is included in fixed sizes. Its `thickness` is the fallback for `top`, `right`, `bottom`, and `left`. Border is an external outline: it adds no size or hit area. Corner `radius` is the fallback for each named corner; explicit zero stays square. Replace compound fields as a whole, for example `rev.ui.button.border = { thickness: 1, color: [0, 255, 0] }`; nested writes throw. Text is plain and clipped inside the padded rounded box.
 
@@ -181,7 +180,7 @@ Use `alignX: "left" | "center" | "right"` and `alignY: "top" | "center" | "botto
 
 Set `font` to an installed system font family name, for example `font: "Consolas"` or `rev.ui.label.font = "Arial"`. Names are case-insensitive. Empty, omitted, or deleted `font` uses the default overlay font; unavailable fonts fall back with a warning. Set `size` to an integer pixel size from `1` through `2,147,483,647`; omitted or deleted `size` defaults to `14`. Font and size changes recalculate automatic width and height.
 
-Use `await rev.ui.label.width()` and `await rev.ui.label.height()` to read the calculated box size in pixels, including padding and excluding border. Use `await rev.ui.label.globalXPos()` and `await rev.ui.label.globalYPos()` to read the calculated left/top position in top-left screen pixels. Each call waits for Unity to apply the changes made before the call; later changes may also be included. Reads work while paused or hidden by F6. They reject if the element is deleted/replaced before the read completes, the session stops, or the bridge disconnects or times out. Position reads also reject while `basedOn` is inaccessible; width and height remain available. These are host-provided read-only methods, not definition fields. Their declarations are optional so object-literal definitions can omit them; projects with `strictNullChecks` can use non-null assertions on a live element.
+Use `await rev.ui.label.width()` and `await rev.ui.label.height()` to read the calculated box size in pixels, including padding and excluding border. Use `await rev.ui.label.globalXPos()` and `await rev.ui.label.globalYPos()` to read the calculated left/top position in top-left screen pixels. Each call waits for Unity to apply the changes made before the call; later changes may also be included. Reads work while paused or hidden by F6. They reject if the element is deleted before the read completes, the session stops, or the bridge disconnects or times out. Position reads also reject while `basedOn` is inaccessible; width and height remain available. These host-provided methods are required on live elements and are absent only from definition attributes; guard a possibly missing registry read or use `!` after a presence check.
 
 Set `hidden` to `true` to hide one element without deleting it. Hidden elements keep accepting script updates and retain their calculated `width()` and `height()`, but do not receive pointer events. Other elements are not repositioned automatically; scripts can inspect `hidden` and manage dependent positions explicitly. Omitted or deleted `hidden` defaults to `false`.
 
@@ -216,7 +215,7 @@ Load [two_runtime_demo.ts](../scripts/two_runtime_demo.ts) for a focused runtime
 
 `rev.daemon.name = fn` registers or replaces a background function. A daemon runs once after installation and does not restart automatically when it returns or rejects. `delete rev.daemon.name` retires the name; a running invocation may finish, and a replacement waits for its returned promise. Daemon reads are presence checks only. Daemons have `this === undefined`, so use `rev.global` or element `states` for communication. A daemon failure is reported with its name and does not stop the session.
 
-Element definitions may include JSON-only `states`. Live elements always expose a state map, and callback `this` is the element with that map. State values are copied through the host; nested objects need reassignment after mutation. State maps disappear when an element is replaced or deleted. Use `rev.global` for other JSON communication; functions, promises, class instances, and original lexical closures do not cross runtimes.
+Element definitions may include JSON-only `states`. Live elements always expose a state map, and callback `this` is the element with that map. State values are copied through the host; nested objects need reassignment after mutation. Patching an existing name preserves its state map unless `states` is supplied, in which case the map is replaced as a whole. Deleting an element and creating it again produces a new element and state map. Use `rev.global` for other JSON communication; functions, promises, class instances, and original lexical closures do not cross runtimes.
 
 Transferred daemons and callbacks replay their defining module's retained static imports in the background runtime. References to locals outside the transferred function are ordinary missing-name errors when reached. Callback installation is asynchronous and can fail naturally; the original main function is never invoked as a fallback.
 

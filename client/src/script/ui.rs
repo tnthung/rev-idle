@@ -189,16 +189,16 @@ fn validate_field(field: &str, value: &JsonValue) -> Result<JsonValue, String> {
     }
 }
 
-fn validate_definition(json: &str) -> Result<(Map<String, JsonValue>, Map<String, JsonValue>), String> {
+fn validate_definition(json: &str) -> Result<(Map<String, JsonValue>, Option<Map<String, JsonValue>>), String> {
     let value: JsonValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
     let fields = value
         .as_object()
         .ok_or_else(|| "UI definition must be an object".to_owned())?;
     let mut values = Map::new();
-    let mut states = Map::new();
+    let mut states = None;
     for (field, value) in fields {
         if field == "states" {
-            states = validate_field(field, value)?.as_object().unwrap().clone();
+            states = Some(validate_field(field, value)?.as_object().unwrap().clone());
         } else {
             values.insert(field.clone(), validate_field(field, value)?);
         }
@@ -355,33 +355,35 @@ impl ScriptUiState {
             .map_err(|error| error.to_string())
     }
 
-    pub(super) fn replace(&self, name: &str, json: &str) -> Result<(Uuid, Option<(Uuid, Vec<ScriptUiEventKind>)>), String> {
+    pub(super) fn define(&self, name: &str, json: &str) -> Result<Uuid, String> {
         self.check_live()?;
         if name.is_empty() {
             return Err("UI names must be nonempty strings".to_owned());
         }
         let (values, states) = validate_definition(json)?;
-        let instance = Uuid::new_v4();
-        let replacement = UiElement {
-            name: name.to_owned(), instance, values, states, events_version: 1,
-            handlers: [None, None, None],
-        };
-        let old = {
+        let (instance, changed) = {
             let mut store = self.store.borrow_mut();
-            let old = store.elements.iter().position(|element| element.name == name).map(|index| {
-                let element = &store.elements[index];
-                (element.instance, [ScriptUiEventKind::Hover, ScriptUiEventKind::Leave, ScriptUiEventKind::Click]
-                    .into_iter().filter(|event| element.handlers[event_index(*event)].is_some()).collect())
-            });
-            if let Some(index) = store.elements.iter().position(|element| element.name == name) {
-                store.elements[index] = replacement;
+            if let Some(element) = store.elements.iter_mut().find(|element| element.name == name) {
+                let mut changed = false;
+                for (field, value) in values {
+                    if element.values.get(&field).cloned().or_else(|| default_value(&field)) != Some(value.clone()) {
+                        element.values.insert(field, value);
+                        changed = true;
+                    }
+                }
+                if let Some(states) = states { element.states = states; }
+                (element.instance, changed)
             } else {
-                store.elements.push(replacement);
+                let instance = Uuid::new_v4();
+                store.elements.push(UiElement {
+                    name: name.to_owned(), instance, values, states: states.unwrap_or_default(), events_version: 1,
+                    handlers: [None, None, None],
+                });
+                (instance, true)
             }
-            old
         };
-        self.publish();
-        Ok((instance, old))
+        if changed { self.publish(); }
+        Ok(instance)
     }
 
     pub(super) fn remove(&self, name: &str) -> Result<Option<(Uuid, Vec<ScriptUiEventKind>)>, String> {
@@ -558,16 +560,8 @@ impl ScriptUiBindings {
             host_state.record_json(&name, instance).map_err(ui_error)
         })?)?;
         let host_state = state.clone();
-        let define_background = background.clone();
         host.set("define", Function::new(ctx.clone(), move |name: String, json: String| {
-            host_state.replace(&name, &json).map(|(instance, old)| {
-                if let Some((old_instance, events)) = old {
-                    for event in events {
-                        define_background.unregister(&BackgroundTarget::Ui { name: name.clone(), instance: old_instance, event });
-                    }
-                }
-                instance.to_string()
-            }).map_err(ui_error)
+            host_state.define(&name, &json).map(|instance| instance.to_string()).map_err(ui_error)
         })?)?;
         let host_state = state.clone();
         let remove_background = background.clone();
@@ -708,8 +702,8 @@ mod tests {
         let publisher = ScriptUiPublisher::default();
         let snapshots = publisher.subscribe();
         let state = ScriptUiState::new(publisher, SessionControl::standalone());
-        let (main_instance, _) = state.replace("from_main", r#"{"text":"main","states":{"count":1,"settings":{"enabled":false}}}"#).unwrap();
-        let (background_instance, _) = state.replace("from_background", r#"{"text":"background","states":{"count":2}}"#).unwrap();
+        let main_instance = state.define("from_main", r#"{"text":"main","states":{"count":1,"settings":{"enabled":false}}}"#).unwrap();
+        let background_instance = state.define("from_background", r#"{"text":"background","states":{"count":2}}"#).unwrap();
         assert_eq!(snapshots.borrow().elements.iter().map(|element| element.id.as_str()).collect::<Vec<_>>(), ["from_main", "from_background"]);
         let revision_before_state = snapshots.borrow().revision;
         state.set_field("from_background", background_instance, "text", r#""written""#).unwrap();
@@ -723,12 +717,12 @@ mod tests {
     }
 
     #[test]
-    fn two_runtime_ui_atomic_replacement_and_proxy_identity() {
+    fn two_runtime_ui_atomic_update_and_proxy_identity() {
         let publisher = ScriptUiPublisher::default();
         let snapshots = publisher.subscribe();
         let state = ScriptUiState::new(publisher, SessionControl::standalone());
-        let (original, _) = state.replace("same", r#"{"text":"before"}"#).unwrap();
-        assert!(state.replace("same", r#"{"unknown":1}"#).is_err());
+        let original = state.define("same", r#"{"text":"before"}"#).unwrap();
+        assert!(state.define("same", r#"{"unknown":1}"#).is_err());
         assert_eq!(state.lookup("same"), Some(original));
         let event = ScriptUiEvent {
             session_id: state.session_id(), element_id: "same".to_owned(), instance_id: original,
@@ -742,10 +736,9 @@ mod tests {
         assert!(state.complete_handler_install("same", original, ScriptUiEventKind::Click, registration, true));
         let active = ScriptUiEvent { events_version: snapshots.borrow().elements[0].events_version, ..event.clone() };
         assert_eq!(state.installed_handler_registration(&active), Some(registration));
-        let (replacement, _) = state.replace("same", r#"{"text":"after"}"#).unwrap();
-        assert_ne!(replacement, original);
-        assert_eq!(state.installed_handler_registration(&active), None);
-        assert!(state.record_json("same", replacement).unwrap().contains("after"));
+        assert_eq!(state.define("same", r#"{"text":"after"}"#).unwrap(), original);
+        assert_eq!(state.installed_handler_registration(&active), Some(registration));
+        assert!(state.record_json("same", original).unwrap().contains("after"));
     }
 
     #[test]
@@ -753,13 +746,13 @@ mod tests {
         let publisher = ScriptUiPublisher::default();
         let snapshots = publisher.subscribe();
         let state = ScriptUiState::new(publisher, SessionControl::standalone());
-        let (first, _) = state.replace("a", "{}").unwrap();
+        let first = state.define("a", "{}").unwrap();
         assert!(!snapshots.borrow().elements[0].hidden);
         state.set_field("a", first, "hidden", "true").unwrap();
         assert!(snapshots.borrow().elements[0].hidden);
-        let (second, _) = state.replace("b", "{}").unwrap();
-        let (replacement, _) = state.replace("a", r#"{"text":"replacement"}"#).unwrap();
-        assert_ne!(replacement, first);
+        let second = state.define("b", "{}").unwrap();
+        assert_eq!(state.define("a", r#"{"text":"updated"}"#).unwrap(), first);
+        assert!(snapshots.borrow().elements[0].hidden);
         assert_eq!(snapshots.borrow().elements.iter().map(|element| element.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
         assert_eq!(snapshots.borrow().elements[1].instance_id, second);
     }
@@ -802,7 +795,7 @@ mod tests {
         main_context.with(|ctx| {
             ctx.globals().set("ui", main_bindings.registry(&ctx).unwrap()).unwrap();
             ctx.eval::<(), _>(r#"
-                ui.main = { text: "main", states: { nested: { enabled: false } } };
+                ui('main', { text: "main", states: { nested: { enabled: false } } });
                 globalThis.mainProxy = ui.main;
                 mainProxy.states.nested = { enabled: true };
                 if (ui.main !== mainProxy) throw new Error("main proxy identity changed");
@@ -811,7 +804,7 @@ mod tests {
         background_context.with(|ctx| {
             ctx.globals().set("ui", background_bindings.registry(&ctx).unwrap()).unwrap();
             ctx.eval::<(), _>(r#"
-                ui.background = { text: "background", states: { count: 2 } };
+                ui('background', { text: "background", states: { count: 2 } });
                 ui.main.states.count = 10;
                 globalThis.backgroundProxy = ui.background;
                 if (ui.background !== backgroundProxy) throw new Error("background proxy identity changed");
@@ -822,7 +815,16 @@ mod tests {
         assert_eq!(state.names(), vec!["main", "background"]);
 
         background_context.with(|ctx| {
-            ctx.eval::<(), _>(r#"ui.main = { text: "replacement", states: { count: 1 } };"#).unwrap();
+            ctx.eval::<(), _>(r#"ui('main', { text: "updated" });"#).unwrap();
+        });
+        main_context.with(|ctx| {
+            ctx.eval::<(), _>(r#"
+                if (ui.main !== mainProxy || mainProxy.text !== "updated" || mainProxy.states.count !== 10)
+                    throw new Error("update did not preserve shared proxy and states");
+            "#).unwrap();
+        });
+        background_context.with(|ctx| {
+            ctx.eval::<(), _>(r#"delete ui.main; ui('main', { text: "replacement", states: { count: 1 } });"#).unwrap();
         });
         main_context.with(|ctx| {
             ctx.eval::<(), _>(r#"
@@ -854,7 +856,7 @@ mod tests {
         let publisher = ScriptUiPublisher::default();
         let snapshots = publisher.subscribe();
         let state = ScriptUiState::new(publisher, SessionControl::standalone());
-        let (instance, _) = state.replace("button", "{}").unwrap();
+        let instance = state.define("button", "{}").unwrap();
         let first = Uuid::new_v4();
         state.begin_handler_install("button", instance, ScriptUiEventKind::Click, first).unwrap();
         let pending_version = snapshots.borrow().elements[0].events_version;
@@ -870,7 +872,8 @@ mod tests {
         assert!(state.complete_handler_install("button", instance, ScriptUiEventKind::Click, second, true));
         let active = ScriptUiEvent { events_version: snapshots.borrow().elements[0].events_version, ..event.clone() };
         assert_eq!(state.installed_handler_registration(&active), Some(second));
-        let (replacement, _) = state.replace("button", "{}").unwrap();
+        state.remove("button").unwrap();
+        let replacement = state.define("button", "{}").unwrap();
         assert!(!state.complete_handler_install("button", instance, ScriptUiEventKind::Click, second, true));
         assert_eq!(state.installed_handler_registration(&active), None);
         let third = Uuid::new_v4();
@@ -914,10 +917,10 @@ mod tests {
                     handlerClear: () => {{}},
                 }};
                 const ui = ({}) (host).registry;
-                ui.button = {{}};
+                ui('button', {{}});
                 const callback = function() {{}};
-                if (ui.button.setOnClick(callback) !== undefined) throw new Error('setter returned a value');
-                if (ui.button.setOnClick(callback) !== undefined) throw new Error('pending retry returned a value');
+                if (ui.button.setOnClick(callback) !== ui.button) throw new Error('setter did not return the element');
+                if (ui.button.setOnClick(callback) !== ui.button) throw new Error('pending retry did not return the element');
                 statuses.set(registrations[0], 'failed');
                 ui.button.setOnClick(callback);
                 if (registrations.length !== 2 || registrations[0] === registrations[1]) throw new Error('failed registration did not retry');

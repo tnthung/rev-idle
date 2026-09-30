@@ -2924,9 +2924,9 @@ async fn two_runtime_pause_detached_timer_and_promise() {
     let path = std::env::temp_dir().join(format!("rev-idle-two-runtime-pause-{}.js", uuid::Uuid::new_v4()));
     std::fs::write(&path, r#"
         export function afterLoad() {
-            rev.ui.main = { text: "idle" };
-            rev.ui.detached = { text: "waiting" };
-            rev.ui.background = { text: "0" };
+            rev.ui('main', { text: "idle" });
+            rev.ui('detached', { text: "waiting" });
+            rev.ui('background', { text: "0" });
             rev.daemon.monitor = async function() {
                 let count = 0;
                 while (true) {

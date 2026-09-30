@@ -24,7 +24,7 @@ async fn ui_and_detached_jobs_run_during_default_cadence_delay() {
     let path = std::env::temp_dir().join(format!("rev-idle-ui-cadence-{}.js", uuid::Uuid::new_v4()));
     std::fs::write(&path, r#"
         export function afterLoad() {
-            rev.ui.button = {};
+            rev.ui('button', {});
             rev.ui.button.setOnClick(() => { rev.click(7, 7); });
             (async () => { await rev.sleep(10); rev.click(9, 9); })();
         }
@@ -92,9 +92,9 @@ async fn ui_callback_runs_while_main_awaits_and_while_paused() {
     let snapshots = publisher.subscribe();
     let session = ScriptSession::new_with_connection_and_control(r#"
         export function afterLoad() {
-            rev.ui.button = { text: 'ready' };
+            rev.ui('button', { text: 'ready' });
             rev.ui.button.setOnClick(function() { rev.pause(); rev.click(7, 1); this.text = 'callback'; rev.global.released = true; });
-            rev.ui.release = {};
+            rev.ui('release', {});
             rev.ui.release.setOnClick(function() { rev.resume(); rev.global.released = true; });
         }
         export default async function() {
@@ -153,7 +153,7 @@ async fn ui_callbacks_overlap_after_await() {
     let snapshots = publisher.subscribe();
     let session = ScriptSession::new_with_connection_and_control(r#"
         export function afterLoad() {
-            rev.ui.button = {};
+            rev.ui('button', {});
             rev.ui.button.setOnClick(async function() {
                 const id = (this.states.count ?? 0) + 1;
                 this.states.count = id;
@@ -204,11 +204,11 @@ async fn ui_callback_error_is_isolated() {
     let snapshots = publisher.subscribe();
     let session = ScriptSession::new_with_connection_and_control(r#"
         export function afterLoad() {
-            rev.ui.sync = {};
+            rev.ui('sync', {});
             rev.ui.sync.setOnClick(() => { throw new Error('sync broken'); });
-            rev.ui.async = {};
+            rev.ui('async', {});
             rev.ui.async.setOnClick(async () => { await rev.sleep(1); throw new Error('async broken'); });
-            rev.ui.good = {};
+            rev.ui('good', {});
             rev.ui.good.setOnClick(() => { rev.click(9, 1); });
         }
         export default function() { rev.click(10, 1); }
@@ -260,7 +260,7 @@ fn ui_registry_native_roots_drop_before_runtime() {
             background.clone(),
         ).unwrap();
         ctx.globals().set("ui", ui.registry(&ctx).unwrap()).unwrap();
-        ctx.eval::<(), _>("ui.a = {text: 'root'};").unwrap();
+        ctx.eval::<(), _>("ui('a', {text: 'root'});").unwrap();
         drop(ui);
     });
     drop(state);
@@ -282,7 +282,7 @@ async fn ui_registry_survives_invocations_and_pause() {
     let session = ScriptSession::new_with_connection_and_control(
         r#"
             let original;
-            export function afterLoad() { rev.ui.a = { text: 'loaded' }; original = rev.ui.a; }
+            export function afterLoad() { rev.ui('a', { text: 'loaded' }); original = rev.ui.a; }
             export default function() {
                 if (rev.ui.a !== original) throw new Error('registry identity changed');
                 rev.ui.a.text = rev.paused ? 'paused' : 'running';
@@ -319,7 +319,7 @@ async fn script_ui_same_value_writes_do_not_publish() {
     let session = ScriptSession::new_with_connection_and_control(
         r#"
             export default function() {
-                if (!rev.ui.a) rev.ui.a = { text: 'same', color: [1,2,3] };
+                if (!rev.ui.a) rev.ui('a', { text: 'same', color: [1,2,3] });
                 rev.ui.a.text = rev.paused ? 'paused' : 'same';
                 rev.ui.a.color = [1,2,3];
             }
@@ -384,33 +384,61 @@ fn check(source: &str) {
 }
 
 #[test]
-fn ui_registry_create_update_replace_delete() {
+fn ui_registry_create_update_delete() {
     check(r#"
+        assert(typeof ui === 'function');
         assert(ui.missing === undefined);
-        ui.a = { text: 'first' }; ui.b = {};
-        const old = ui.a;
+        const old = ui('a', { text: 'first', posX: 20 }); ui('b', {});
         ui.a.text = 'changed'; assert(ui.a === old && old.text === 'changed');
-        ui.a = { text: 'changed' }; assert(ui.a !== old);
+        assert(ui('a', { text: 'updated' }) === old);
+        assert(old.text === 'updated' && old.posX === 20);
         assert(Object.keys(ui).join(',') === 'a,b');
-        throws(() => old.text = 'stale');
+        throws(() => ui.a = { text: 'replacement' });
+        throws(() => ui.other = {});
         delete ui.a; assert(ui.a === undefined);
-        ui.a = {}; assert(Object.keys(ui).join(',') === 'b,a');
-        ui.__proto__ = { text: 'prototype key' }; ui.constructor = {};
+        throws(() => old.text = 'stale');
+        assert(ui('a', {}) !== old); assert(Object.keys(ui).join(',') === 'b,a');
+        ui('__proto__', { text: 'prototype key' }); ui('constructor', {});
+        ui('name', { text: 'name key' }); ui('length', {}); ui('prototype', {});
         assert(ui.__proto__.text === 'prototype key' && Object.getPrototypeOf(ui) === null);
+        assert(ui.name.text === 'name key' && Object.keys(ui).join(',') === 'b,a,__proto__,constructor,name,length,prototype');
+        throws(() => ui('', {})); throws(() => ui(1, {}));
+    "#);
+}
+
+#[test]
+fn ui_registry_updates_attributes_atomically() {
+    check(r#"
+        const callback = function() {};
+        const original = ui('a', { text: 'before', padding: { left: 4, right: 5 }, states: { count: 2 } })
+            .setOnClick(callback).setOnHover(callback).setOnLeave(callback);
+        assert(original === ui.a && original.setOnClick(callback) === original);
+        const states = original.states, first = snapshots.at(-1)[0], count = snapshots.length;
+        throws(() => ui('a', { text: 'invalid', size: 0, states: {} }));
+        assert(original.text === 'before' && original.states.count === 2 && snapshots.length === count);
+        assert(ui('a', { text: 'after', padding: { top: 3 } }) === original);
+        assert(original.states === states && states.count === 2 && original.padding.left === undefined);
+        assert(snapshots.length === count + 1 && snapshots.at(-1)[0].padding.top === 3 && snapshots.at(-1)[0].padding.left === 0);
+        assert(snapshots.at(-1)[0].instanceId === first.instanceId && snapshots.at(-1)[0].eventsVersion === first.eventsVersion);
+        ui('a', { text: 'after', padding: { top: 3 }, states: { enabled: true } });
+        assert(states.enabled === true && states.count === undefined && snapshots.length === count + 1);
+        ui('a', {});
+        assert(original.text === 'after' && states.enabled === true && snapshots.length === count + 1);
+        assert(original.setOnClick(null).setOnHover(null).setOnLeave(null) === original);
     "#);
 }
 
 #[test]
 fn ui_dimensions_are_readonly_methods_not_definition_fields() {
     check(r#"
-        ui.a = { text: 'measure me' };
+        ui('a', { text: 'measure me' });
         assert(typeof ui.a.width === 'function' && typeof ui.a.height === 'function');
         assert(typeof ui.a.globalXPos === 'function' && typeof ui.a.globalYPos === 'function');
         assert(ui.a.width === ui.a.width && 'width' in ui.a && 'height' in ui.a);
         assert(Object.keys(ui.a).join() === 'text,states');
         throws(() => ui.a.width = () => 10);
         throws(() => delete ui.a.height);
-        throws(() => ui.b = { width: () => 10 });
+        throws(() => ui('b', { width: () => 10 }));
         assert(snapshots.at(-1).length === 1);
     "#);
 }
@@ -431,7 +459,7 @@ async fn ui_dimensions_request_current_revision_and_reject_stale_elements() {
     let session = ScriptSession::new_with_connection_and_control(
         r#"
             export default async function() {
-                rev.ui.a = { text: 'initial', basedOn: 'scene:7/Panel[0]', hidden: true, padding: { thickness: 3 }, border: { thickness: 9 } };
+                rev.ui('a', { text: 'initial', basedOn: 'scene:7/Panel[0]', hidden: true, padding: { thickness: 3 }, border: { thickness: 9 } });
                 rev.ui.a.text = 'updated';
                 const original = rev.ui.a;
                 if (await original.width() !== 123.5 || await original.height() !== 27.25)
@@ -445,11 +473,12 @@ async fn ui_dimensions_request_current_revision_and_reject_stale_elements() {
                     throw new Error('stale measurement accepted');
                 }
                 await rejects(() => original.width());
-                rev.ui.a = { text: 'replacement' };
+                rev.ui('a', { text: 'replacement' });
                 await rejects(() => original.height());
                 const pending = rev.ui.a.width();
                 await rev.sleep(0);
-                rev.ui.a = { text: 'newer replacement' };
+                delete rev.ui.a;
+                rev.ui('a', { text: 'newer replacement' });
                 await rejects(() => pending);
             }
         "#,
@@ -512,7 +541,7 @@ async fn ui_global_position_getters_preserve_dimensions_when_mount_is_inaccessib
     let session = ScriptSession::new_with_connection_and_control(
         r#"
             export default async function() {
-                rev.ui.a = { basedOn: 'scene:7/Panel[0]' };
+                rev.ui('a', { basedOn: 'scene:7/Panel[0]' });
                 if (await rev.ui.a.globalXPos() !== 321.5 || await rev.ui.a.globalYPos() !== 654.25)
                     throw new Error('wrong global position');
                 try { await rev.ui.a.globalXPos(); throw new Error('inaccessible position accepted'); }
@@ -551,7 +580,7 @@ async fn ui_global_position_getters_preserve_dimensions_when_mount_is_inaccessib
 #[test]
 fn ui_registry_font_updates_and_resets_without_replacing_element() {
     check(r#"
-        ui.a = { text: 'default' }; ui.a.setOnClick(() => {});
+        ui('a', { text: 'default' }); ui.a.setOnClick(() => {});
         const original = ui.a, first = snapshots.at(-1)[0];
         assert(ui.a.font === '' && first.font === '');
         ui.a.font = 'Consolas';
@@ -562,7 +591,7 @@ fn ui_registry_font_updates_and_resets_without_replacing_element() {
         ui.a.font = 'Consolas';
         for (const value of [null, undefined, 14, {}, [], new String('Arial')]) {
             throws(() => ui.a.font = value);
-            throws(() => ui.a = { text: 'invalid replacement', font: value });
+            throws(() => ui('a', { text: 'invalid replacement', font: value }));
         }
         assert(ui.a === original && ui.a.font === 'Consolas' && snapshots.length === count);
         delete ui.a.font;
@@ -570,7 +599,7 @@ fn ui_registry_font_updates_and_resets_without_replacing_element() {
         const resetCount = snapshots.length;
         delete ui.a.font; ui.a.font = '';
         assert(snapshots.length === resetCount);
-        ui.b = { text: 'named', font: 'Noto Sans CJK TC' };
+        ui('b', { text: 'named', font: 'Noto Sans CJK TC' });
         assert(snapshots.at(-1)[1].font === 'Noto Sans CJK TC');
     "#);
 }
@@ -578,7 +607,7 @@ fn ui_registry_font_updates_and_resets_without_replacing_element() {
 #[test]
 fn ui_registry_size_updates_and_resets_without_replacing_element() {
     check(r#"
-        ui.a = { text: 'default' }; ui.a.setOnClick(() => {});
+        ui('a', { text: 'default' }); ui.a.setOnClick(() => {});
         const original = ui.a, first = snapshots.at(-1)[0];
         assert(ui.a.size === 14 && first.size === 14);
         ui.a.size = 24;
@@ -589,7 +618,7 @@ fn ui_registry_size_updates_and_resets_without_replacing_element() {
         ui.a.size = 24;
         for (const value of [null, undefined, 0, -1, 1.5, Infinity, 2147483648, '14', {}, [], new Number(14)]) {
             throws(() => ui.a.size = value);
-            throws(() => ui.a = { text: 'invalid replacement', size: value });
+            throws(() => ui('a', { text: 'invalid replacement', size: value }));
         }
         assert(ui.a === original && ui.a.size === 24 && snapshots.length === count);
         delete ui.a.size;
@@ -597,7 +626,7 @@ fn ui_registry_size_updates_and_resets_without_replacing_element() {
         const resetCount = snapshots.length;
         delete ui.a.size; ui.a.size = 14;
         assert(snapshots.length === resetCount);
-        ui.b = { text: 'large', size: 32 };
+        ui('b', { text: 'large', size: 32 });
         assert(snapshots.at(-1)[1].size === 32);
     "#);
 }
@@ -605,7 +634,7 @@ fn ui_registry_size_updates_and_resets_without_replacing_element() {
 #[test]
 fn ui_registry_hidden_defaults_updates_and_remains_reactive() {
     check(r#"
-        ui.a = { text: 'visible' }; ui.a.setOnClick(() => {});
+        ui('a', { text: 'visible' }); ui.a.setOnClick(() => {});
         const original = ui.a, first = snapshots.at(-1)[0];
         assert(ui.a.hidden === false && first.hidden === false);
         ui.a.hidden = true;
@@ -616,12 +645,12 @@ fn ui_registry_hidden_defaults_updates_and_remains_reactive() {
         ui.a.hidden = true;
         for (const value of [null, undefined, 0, 1, '', {}, [], new Boolean(true)]) {
             throws(() => ui.a.hidden = value);
-            throws(() => ui.b = { hidden: value });
+            throws(() => ui('b', { hidden: value }));
         }
         assert(ui.a === original && ui.a.hidden === true && snapshots.length === count);
         delete ui.a.hidden;
         assert(ui.a.hidden === false && snapshots.at(-1)[0].hidden === false);
-        ui.b = { hidden: true };
+        ui('b', { hidden: true });
         assert(ui.b.hidden === true && snapshots.at(-1)[1].hidden === true);
     "#);
 }
@@ -629,7 +658,7 @@ fn ui_registry_hidden_defaults_updates_and_remains_reactive() {
 #[test]
 fn ui_registry_based_on_validates_publishes_updates_and_resets_on_delete() {
     check(r#"
-        ui.a = { basedOn: 'scene:7/Panel[0]' };
+        ui('a', { basedOn: 'scene:7/Panel[0]' });
         assert(snapshots.at(-1)[0].basedOn === 'scene:7/Panel[0]');
         ui.a.basedOn = 'scene:8/Panel[1]';
         assert(snapshots.at(-1)[0].basedOn === 'scene:8/Panel[1]');
@@ -642,7 +671,7 @@ fn ui_registry_based_on_validates_publishes_updates_and_resets_on_delete() {
 #[test]
 fn ui_registry_alignment_fields_validate_update_and_reset() {
     check(r#"
-        ui.a = { text: 'aligned' }; ui.a.setOnClick(() => {});
+        ui('a', { text: 'aligned' }); ui.a.setOnClick(() => {});
         const original = ui.a, first = snapshots.at(-1)[0];
         assert(ui.a.alignX === 'left' && ui.a.alignY === 'center');
         assert(first.alignX === 'left' && first.alignY === 'center');
@@ -658,15 +687,15 @@ fn ui_registry_alignment_fields_validate_update_and_reset() {
         ui.a.alignX = 'right'; ui.a.alignY = 'bottom';
         for (const value of ['middle', 'LEFT', '', null, undefined, 1, {}, new String('center')]) {
             throws(() => ui.a.alignX = value); throws(() => ui.a.alignY = value);
-            throws(() => ui.a = { text: 'invalid replacement', alignX: value });
-            throws(() => ui.a = { text: 'invalid replacement', alignY: value });
+            throws(() => ui('a', { text: 'invalid replacement', alignX: value }));
+            throws(() => ui('a', { text: 'invalid replacement', alignY: value }));
         }
         throws(() => ui.a.alignX = 'top'); throws(() => ui.a.alignY = 'left');
         assert(ui.a === original && ui.a.alignX === 'right' && ui.a.alignY === 'bottom' && snapshots.length === count);
         delete ui.a.alignX; delete ui.a.alignY;
         assert(ui.a.alignX === 'left' && ui.a.alignY === 'center');
         assert(snapshots.at(-1)[0].alignX === 'left' && snapshots.at(-1)[0].alignY === 'center');
-        ui.b = { alignX: 'center', alignY: 'top' };
+        ui('b', { alignX: 'center', alignY: 'top' });
         assert(snapshots.at(-1)[1].alignX === 'center' && snapshots.at(-1)[1].alignY === 'top');
     "#);
 }
@@ -676,14 +705,14 @@ fn ui_registry_accepts_styles_in_initial_definition() {
     check(r#"
         const original = { text: 'Click Me', border: { thickness: 2, color: [255,0,0] },
             corner: { radius: 5, topLeft: 0, bottomLeft: 0 }, padding: { thickness: 4, left: 0, right: 8 } };
-        ui.a = original;
+        ui('a', original);
         ui.a.setOnClick(() => {});
         const a = snapshots.at(-1)[0];
         assert(a.border.thickness === 2 && a.border.color.join() === '255,0,0,255');
         assert(a.corner.topLeft === 0 && a.corner.topRight === 5 && a.corner.bottomLeft === 0);
         assert(JSON.stringify(a.padding) === '{"top":4,"right":8,"bottom":4,"left":0}');
         original.border.color[0] = 0; assert(ui.a.border.color[0] === 255);
-        ui.b = {}; ui.b.border = original.border; ui.b.corner = original.corner; ui.b.padding = original.padding;
+        ui('b', {}); ui.b.border = original.border; ui.b.corner = original.corner; ui.b.padding = original.padding;
         assert(snapshots.at(-1)[1].corner.topRight === a.corner.topRight);
     "#);
 }
@@ -691,10 +720,10 @@ fn ui_registry_accepts_styles_in_initial_definition() {
 #[test]
 fn ui_registry_validates_atomically() {
     check(r#"
-        ui.a = { text: 'valid' }; const original = ui.a; const count = snapshots.length;
+        ui('a', { text: 'valid' }); const original = ui.a; const count = snapshots.length;
         for (const value of [null, undefined, [], { unknown: 1 }, { posX: Infinity }, { lenX: { min: 2, max: 1 } },
             { border: { thickness: -1 } }, { corner: { radias: 5 } }, { padding: { left: NaN } }, { color: [256,0,0] }]) {
-            throws(() => ui.a = value); assert(ui.a === original && snapshots.length === count);
+            throws(() => ui('a', value)); assert(ui.a === original && snapshots.length === count);
         }
         throws(() => ui.a.border = { color: [0,0,0,-1] });
         assert(ui.a.text === 'valid');
@@ -704,7 +733,7 @@ fn ui_registry_validates_atomically() {
 #[test]
 fn ui_registry_keeps_validation_independent_of_script_intrinsics() {
     check(r#"
-        ui.a = { text: 'valid' };
+        ui('a', { text: 'valid' });
         const original = ui.a, count = snapshots.length, first = snapshots.at(-1)[0];
         Number.isFinite = () => true;
         Number.isInteger = () => true;
@@ -723,12 +752,12 @@ fn ui_registry_keeps_validation_independent_of_script_intrinsics() {
 }
 
 #[test]
-fn ui_registry_invalid_replacement_preserves_requested_state() {
+fn ui_registry_invalid_update_preserves_requested_state() {
     check(r#"
-        ui.a = { text: 'before' }; ui.a.setOnClick(() => {}); ui.b = {};
+        ui('a', { text: 'before' }); ui.a.setOnClick(() => {}); ui('b', {});
         const original = ui.a, count = snapshots.length, first = snapshots.at(-1)[0];
-        throws(() => ui.a = { unknown: 1 });
-        throws(() => ui.a = { text: 'replacement', size: 0 });
+        throws(() => ui('a', { unknown: 1 }));
+        throws(() => ui('a', { text: 'replacement', size: 0 }));
         assert(ui.a === original && ui.a.text === 'before');
         assert(Object.keys(ui).join() === 'a,b' && snapshots.length === count);
         ui.a.text = 'after';
@@ -739,7 +768,7 @@ fn ui_registry_invalid_replacement_preserves_requested_state() {
 #[test]
 fn ui_registry_rejects_stale_proxy_and_nested_mutation() {
     check(r#"
-        ui.a = { color: [1,2,3], border: { color: [4,5,6] }, lenX: { min: 2 }, corner: { radius: 3 }, padding: { left: 1 } };
+        ui('a', { color: [1,2,3], border: { color: [4,5,6] }, lenX: { min: 2 }, corner: { radius: 3 }, padding: { left: 1 } });
         for (const field of ['color','border','lenX','corner','padding']) {
             assert(Object.isFrozen(ui.a[field])); throws(() => ui.a[field].unknown = 2);
         }
@@ -755,7 +784,7 @@ fn ui_registry_rejects_stale_proxy_and_nested_mutation() {
 fn ui_registry_same_value_assignment_is_noop() {
     check(r#"
         const handler = () => {};
-        ui.a = { text: 'x', color: [1,2,3], corner: { radius: 5, topLeft: 0 } };
+        ui('a', { text: 'x', color: [1,2,3], corner: { radius: 5, topLeft: 0 } });
         ui.a.setOnClick(handler);
         const count = snapshots.length, first = snapshots.at(-1)[0];
         ui.a.text = 'x'; ui.a.color = [1,2,3]; ui.a.corner = { topLeft: 0, radius: 5 }; ui.a.setOnClick(handler);
@@ -764,14 +793,15 @@ fn ui_registry_same_value_assignment_is_noop() {
         ui.a.text = 'y'; ui.a.text = 'y'; assert(snapshots.length === count + 1);
         assert(snapshots.at(-1)[0].eventsVersion === first.eventsVersion);
         ui.a.setOnClick(() => {}); assert(snapshots.at(-1)[0].eventsVersion > first.eventsVersion);
-        const old = ui.a; ui.a = { text: 'y' }; assert(ui.a !== old);
+        const old = ui.a, revision = snapshots.length;
+        assert(ui('a', { text: 'y' }) === old && snapshots.length === revision);
     "#);
 }
 
 #[test]
 fn ui_registry_border_corner_padding_defaults_and_overrides() {
     check(r#"
-        ui.a = {};
+        ui('a', {});
         let state = snapshots.at(-1)[0];
         assert(state.border.thickness === 0 && state.corner.topLeft === 0 && state.padding.left === 0);
         assert(state.color.join() === '0,0,0,0' && state.textColor.join() === '255,255,255,255');
@@ -792,13 +822,13 @@ fn ui_registry_border_corner_padding_defaults_and_overrides() {
 #[test]
 fn ui_callback_setters_are_the_only_handler_surface() {
     check(r#"
-        ui.a = { text: 'safe' };
+        ui('a', { text: 'safe' });
         assert(ui.a.onClick === undefined && ui.a.onHover === undefined && ui.a.onLeave === undefined);
         assert(!('onClick' in ui.a) && !('onHover' in ui.a) && !('onLeave' in ui.a));
-        assert(ui.a.setOnClick(() => {}) === undefined);
-        assert(ui.a.setOnClick(null) === undefined);
+        assert(ui.a.setOnClick(() => {}) === ui.a);
+        assert(ui.a.setOnClick(null) === ui.a);
         throws(() => ui.a.setOnClick(undefined));
-        throws(() => ui.a = { onClick() {} });
+        throws(() => ui('a', { onClick() {} }));
     "#);
 }
 
@@ -806,12 +836,13 @@ fn ui_callback_setters_are_the_only_handler_surface() {
 fn ui_setter_replacement_invalidates_old_handler_registration() {
     check(r#"
         let first = () => {}, second = () => {};
-        ui.a = {};
+        ui('a', {});
         const old = ui.a;
         old.setOnClick(first);
-        ui.a = {};
+        delete ui.a;
+        ui('a', {});
         assert(ui.a !== old);
-        assert(ui.a.setOnClick(second) === undefined);
+        assert(ui.a.setOnClick(second) === ui.a);
         throws(() => old.setOnClick(null));
     "#);
 }
