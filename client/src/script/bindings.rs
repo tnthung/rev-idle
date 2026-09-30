@@ -284,6 +284,30 @@ pub(super) fn create_rev<'js>(
         "paused",
         Accessor::from(move || paused_session.is_paused()).enumerable(),
     )?;
+    let pause_session = session.clone();
+    let pause_gate = controls.actions_paused.clone();
+    rev.set(
+        "pause",
+        Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+            reject_if_stopped(&ctx, &pause_session)?;
+            if !pause_gate.is_paused() {
+                pause_gate.set_paused(true);
+            }
+            Ok::<(), Error>(())
+        })?,
+    )?;
+    let resume_session = session.clone();
+    let resume_gate = controls.actions_paused.clone();
+    rev.set(
+        "resume",
+        Function::new(ctx.clone(), move |ctx: Ctx<'js>| {
+            reject_if_stopped(&ctx, &resume_session)?;
+            if resume_gate.is_paused() {
+                resume_gate.set_paused(false);
+            }
+            Ok::<(), Error>(())
+        })?,
+    )?;
     let ensure_session = session.clone();
     rev.set(
         "ensureRunning",

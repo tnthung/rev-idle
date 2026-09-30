@@ -134,6 +134,85 @@ fn recording_controls() -> (HostControls, Rc<RefCell<Vec<HostEvent>>>) {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn script_pause_and_daemon_resume_preserve_invocation_and_ownership() {
+    static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+    let lock_state = LockState { enabled: &LOCK_ENABLED };
+    let path = std::env::temp_dir().join(format!("rev-idle-script-pause-resume-{}.js", uuid::Uuid::new_v4()));
+    std::fs::write(&path, r#"
+        let owner;
+        export function afterLoad() {
+            rev.daemon.resume = async function() {
+                while (!rev.paused) await rev.sleep(1);
+                rev.pause();
+                while (rev.read_clipboard() !== 'resume') await rev.sleep(1);
+                rev.click(3, Number(rev.paused));
+                rev.resume();
+                rev.resume();
+                delete rev.daemon.resume;
+            };
+        }
+        export function beforePause() {
+            rev.pause();
+            rev.click(2, Number(rev.paused));
+        }
+        export function afterResume() {
+            rev.resume();
+            rev.click(4, Number(rev.paused));
+        }
+        export default async function() {
+            owner = await rev.screenOwnership();
+            let value = 41;
+            rev.click(1, value);
+            rev.pause();
+            rev.pause();
+            await rev.sleep(50);
+            rev.click(5, ++value);
+            await new Promise(() => {});
+        }
+    "#).unwrap();
+    let (controls, events) = recording_controls();
+    let pause_rx = controls.actions_paused.subscribe();
+    let window = controls.window.clone();
+    let (commands, command_rx) = mpsc::channel(8);
+    let (states, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    tokio::task::LocalSet::new().run_until(async {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx, states, pause_rx, Some(path.clone()), controls, lock_state, Duration::from_millis(2),
+        ));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while state_rx.borrow().phase != ScriptPhase::Paused { state_rx.changed().await.unwrap(); }
+        }).await.unwrap();
+        assert!(!lock_state.is_enabled());
+        assert!(!state_rx.borrow().locked);
+        assert_eq!(*events.borrow(), vec![
+            HostEvent::Click(1, 41, Button::Left),
+            HostEvent::Click(2, 0, Button::Left),
+        ]);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(events.borrow().len(), 2, "the main invocation must stay suspended");
+        window.write_clipboard("resume").unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while events.borrow().len() < 6 || state_rx.borrow().phase != ScriptPhase::Running {
+                tokio::task::yield_now().await;
+            }
+        }).await.unwrap();
+        assert!(lock_state.is_enabled());
+        assert!(state_rx.borrow().locked);
+        assert_eq!(*events.borrow(), vec![
+            HostEvent::Click(1, 41, Button::Left),
+            HostEvent::Click(2, 0, Button::Left),
+            HostEvent::Clipboard("resume".to_owned()),
+            HostEvent::Click(3, 1, Button::Left),
+            HostEvent::Click(4, 0, Button::Left),
+            HostEvent::Click(5, 42, Button::Left),
+        ]);
+        commands.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), runner).await.unwrap().unwrap().unwrap();
+    }).await;
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn ensure_running_resolves_when_running() {
     let session = ScriptSession::new(r#"export default (async () => { await rev.ensureRunning(); })"#)
         .await

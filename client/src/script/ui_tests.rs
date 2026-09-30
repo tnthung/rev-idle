@@ -93,9 +93,9 @@ async fn ui_callback_runs_while_main_awaits_and_while_paused() {
     let session = ScriptSession::new_with_connection_and_control(r#"
         export function afterLoad() {
             rev.ui.button = { text: 'ready' };
-            rev.ui.button.setOnClick(function() { rev.click(7, 1); this.text = 'callback'; rev.global.released = true; });
+            rev.ui.button.setOnClick(function() { rev.pause(); rev.click(7, 1); this.text = 'callback'; rev.global.released = true; });
             rev.ui.release = {};
-            rev.ui.release.setOnClick(function() { rev.global.released = true; });
+            rev.ui.release.setOnClick(function() { rev.resume(); rev.global.released = true; });
         }
         export default async function() {
             rev.ui.button.text = 'waiting';
@@ -128,14 +128,17 @@ async fn ui_callback_runs_while_main_awaits_and_while_paused() {
     }
     assert_eq!(*clicks.borrow(), vec![7]);
     assert_eq!(snapshots.borrow().elements[0].text, "callback");
+    assert!(controls.actions_paused.is_paused());
+    session.acknowledge_pause(true);
     tokio::select! {
         _ = &mut background => panic!("background service stopped during release"),
         result = session.dispatch_ui_event(ScriptUiEvent {
             session_id: snapshot.session_id.unwrap(), element_id: "release".to_owned(),
             instance_id: snapshot.elements[1].instance_id, events_version: snapshot.elements[1].events_version,
             event: ScriptUiEventKind::Click,
-        }, controls) => result.unwrap(),
+        }, controls.clone()) => result.unwrap(),
     }
+    assert!(!controls.actions_paused.is_paused());
     tokio::time::timeout(Duration::from_secs(1), invocation).await.unwrap().unwrap();
     assert_eq!(snapshots.borrow().elements[0].text, "callback-default");
 }

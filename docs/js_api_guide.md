@@ -101,6 +101,8 @@ Pause prevents new default invocations and stops polling the current invocation 
 
 Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before each automatic loop iteration to wait during pause, especially before reading data used for the next action. Monitoring loops can omit the checkpoint. Game/window controls and ordinary `Action` calls remain available while paused. `Action.loopDetached()` checks for resume at each repetition.
 
+`rev.pause()` and `rev.resume()` synchronously request the same transitions as the host controls. The lifecycle applies them when JavaScript yields, including the existing hooks and input-lock handling. Repeating the current request is harmless; the latest request wins before a transition is applied. `rev.paused` reflects the applied state. Daemons and UI callbacks can call `rev.resume()` while the main invocation is paused. Both methods throw `script session stopped` after termination.
+
 `rev.stop()` works from defaults, hooks, daemons, and UI callbacks. Stop, reload, replacement, exit, and uncaught default failures cancel both runtimes and skip `beforeStop`. Host cleanup removes custom UI and releases input locks and ownership. It does not depend on JavaScript `finally`; perform script-specific cleanup explicitly before requesting Stop. Already-dispatched game actions may finish. Engine interruption cannot preempt a blocking native call such as synchronous `rev.shell` until that call returns.
 
 ## `rev`
@@ -132,6 +134,8 @@ Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before 
 | `rev.shell(command: string)` | `{ stdout: string, stderr: string }` | Synchronously runs `cmd.exe /D /S /C command` and captures both streams. |
 | `rev.sleep(milliseconds: number)` | `Promise<void>` | Waits using real elapsed time. |
 | `rev.paused` | `boolean` | Live, read-only pause flag. |
+| `rev.pause()` | `void` | Requests a pause of the main invocation and ordinary detached main work. |
+| `rev.resume()` | `void` | Requests resumption of the paused session. |
 | `rev.ensureRunning()` | `Promise<void>` | Resolves while running; waits while paused; rejects with `script session stopped` on termination. |
 | `rev.stop()` | `void` | Terminates the entire session and interrupts JavaScript. |
 | `rev.daemon` | `Record<string, RevDaemon \| undefined>` | Assign a function to register a background daemon; `delete rev.daemon.name` retires it. Reads are for presence checks and do not return the installed function. |

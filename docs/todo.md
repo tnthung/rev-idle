@@ -28,6 +28,6 @@
 - [x] Custom UI injection with script.
 - [x] Extend capture mode to support getting the path of other UI elements.
 - [x] Better pause management.
-- [ ] `rev.pause()` for pausing the script execution.
-- [ ] `rev.resume()` for resuming the script execution.
+- [x] `rev.pause()` for pausing the script execution.
+- [x] `rev.resume()` for resuming the script execution.
 - [ ] Refactor the whole project structure.
