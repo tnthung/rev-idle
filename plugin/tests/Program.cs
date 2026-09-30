@@ -1259,7 +1259,7 @@ static async Task ControlBridgePublishesScriptHistoryAndSelections()
         string[] scripts = { @"C:\scripts\first.js", @"C:\scripts\second.js" };
         await SendText(peer, WsConnection.SerializeForTest(
             Guid.NewGuid(),
-            new StateUpdate("running", false, false, scripts)));
+            new StateUpdate("running", false, true, scripts, "Unity loop")));
         DateTime stateDeadline = DateTime.UtcNow.AddSeconds(2);
         while (bridge.State is null && DateTime.UtcNow < stateDeadline)
         {
@@ -1268,6 +1268,7 @@ static async Task ControlBridgePublishesScriptHistoryAndSelections()
         }
 
         Equal(true, bridge.State?.Scripts?.SequenceEqual(scripts) == true, testName);
+        Equal("Unity loop", bridge.State?.LockLabel, testName);
 
         bridge.Load(scripts[0], false);
         using JsonDocument unlocked = JsonDocument.Parse(await ReceiveText(peer));

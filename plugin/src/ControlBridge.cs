@@ -24,7 +24,8 @@ internal readonly record struct ControlState(
     ScriptPhase Phase,
     bool Capture,
     bool Locked = false,
-    IReadOnlyList<string>? Scripts = null);
+    IReadOnlyList<string>? Scripts = null,
+    string? LockLabel = null);
 
 internal sealed class ControlBridge
 {
@@ -60,7 +61,7 @@ internal sealed class ControlBridge
                 if (context.CancellationToken.IsCancellationRequested ||
                     _connection.ConnectionGeneration != context.Generation)
                     return Task.CompletedTask;
-                _state = new ControlState(phase.Value, packet.Capture, packet.Locked, packet.Scripts?.ToArray());
+                _state = new ControlState(phase.Value, packet.Capture, packet.Locked, packet.Scripts?.ToArray(), packet.LockLabel);
                 _stateGeneration = context.Generation;
             }
             return Task.CompletedTask;

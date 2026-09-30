@@ -125,7 +125,7 @@ Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before 
 | `rev.drag(x1: number, y1: number, x2: number, y2: number)` | `void` | Sends a background drag. |
 | `rev.press(key: string)` | `void` | Sends one supported key to the game. Input is case-insensitive. |
 | `rev.resize(width: number, height: number)` | `void` | Sets the game client-area dimensions. |
-| `rev.screenOwnership()` | `Promise<ScreenOwnership>` | Waits for and acquires this script session's cooperative screen-input ownership. |
+| `rev.screenOwnership(label?: string)` | `Promise<ScreenOwnership>` | Waits for and acquires this script session's cooperative screen-input ownership. |
 | `rev.read_clipboard()` | `string` | Reads Windows Unicode text. |
 | `rev.write_clipboard(text: string)` | `void` | Replaces Windows clipboard text. |
 | `rev.read_file(path: string)` | `string \| null` | Synchronously reads UTF-8 text; returns `null` only when missing. |
@@ -271,13 +271,13 @@ The promise resolves after the callbacks run. Check the state to see the value a
 
 ### Screen ownership
 
-`rev.screenOwnership()` waits in FIFO order for this session's cooperative, non-reentrant screen mutex and resolves to a `ScreenOwnership` token. Use the token with JavaScript's explicit resource management so scope cleanup is automatic:
+`rev.screenOwnership(label?: string)` waits in FIFO order for this session's cooperative, non-reentrant screen mutex and resolves to a `ScreenOwnership` token. The optional label appears in a tooltip when hovering the lock icon while that caller owns the screen. Use the token with JavaScript's explicit resource management so scope cleanup is automatic:
 
 ```typescript
 import { Action } from "./lib/action.ts";
 
 export default async function() {
-  using so = await rev.screenOwnership();
+  using so = await rev.screenOwnership("Infinity upgrades");
   await Action.main();
   await Action.infinity();
 }

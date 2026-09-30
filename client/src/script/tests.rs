@@ -326,7 +326,7 @@ async fn screen_ownership_using_serializes_waiters_and_releases_on_exit() {
                 using so = await rev.screenOwnership();
                 so.release();
                 so.release();
-                using next = await rev.screenOwnership();
+                using next = await rev.screenOwnership(undefined);
             }
         "#,
         "screen-ownership.ts",
@@ -398,7 +398,7 @@ async fn screen_ownership_tracks_pause_resume_and_stop_during_an_invocation() {
     std::fs::write(&path, r#"
         let owner;
         export default async function() {
-            owner ??= await rev.screenOwnership();
+            owner ??= await rev.screenOwnership("Unity loop");
             await rev.sleep(5000);
         }
         export async function beforeStop() {
@@ -429,6 +429,8 @@ async fn screen_ownership_tracks_pause_resume_and_stop_during_an_invocation() {
                 }
             }).await.unwrap();
             assert_eq!(lock_state.is_enabled(), locked);
+            assert_eq!(serde_json::to_value(&*state_rx.borrow()).unwrap()["lockLabel"],
+                if locked { serde_json::json!("Unity loop") } else { serde_json::Value::Null });
             if let Some(command) = command { command_tx.send(command).await.unwrap(); }
         }
         for paused in [true, false] {
@@ -441,6 +443,8 @@ async fn screen_ownership_tracks_pause_resume_and_stop_during_an_invocation() {
                 }
             }).await.unwrap();
             assert_eq!(lock_state.is_enabled(), !paused);
+            assert_eq!(serde_json::to_value(&*state_rx.borrow()).unwrap()["lockLabel"],
+                if paused { serde_json::Value::Null } else { serde_json::json!("Unity loop") });
         }
         command_tx.send(ScriptCommand::Stop).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -450,6 +454,7 @@ async fn screen_ownership_tracks_pause_resume_and_stop_during_an_invocation() {
             }
         }).await.unwrap();
         assert!(!lock_state.is_enabled());
+        assert!(serde_json::to_value(&*state_rx.borrow()).unwrap()["lockLabel"].is_null());
         assert!(events.borrow().is_empty(), "terminal teardown must skip beforeStop");
         command_tx.send(ScriptCommand::Exit).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), runner).await.unwrap().unwrap().unwrap();
@@ -3690,6 +3695,7 @@ async fn lifecycle_publishes_actual_phase_and_one_shot_capture_state() {
         phase: ScriptPhase::Unloaded,
         capture: false,
         locked: false,
+        lock_label: None,
         scripts: Vec::new(),
     });
     let (controls, _) = recording_controls();
@@ -3713,6 +3719,7 @@ async fn lifecycle_publishes_actual_phase_and_one_shot_capture_state() {
                     phase: ScriptPhase::Running,
                     capture: false,
                     locked: false,
+                    lock_label: None,
                     scripts: vec![absolute_path.to_string_lossy().into_owned()],
                 }) {
                     break;
@@ -3891,6 +3898,7 @@ async fn lock_command_round_trip_sets_and_clears_reported_state() {
         phase: ScriptPhase::Unloaded,
         capture: false,
         locked: false,
+        lock_label: None,
         scripts: Vec::new(),
     });
     let (controls, _) = recording_controls();
@@ -4218,6 +4226,7 @@ async fn hotkey_pause_clears_reported_lock_state() {
         phase: ScriptPhase::Unloaded,
         capture: false,
         locked: false,
+        lock_label: None,
         scripts: Vec::new(),
     });
     let (controls, _) = recording_controls();
@@ -4301,6 +4310,7 @@ async fn stop_command_during_an_invocation_clears_lock_state() {
         phase: ScriptPhase::Unloaded,
         capture: false,
         locked: false,
+        lock_label: None,
         scripts: Vec::new(),
     });
     let (controls, events) = recording_controls();
@@ -4383,6 +4393,7 @@ async fn capture_commands_publish_one_shot_state_without_a_script_path() {
         phase: ScriptPhase::Unloaded,
         capture: false,
         locked: false,
+        lock_label: None,
         scripts: Vec::new(),
     });
     let (controls, _) = recording_controls();

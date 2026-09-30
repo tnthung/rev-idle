@@ -383,8 +383,8 @@ pub(super) fn create_rev<'js>(
     let screen_ownership_session = session.clone();
     rev.set(
         "screenOwnership",
-        Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>| {
-            screen_ownership.clone().acquire(ctx, screen_ownership_session.clone())
+        Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, label: Opt<Option<String>>| {
+            screen_ownership.clone().acquire(ctx, screen_ownership_session.clone(), label.0.flatten())
         }))?,
     )?;
     rev.set(

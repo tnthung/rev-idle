@@ -437,6 +437,7 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
         );
         let state_changed = {
             let current = state_updates.borrow();
+            if state.locked { state.lock_label = current.lock_label.clone(); }
             current.phase != state.phase
                 || current.capture != state.capture
                 || current.locked != state.locked

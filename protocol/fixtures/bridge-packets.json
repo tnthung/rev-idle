@@ -28,7 +28,7 @@
   ,"LockScript": {}
   ,"LoadScript": { "path": "C:\\scripts\\unity_loop2.js", "locked": true }
   ,"RemoveScriptHistory": { "path": "C:\\scripts\\test.js" }
-  ,"StateUpdate": { "phase": "paused", "capture": true, "locked": false, "scripts": ["C:\\scripts\\test.js", "C:\\scripts\\unity_loop2.js"] }
+  ,"StateUpdate": { "phase": "paused", "capture": true, "locked": false, "lockLabel": null, "scripts": ["C:\\scripts\\test.js", "C:\\scripts\\unity_loop2.js"] }
   ,"ScriptUiSnapshot": {
     "sessionId": "11111111-1111-4111-8111-111111111111", "revision": 7,
     "elements": [

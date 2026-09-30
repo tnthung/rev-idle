@@ -562,6 +562,7 @@ mod tests {
                 phase: ScriptPhase::Paused,
                 capture: true,
                 locked: false,
+                lock_label: None,
                 scripts: vec![r"C:\scripts\test.js".to_owned(), r"C:\scripts\unity_loop2.js".to_owned()],
             }).unwrap()),
         ];

@@ -241,6 +241,8 @@ internal sealed class ControlOverlay : IDisposable
     private readonly Image _captureImage;
     private readonly Text _tooltip;
     private readonly GameObject _tooltipRoot;
+    private Button? _hoveredButton;
+    private string? _hoveredTooltip;
     private readonly GameObject _menuRoot;
     private readonly GameObject _dismissRoot;
     private readonly List<GameObject> _menuItems = new();
@@ -480,12 +482,16 @@ internal sealed class ControlOverlay : IDisposable
             EventTrigger.Entry enter = new() { eventID = EventTriggerType.PointerEnter };
             enter.callback.AddListener((UnityAction<BaseEventData>)(_ =>
             {
-                _tooltip.text = tooltip;
-                _tooltipRoot.SetActive(true);
+                _hoveredButton = button;
+                _hoveredTooltip = tooltip;
             }));
             trigger.triggers.Add(enter);
             EventTrigger.Entry exit = new() { eventID = EventTriggerType.PointerExit };
-            exit.callback.AddListener((UnityAction<BaseEventData>)(_ => _tooltipRoot.SetActive(false)));
+            exit.callback.AddListener((UnityAction<BaseEventData>)(_ =>
+            {
+                _hoveredButton = null;
+                _tooltipRoot.SetActive(false);
+            }));
             trigger.triggers.Add(exit);
             return (button, label, image);
         }
@@ -537,6 +543,7 @@ internal sealed class ControlOverlay : IDisposable
         _tooltip = tooltipTextObject.AddComponent<Text>();
         _tooltip.font = _font;
         _tooltip.fontSize = TooltipFontSize;
+        _tooltip.supportRichText = false;
         _tooltip.alignment = TextAnchor.MiddleCenter;
         _tooltip.color = Color.white;
         _tooltip.raycastTarget = false;
@@ -728,8 +735,16 @@ internal sealed class ControlOverlay : IDisposable
         _resumePauseImage.raycastTarget = state?.Capture != true && (presentation.ResumePauseEnabled || !_menuController.Open);
         _captureImage.raycastTarget = state?.Capture != true && (presentation.CaptureEnabled || !_menuController.Open);
         _menuImage.raycastTarget = state?.Capture != true;
-        if (state?.Capture == true || _locked || _menuController.Open)
-            _tooltipRoot.SetActive(false);
+        _tooltip.text = _locked ? state?.LockLabel : _hoveredTooltip;
+        _tooltipRoot.SetActive(_hoveredButton != null && state?.Capture != true && !_menuController.Open
+            && (!_locked || _hoveredButton == _resumePause) && !string.IsNullOrEmpty(_tooltip.text));
+        if (_tooltipRoot.activeSelf)
+        {
+            RectTransform tooltipRect = _tooltipRoot.GetComponent<RectTransform>();
+            tooltipRect.sizeDelta = new Vector2(Mathf.Min(Screen.width - 16, Mathf.Max(TooltipWidth, _tooltip.preferredWidth + 12)), TooltipHeight);
+            tooltipRect.sizeDelta = new Vector2(tooltipRect.sizeDelta.x, Mathf.Max(TooltipHeight, _tooltip.preferredHeight + 8));
+            tooltipRect.anchoredPosition = new Vector2(Mathf.Min(-2, 160 - tooltipRect.sizeDelta.x), 42);
+        }
     }
 
     internal static (float Red, float Green, float Blue, float Alpha) CaptureDisabledColor(bool captureActive) =>

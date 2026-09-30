@@ -9,6 +9,8 @@ pub(crate) struct StateUpdate {
     pub(crate) phase: ScriptPhase,
     pub(crate) capture: bool,
     pub(crate) locked: bool,
+    #[serde(default, rename = "lockLabel")]
+    pub(crate) lock_label: Option<String>,
     #[serde(default)]
     pub(crate) scripts: Vec<String>,
 }
@@ -19,6 +21,7 @@ impl StateUpdate {
             phase: if !has_path { ScriptPhase::Unloaded } else if !script_loaded { ScriptPhase::Stopped } else if paused { ScriptPhase::Paused } else { ScriptPhase::Running },
             capture: capture && (!script_loaded || paused),
             locked: locked && has_path && script_loaded,
+            lock_label: None,
             scripts: Vec::new(),
         }
     }

@@ -455,6 +455,7 @@ mod tests {
             phase: ScriptPhase::Paused,
             capture: true,
             locked: false,
+            lock_label: None,
             scripts: Vec::new(),
         });
         let generation = connection.connection_generation();
@@ -479,7 +480,7 @@ mod tests {
         assert_eq!(envelope["type"], StateUpdate::TYPE);
         assert_eq!(
             envelope["payload"],
-            json!({ "phase": "paused", "capture": true, "locked": false, "scripts": [] }),
+            json!({ "phase": "paused", "capture": true, "locked": false, "lockLabel": null, "scripts": [] }),
         );
         assert!(tokio::time::timeout(Duration::from_millis(30), peer.next())
             .await
@@ -488,6 +489,7 @@ mod tests {
             phase: ScriptPhase::Paused,
             capture: true,
             locked: false,
+            lock_label: None,
             scripts: Vec::new(),
         });
         assert!(tokio::time::timeout(Duration::from_millis(30), peer.next())
@@ -497,6 +499,7 @@ mod tests {
             phase: ScriptPhase::Running,
             capture: false,
             locked: false,
+            lock_label: None,
             scripts: Vec::new(),
         });
         let message = tokio::time::timeout(Duration::from_secs(1), peer.next())
@@ -509,7 +512,7 @@ mod tests {
         assert_eq!(envelope["type"], StateUpdate::TYPE);
         assert_eq!(
             envelope["payload"],
-            json!({ "phase": "running", "capture": false, "locked": false, "scripts": [] }),
+            json!({ "phase": "running", "capture": false, "locked": false, "lockLabel": null, "scripts": [] }),
         );
         shutdown_tx.send_replace(true);
         tokio::time::timeout(Duration::from_secs(1), publisher)
@@ -526,6 +529,7 @@ mod tests {
             phase: ScriptPhase::Stopped,
             capture: false,
             locked: false,
+            lock_label: None,
             scripts: Vec::new(),
         });
         let generation = connection.connection_generation();
@@ -540,6 +544,7 @@ mod tests {
             phase: ScriptPhase::Running,
             capture: false,
             locked: false,
+            lock_label: None,
             scripts: Vec::new(),
         });
         tokio::task::yield_now().await;
@@ -586,6 +591,7 @@ mod tests {
             phase: ScriptPhase::Running,
             capture: false,
             locked: false,
+            lock_label: None,
             scripts: Vec::new(),
         });
         let mut generation = connection.connection_generation();
@@ -620,12 +626,14 @@ mod tests {
             phase: ScriptPhase::Stopped,
             capture: false,
             locked: false,
+            lock_label: None,
             scripts: Vec::new(),
         });
         state_tx.send_replace(StateUpdate {
             phase: ScriptPhase::Paused,
             capture: true,
             locked: false,
+            lock_label: None,
             scripts: Vec::new(),
         });
         let mut second_peer = tokio::time::timeout(Duration::from_secs(1), second_rx)
@@ -639,7 +647,7 @@ mod tests {
             .unwrap();
         let envelope: serde_json::Value = serde_json::from_str(message.into_text().unwrap().as_ref())
             .unwrap();
-        assert_eq!(envelope["payload"], json!({ "phase": "paused", "capture": true, "locked": false, "scripts": [] }));
+        assert_eq!(envelope["payload"], json!({ "phase": "paused", "capture": true, "locked": false, "lockLabel": null, "scripts": [] }));
         assert!(tokio::time::timeout(Duration::from_millis(30), second_peer.next())
             .await
             .is_err());
