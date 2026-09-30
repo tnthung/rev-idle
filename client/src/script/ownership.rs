@@ -139,6 +139,7 @@ mod tests {
             export default async function() {
                 using first = await rev.screenOwnership();
                 rev.click(1, 1);
+                await rev.sleep(10);
                 const second = (async () => { using next = await rev.screenOwnership(); rev.click(2, 1); })();
                 const third = (async () => { using next = await rev.screenOwnership(); rev.click(4, 1); })();
                 const monitor = (async () => {
@@ -151,29 +152,88 @@ mod tests {
             }
         "#).await.unwrap();
         session.screen_ownership.attach(lock_state, state_updates);
-        session.screen_ownership.set_paused(true);
-        controls.actions_paused.set_paused(true);
         let invocation = session.invoke((), controls.clone());
         tokio::pin!(invocation);
-        tokio::time::timeout(Duration::from_secs(1), async {
-            let mut monitor_ticks = 0;
-            while monitor_ticks < 3 {
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::select! {
+                result = &mut invocation => panic!("invocation completed before acquiring ownership: {result:?}"),
+                event = received.recv() => event.unwrap(),
+            }
+        }).await.unwrap(), 1);
+        session.acknowledge_pause(true);
+        session.screen_ownership.set_paused(true);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(*clicks.borrow(), vec![1]);
+        assert!(!lock_state.is_enabled());
+        session.acknowledge_pause(false);
+        session.screen_ownership.set_paused(false);
+        assert!(lock_state.is_enabled());
+        tokio::time::timeout(Duration::from_secs(1), invocation).await.unwrap().unwrap();
+        assert_eq!(clicks.borrow().iter().copied().filter(|event| *event < 100).collect::<Vec<_>>(), vec![1, 3, 2, 4]);
+        assert!(!lock_state.is_enabled());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ownership_is_shared_across_runtime_local_tokens() {
+        use crate::script::{bindings::{Button, HostControls, MouseInput, SharedMouse}, session::ScriptSession};
+        struct Mouse(tokio::sync::mpsc::UnboundedSender<i32>);
+        impl MouseInput for Mouse {
+            fn click_at(&mut self, x: i32, _: i32, _: Button) -> Result<(), crate::script::bindings::MouseInputError> {
+                self.0.send(x).unwrap();
+                Ok(())
+            }
+        }
+        let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let controls: HostControls = (Rc::new(RefCell::new(Mouse(events))) as SharedMouse).into();
+        let session = ScriptSession::new(r#"
+            export function afterLoad() {
+                rev.daemon.owner = async function() {
+                    const owner = await rev.screenOwnership();
+                    rev.click(10, 1);
+                    await rev.sleep(30);
+                    owner.release();
+                    rev.click(11, 1);
+                };
+            }
+            export default async function() {
+                const owner = await rev.screenOwnership();
+                rev.click(20, 1);
+                owner.release();
+            }
+        "#).await.unwrap();
+        let background = session.drive_background(controls.clone());
+        tokio::pin!(background);
+        let after_load = session.run_after_load(controls.clone());
+        tokio::pin!(after_load);
+        tokio::select! {
+            _ = &mut background => panic!("background service stopped during afterLoad"),
+            result = &mut after_load => result.unwrap(),
+        }
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
                 tokio::select! {
-                    _ = &mut invocation => panic!("checkpoint completed while paused"),
-                    event = received.recv() => {
-                        if event.unwrap() == 100 { monitor_ticks += 1; }
+                    _ = &mut background => panic!("background service stopped before daemon acquired ownership"),
+                    event = received.recv() => if event.unwrap() == 10 { break 10; },
+                }
+            }
+        }).await.unwrap(), 10);
+        let invocation = session.invoke((), controls);
+        tokio::pin!(invocation);
+        let mut observed = Vec::new();
+        let mut invocation_complete = false;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while observed.len() < 2 {
+                tokio::select! {
+                    _ = &mut background => panic!("background service stopped while tokens were queued"),
+                    result = &mut invocation, if !invocation_complete => {
+                        result.unwrap();
+                        invocation_complete = true;
                     }
+                    event = received.recv() => observed.push(event.unwrap()),
                 }
             }
         }).await.unwrap();
-        assert_eq!(*clicks.borrow(), vec![1, 100, 100, 100]);
-        assert!(!lock_state.is_enabled());
-        session.screen_ownership.set_paused(false);
-        controls.actions_paused.set_paused(false);
-        assert!(lock_state.is_enabled());
-        tokio::time::timeout(Duration::from_secs(1), invocation).await.unwrap().unwrap();
-        assert_eq!(*clicks.borrow(), vec![1, 100, 100, 100, 3, 2, 4]);
-        assert!(!lock_state.is_enabled());
+        assert_eq!(observed, vec![11, 20]);
     }
 
     #[tokio::test(flavor = "current_thread")]

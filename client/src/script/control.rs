@@ -195,14 +195,19 @@ impl ScriptControl {
 struct SessionControlState {
     stopped: AtomicBool,
     stopped_updates: watch::Sender<bool>,
+    paused: AtomicBool,
+    paused_updates: watch::Sender<bool>,
 }
 
 impl SessionControlState {
     fn new() -> Self {
         let (stopped_updates, _) = watch::channel(false);
+        let (paused_updates, _) = watch::channel(false);
         Self {
             stopped: AtomicBool::new(false),
             stopped_updates,
+            paused: AtomicBool::new(false),
+            paused_updates,
         }
     }
 
@@ -234,6 +239,20 @@ impl SessionControl {
 
     pub(super) fn subscribe_stopped(&self) -> watch::Receiver<bool> {
         self.state.stopped_updates.subscribe()
+    }
+
+    pub(super) fn is_paused(&self) -> bool {
+        self.state.paused.load(Ordering::Acquire)
+    }
+
+    pub(super) fn subscribe_paused(&self) -> watch::Receiver<bool> {
+        self.state.paused_updates.subscribe()
+    }
+
+    pub(super) fn acknowledge_pause(&self, paused: bool) {
+        if self.state.paused.swap(paused, Ordering::AcqRel) != paused {
+            self.state.paused_updates.send_replace(paused);
+        }
     }
 
     pub(super) fn error_message() -> &'static str {
@@ -300,5 +319,26 @@ mod tests {
         assert_eq!(control.pending_command_generation(), 0);
         assert!(control.acknowledge_unpaired_terminal());
         assert!(external <= control.acknowledged_generation());
+    }
+
+    #[test]
+    fn pause_acknowledgment_is_session_local_and_published() {
+        let control = ScriptControl::default();
+        let first = control.register_session();
+        let mut first_updates = first.subscribe_paused();
+        let replacement = control.register_session();
+
+        assert!(!first.is_paused());
+        assert!(!replacement.is_paused());
+        first.acknowledge_pause(true);
+        assert!(first.is_paused());
+        assert!(!replacement.is_paused());
+        assert!(first_updates.has_changed().unwrap());
+        assert!(*first_updates.borrow_and_update());
+
+        first.acknowledge_pause(false);
+        assert!(!first.is_paused());
+        assert!(first_updates.has_changed().unwrap());
+        assert!(!*first_updates.borrow_and_update());
     }
 }

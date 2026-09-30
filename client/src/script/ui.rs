@@ -1,81 +1,532 @@
-use super::{bindings::{bridge_error, reject_if_stopped}, control::SessionControl};
-use crate::bridge::{ScriptUiEvent, ScriptUiMeasureReq, ScriptUiPublisher, WsConnection};
-use rquickjs::{Ctx, Exception, Function, IntoJs, Object, Persistent, Value, function::Async, promise::MaybePromise};
+use super::{
+    background::{BackgroundRegistry, BackgroundRegistrationStatus, BackgroundTarget},
+    bindings::{bridge_error, reject_if_stopped},
+    control::SessionControl,
+    transfer::FunctionTransfer,
+};
+use crate::bridge::{
+    ScriptUiBorderState, ScriptUiCornerState, ScriptUiElementState, ScriptUiEvent,
+    ScriptUiEventKind, ScriptUiLengthState, ScriptUiMeasureReq, ScriptUiPaddingState,
+    ScriptUiPublisher, WsConnection,
+};
+use rquickjs::{
+    function::Async, Ctx, Exception, Function, IntoJs, Object, Persistent, Value,
+};
+use serde_json::{Map, Value as JsonValue};
+use std::{cell::RefCell, rc::Rc};
 use uuid::Uuid;
 
+#[derive(Clone)]
+struct UiHandler {
+    registration: Uuid,
+    active: bool,
+}
+
+struct UiElement {
+    name: String,
+    instance: Uuid,
+    values: Map<String, JsonValue>,
+    states: Map<String, JsonValue>,
+    events_version: u64,
+    handlers: [Option<UiHandler>; 3],
+}
+
+struct UiStore {
+    elements: Vec<UiElement>,
+}
+
 pub(super) struct ScriptUiState {
-    api: Persistent<Object<'static>>,
     session_id: Uuid,
     publisher: ScriptUiPublisher,
+    session: SessionControl,
+    store: RefCell<UiStore>,
+}
+
+pub(super) struct ScriptUiBindings {
+    state: Rc<ScriptUiState>,
+    api: Persistent<Object<'static>>,
+}
+
+fn ui_error(message: impl Into<String>) -> rquickjs::Error {
+    rquickjs::Error::new_from_js_message("UI", "value", message.into())
+}
+
+fn event_index(event: ScriptUiEventKind) -> usize {
+    match event {
+        ScriptUiEventKind::Hover => 0,
+        ScriptUiEventKind::Leave => 1,
+        ScriptUiEventKind::Click => 2,
+    }
+}
+
+fn parse_event(value: &str) -> Result<ScriptUiEventKind, String> {
+    match value {
+        "hover" => Ok(ScriptUiEventKind::Hover),
+        "leave" => Ok(ScriptUiEventKind::Leave),
+        "click" => Ok(ScriptUiEventKind::Click),
+        _ => Err(format!("unknown UI event: {value}")),
+    }
+}
+
+fn default_value(field: &str) -> Option<JsonValue> {
+    Some(match field {
+        "hidden" => JsonValue::Bool(false),
+        "basedOn" => JsonValue::String(String::new()),
+        "text" => JsonValue::String(String::new()),
+        "font" => JsonValue::String(String::new()),
+        "size" => JsonValue::Number(14.into()),
+        "posX" | "posY" => JsonValue::Number(serde_json::Number::from_f64(0.0).unwrap()),
+        "lenX" | "lenY" => serde_json::json!({ "min": 0.0 }),
+        "alignX" => JsonValue::String("left".to_owned()),
+        "alignY" => JsonValue::String("center".to_owned()),
+        "color" => serde_json::json!([0, 0, 0, 0]),
+        "textColor" => serde_json::json!([255, 255, 255, 255]),
+        "border" => serde_json::json!({ "thickness": 0.0, "color": [255, 255, 255] }),
+        "corner" => serde_json::json!({ "radius": 0.0 }),
+        "padding" => serde_json::json!({ "thickness": 0.0 }),
+        _ => return None,
+    })
+}
+
+fn finite_number(value: &JsonValue, label: &str) -> Result<f64, String> {
+    let value = value.as_f64().ok_or_else(|| format!("{label} must be a number"))?;
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(format!("invalid {label}"))
+    }
+}
+
+fn validate_color(value: &JsonValue, label: &str) -> Result<JsonValue, String> {
+    let values = value.as_array().ok_or_else(|| format!("invalid {label}"))?;
+    if values.len() != 3 && values.len() != 4 {
+        return Err(format!("invalid {label}"));
+    }
+    for channel in values {
+        let number = channel.as_u64().ok_or_else(|| format!("invalid {label} channel"))?;
+        if number > 255 {
+            return Err(format!("invalid {label} channel"));
+        }
+    }
+    Ok(value.clone())
+}
+
+fn validate_compound(field: &str, value: &JsonValue) -> Result<JsonValue, String> {
+    let values = value.as_object().ok_or_else(|| format!("invalid {field}"))?;
+    let allowed = match field {
+        "lenX" | "lenY" => ["min", "max"].as_slice(),
+        "border" => ["thickness", "color"].as_slice(),
+        "corner" => ["radius", "topLeft", "topRight", "bottomLeft", "bottomRight"].as_slice(),
+        "padding" => ["thickness", "top", "right", "bottom", "left"].as_slice(),
+        _ => return Err(format!("invalid {field}")),
+    };
+    for (key, item) in values {
+        if !allowed.contains(&key.as_str()) {
+            return Err(format!("Unknown {field} field: {key}"));
+        }
+        if field == "border" && key == "color" {
+            validate_color(item, "border.color")?;
+        } else {
+            let value = finite_number(item, &format!("{field}.{key}"))?;
+            if value < 0.0 {
+                return Err(format!("invalid {field}.{key}"));
+            }
+        }
+    }
+    if (field == "lenX" || field == "lenY")
+        && values.get("max").is_some()
+        && finite_number(values.get("max").unwrap(), "length.max")?
+            < values.get("min").map_or(0.0, |value| finite_number(value, "length.min").unwrap_or(-1.0))
+    {
+        return Err("Maximum length is less than minimum".to_owned());
+    }
+    Ok(value.clone())
+}
+
+fn validate_field(field: &str, value: &JsonValue) -> Result<JsonValue, String> {
+    if matches!(field, "onClick" | "onHover" | "onLeave") {
+        return Err(format!("{field} is configured through its setter"));
+    }
+    if field == "states" {
+        return value
+            .as_object()
+            .map(|_| value.clone())
+            .ok_or_else(|| "states must be an object".to_owned());
+    }
+    if default_value(field).is_none() {
+        return Err(format!("Unknown UI field: {field}"));
+    }
+    match field {
+        "hidden" => value
+            .as_bool()
+            .map(JsonValue::Bool)
+            .ok_or_else(|| "hidden must be a boolean".to_owned()),
+        "basedOn" | "text" | "font" => value
+            .as_str()
+            .map(|value| JsonValue::String(value.to_owned()))
+            .ok_or_else(|| format!("{field} must be a string")),
+        "size" => {
+            let value = value.as_i64().ok_or_else(|| "Invalid size".to_owned())?;
+            if !(1..=2_147_483_647).contains(&value) {
+                return Err("Invalid size".to_owned());
+            }
+            Ok(value.into())
+        }
+        "alignX" if matches!(value.as_str(), Some("left" | "center" | "right")) => Ok(value.clone()),
+        "alignY" if matches!(value.as_str(), Some("top" | "center" | "bottom")) => Ok(value.clone()),
+        "alignX" | "alignY" => Err(format!("Invalid {field}")),
+        "posX" | "posY" => finite_number(value, field).map(|_| value.clone()),
+        "lenX" | "lenY" if value.is_number() => {
+            let value = finite_number(value, field)?;
+            if value < 0.0 {
+                return Err(format!("Invalid {field}"));
+            }
+            Ok(JsonValue::Number(serde_json::Number::from_f64(value).unwrap()))
+        }
+        "color" | "textColor" => validate_color(value, field),
+        "lenX" | "lenY" | "border" | "corner" | "padding" => validate_compound(field, value),
+        _ => Err(format!("Invalid {field}")),
+    }
+}
+
+fn validate_definition(json: &str) -> Result<(Map<String, JsonValue>, Map<String, JsonValue>), String> {
+    let value: JsonValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let fields = value
+        .as_object()
+        .ok_or_else(|| "UI definition must be an object".to_owned())?;
+    let mut values = Map::new();
+    let mut states = Map::new();
+    for (field, value) in fields {
+        if field == "states" {
+            states = validate_field(field, value)?.as_object().unwrap().clone();
+        } else {
+            values.insert(field.clone(), validate_field(field, value)?);
+        }
+    }
+    Ok((values, states))
+}
+
+fn value_number(values: &Map<String, JsonValue>, field: &str, default: f64) -> f64 {
+    values.get(field).and_then(JsonValue::as_f64).unwrap_or(default)
+}
+
+fn value_string(values: &Map<String, JsonValue>, field: &str, default: &str) -> String {
+    values.get(field).and_then(JsonValue::as_str).unwrap_or(default).to_owned()
+}
+
+fn snapshot_element(element: &UiElement) -> ScriptUiElementState {
+    let value = |field: &str| element.values.get(field).cloned().or_else(|| default_value(field)).unwrap();
+    let length = |field: &str| match value(field) {
+        JsonValue::Number(number) => ScriptUiLengthState { fixed: number.as_f64(), min: 0.0, max: None },
+        JsonValue::Object(values) => ScriptUiLengthState {
+            fixed: None,
+            min: values.get("min").and_then(JsonValue::as_f64).unwrap_or(0.0),
+            max: values.get("max").and_then(JsonValue::as_f64),
+        },
+        _ => unreachable!(),
+    };
+    let color = |field: &str| {
+        let values = value(field).as_array().unwrap().clone();
+        [
+            values[0].as_u64().unwrap() as u8,
+            values[1].as_u64().unwrap() as u8,
+            values[2].as_u64().unwrap() as u8,
+            values.get(3).and_then(JsonValue::as_u64).unwrap_or(255) as u8,
+        ]
+    };
+    let border = value("border").as_object().unwrap().clone();
+    let border_color = border.get("color").map_or([255, 255, 255, 255], |value| {
+        let values = value.as_array().unwrap();
+        [
+            values[0].as_u64().unwrap() as u8,
+            values[1].as_u64().unwrap() as u8,
+            values[2].as_u64().unwrap() as u8,
+            values.get(3).and_then(JsonValue::as_u64).unwrap_or(255) as u8,
+        ]
+    });
+    let border_thickness = border.get("thickness").and_then(JsonValue::as_f64).unwrap_or(0.0);
+    let corner = value("corner").as_object().unwrap().clone();
+    let corner_radius = corner.get("radius").and_then(JsonValue::as_f64).unwrap_or(0.0);
+    let corner_value = |field: &str| corner.get(field).and_then(JsonValue::as_f64).unwrap_or(corner_radius);
+    let padding = value("padding").as_object().unwrap().clone();
+    let padding_thickness = padding.get("thickness").and_then(JsonValue::as_f64).unwrap_or(0.0);
+    let padding_value = |field: &str| padding.get(field).and_then(JsonValue::as_f64).unwrap_or(padding_thickness);
+    let mut events = Vec::new();
+    for event in [ScriptUiEventKind::Hover, ScriptUiEventKind::Leave, ScriptUiEventKind::Click] {
+        if element.handlers[event_index(event)].as_ref().is_some_and(|handler| handler.active) {
+            events.push(event);
+        }
+    }
+    ScriptUiElementState {
+        id: element.name.clone(),
+        instance_id: element.instance,
+        events_version: element.events_version,
+        hidden: value("hidden").as_bool().unwrap(),
+        based_on: value_string(&element.values, "basedOn", ""),
+        text: value_string(&element.values, "text", ""),
+        font: value_string(&element.values, "font", ""),
+        size: value("size").as_i64().unwrap() as i32,
+        align_x: value_string(&element.values, "alignX", "left"),
+        align_y: value_string(&element.values, "alignY", "center"),
+        pos_x: value_number(&element.values, "posX", 0.0),
+        pos_y: value_number(&element.values, "posY", 0.0),
+        len_x: length("lenX"),
+        len_y: length("lenY"),
+        color: color("color"),
+        text_color: color("textColor"),
+        border: ScriptUiBorderState { thickness: border_thickness, color: border_color },
+        corner: ScriptUiCornerState {
+            top_left: corner_value("topLeft"),
+            top_right: corner_value("topRight"),
+            bottom_left: corner_value("bottomLeft"),
+            bottom_right: corner_value("bottomRight"),
+        },
+        padding: ScriptUiPaddingState {
+            top: padding_value("top"),
+            right: padding_value("right"),
+            bottom: padding_value("bottom"),
+            left: padding_value("left"),
+        },
+        events,
+    }
 }
 
 impl ScriptUiState {
-    pub(super) fn new<'js>(
-        ctx: &Ctx<'js>,
-        publisher: ScriptUiPublisher,
-        connection: WsConnection,
-        session: SessionControl,
-    ) -> rquickjs::Result<Self> {
-        let session_id = Uuid::new_v4();
-        let publish = publisher.clone();
-        let measurements = publisher.subscribe();
-        let stopped = session.clone();
-        let factory: Function = ctx.eval(include_str!("ui.js"))?;
-        let api: Object = factory.call((
-            Function::new(ctx.clone(), move |json: String| {
-                let elements = serde_json::from_str(&json).map_err(|error| {
-                    rquickjs::Error::new_from_js_message("UI", "snapshot", error.to_string())
-                })?;
-                publish.replace(session_id, elements);
-                Ok::<(), rquickjs::Error>(())
-            })?,
-            Function::new(ctx.clone(), || Uuid::new_v4().to_string())?,
-            Function::new(ctx.clone(), move || stopped.is_stopped())?,
-            session_id.to_string(),
-            Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, element_id: String, instance_id: String, kind: String| {
-                let revision = measurements.borrow().revision;
-                let connection = connection.clone();
-                let session = session.clone();
-                async move {
-                    reject_if_stopped(&ctx, &session)?;
-                    let instance_id = Uuid::parse_str(&instance_id)
-                        .map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
-                    let measured = connection.request(ScriptUiMeasureReq { session_id, revision, element_id, instance_id })
-                        .await
-                        .map_err(|error| bridge_error(&ctx, error.to_string()))?;
-                    reject_if_stopped(&ctx, &session)?;
-                    if !measured.width.is_finite() || measured.width < 0.0 || !measured.height.is_finite() || measured.height < 0.0 {
-                        return Err(Exception::throw_message(&ctx, "invalid UI dimensions"));
-                    }
-                    Ok(match kind.as_str() {
-                        "width" => measured.width.into_js(&ctx)?,
-                        "height" => measured.height.into_js(&ctx)?,
-                        "globalX" => match measured.global_x {
-                            Some(value) => value.into_js(&ctx)?,
-                            None => Value::new_null(ctx.clone()),
-                        },
-                        "globalY" => match measured.global_y {
-                            Some(value) => value.into_js(&ctx)?,
-                            None => Value::new_null(ctx.clone()),
-                        },
-                        _ => return Err(Exception::throw_message(&ctx, "invalid UI measurement")),
-                    })
-                }
-            }))?,
-        ))?;
-        publisher.replace(session_id, Vec::new());
-        Ok(Self { api: Persistent::save(ctx, api), session_id, publisher })
+    pub(super) fn new(publisher: ScriptUiPublisher, session: SessionControl) -> Self {
+        let state = Self {
+            session_id: Uuid::new_v4(),
+            publisher,
+            session,
+            store: RefCell::new(UiStore { elements: Vec::new() }),
+        };
+        state.publisher.replace(state.session_id, Vec::new());
+        state
     }
 
-    pub(super) fn registry<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
-        self.api.clone().restore(ctx)?.get("registry")
+    pub(super) fn session_id(&self) -> Uuid {
+        self.session_id
     }
 
-    pub(super) fn dispatch<'js>(&self, ctx: &Ctx<'js>, event: &ScriptUiEvent) -> rquickjs::Result<MaybePromise<'js>> {
-        let api = self.api.clone().restore(ctx)?;
-        let dispatch: Function = api.get("dispatch")?;
-        let event: Value = ctx.json_parse(serde_json::to_string(event).unwrap())?;
-        dispatch.call((event,))
+    fn check_live(&self) -> Result<(), String> {
+        if self.session.is_stopped() {
+            Err(SessionControl::error_message().to_owned())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn publish(&self) {
+        let elements = {
+            let store = self.store.borrow();
+            store.elements.iter().map(snapshot_element).collect()
+        };
+        self.publisher.replace(self.session_id, elements);
+    }
+
+    fn element_index(store: &UiStore, name: &str, instance: Option<Uuid>) -> Result<usize, String> {
+        let index = store.elements.iter().position(|element| element.name == name);
+        let Some(index) = index else { return Err("UI element no longer exists".to_owned()) };
+        if instance.is_some_and(|instance| store.elements[index].instance != instance) {
+            return Err("UI element no longer exists".to_owned());
+        }
+        Ok(index)
+    }
+
+    fn checked(&self, name: &str, instance: Uuid) -> Result<usize, String> {
+        self.check_live()?;
+        Self::element_index(&self.store.borrow(), name, Some(instance))
+    }
+
+    pub(super) fn lookup(&self, name: &str) -> Option<Uuid> {
+        self.store.borrow().elements.iter().find(|element| element.name == name).map(|element| element.instance)
+    }
+
+    pub(super) fn names(&self) -> Vec<String> {
+        self.store.borrow().elements.iter().map(|element| element.name.clone()).collect()
+    }
+
+    pub(super) fn record_json(&self, name: &str, instance: Uuid) -> Result<String, String> {
+        let (values, states) = {
+            let store = self.store.borrow();
+            let element = &store.elements[Self::element_index(&store, name, Some(instance))?];
+            (element.values.clone(), element.states.clone())
+        };
+        serde_json::to_string(&serde_json::json!({ "values": values, "states": states }))
+            .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn replace(&self, name: &str, json: &str) -> Result<(Uuid, Option<(Uuid, Vec<ScriptUiEventKind>)>), String> {
+        self.check_live()?;
+        if name.is_empty() {
+            return Err("UI names must be nonempty strings".to_owned());
+        }
+        let (values, states) = validate_definition(json)?;
+        let instance = Uuid::new_v4();
+        let replacement = UiElement {
+            name: name.to_owned(), instance, values, states, events_version: 1,
+            handlers: [None, None, None],
+        };
+        let old = {
+            let mut store = self.store.borrow_mut();
+            let old = store.elements.iter().position(|element| element.name == name).map(|index| {
+                let element = &store.elements[index];
+                (element.instance, [ScriptUiEventKind::Hover, ScriptUiEventKind::Leave, ScriptUiEventKind::Click]
+                    .into_iter().filter(|event| element.handlers[event_index(*event)].is_some()).collect())
+            });
+            if let Some(index) = store.elements.iter().position(|element| element.name == name) {
+                store.elements[index] = replacement;
+            } else {
+                store.elements.push(replacement);
+            }
+            old
+        };
+        self.publish();
+        Ok((instance, old))
+    }
+
+    pub(super) fn remove(&self, name: &str) -> Result<Option<(Uuid, Vec<ScriptUiEventKind>)>, String> {
+        self.check_live()?;
+        let old = {
+            let mut store = self.store.borrow_mut();
+            let Some(index) = store.elements.iter().position(|element| element.name == name) else { return Ok(None) };
+            let element = store.elements.remove(index);
+            (element.instance, [ScriptUiEventKind::Hover, ScriptUiEventKind::Leave, ScriptUiEventKind::Click]
+                .into_iter().filter(|event| element.handlers[event_index(*event)].is_some()).collect())
+        };
+        self.publish();
+        Ok(Some(old))
+    }
+
+    pub(super) fn set_field(&self, name: &str, instance: Uuid, field: &str, json: &str) -> Result<bool, String> {
+        self.check_live()?;
+        let value: JsonValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
+        if field == "states" {
+            let states = validate_field(field, &value)?.as_object().unwrap().clone();
+            let changed = {
+                let mut store = self.store.borrow_mut();
+                let index = Self::element_index(&store, name, Some(instance))?;
+                let element = &mut store.elements[index];
+                if element.states == states { false } else { element.states = states; true }
+            };
+            return Ok(changed);
+        }
+        let value = validate_field(field, &value)?;
+        let changed = {
+            let mut store = self.store.borrow_mut();
+            let index = Self::element_index(&store, name, Some(instance))?;
+            let element = &mut store.elements[index];
+            if element.values.get(field).cloned().or_else(|| default_value(field)) == Some(value.clone()) {
+                false
+            } else {
+                element.values.insert(field.to_owned(), value);
+                true
+            }
+        };
+        if changed { self.publish(); }
+        Ok(changed)
+    }
+
+    pub(super) fn delete_field(&self, name: &str, instance: Uuid, field: &str) -> Result<bool, String> {
+        self.check_live()?;
+        let changed = {
+            let mut store = self.store.borrow_mut();
+            let index = Self::element_index(&store, name, Some(instance))?;
+            let element = &mut store.elements[index];
+            if field == "states" {
+                if element.states.is_empty() { false } else { element.states.clear(); true }
+            } else if default_value(field).is_some() {
+                element.values.remove(field).is_some()
+            } else {
+                false
+            }
+        };
+        if changed && field != "states" { self.publish(); }
+        Ok(changed)
+    }
+
+    pub(super) fn state_keys(&self, name: &str, instance: Uuid) -> Result<Vec<String>, String> {
+        let index = self.checked(name, instance)?;
+        Ok(self.store.borrow().elements[index].states.keys().cloned().collect())
+    }
+
+    pub(super) fn state_json(&self, name: &str, instance: Uuid, key: &str) -> Result<Option<String>, String> {
+        let (exists, value) = {
+            let store = self.store.borrow();
+            let element = &store.elements[Self::element_index(&store, name, Some(instance))?];
+            (element.states.contains_key(key), element.states.get(key).cloned())
+        };
+        if !exists { return Ok(None); }
+        serde_json::to_string(&value.unwrap()).map(Some).map_err(|error| error.to_string())
+    }
+
+    pub(super) fn set_state(&self, name: &str, instance: Uuid, key: &str, json: &str) -> Result<bool, String> {
+        self.check_live()?;
+        let value: JsonValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
+        let mut store = self.store.borrow_mut();
+        let index = Self::element_index(&store, name, Some(instance))?;
+        let element = &mut store.elements[index];
+        if element.states.get(key) == Some(&value) { return Ok(false); }
+        element.states.insert(key.to_owned(), value);
+        Ok(true)
+    }
+
+    pub(super) fn delete_state(&self, name: &str, instance: Uuid, key: &str) -> Result<bool, String> {
+        self.check_live()?;
+        let mut store = self.store.borrow_mut();
+        let index = Self::element_index(&store, name, Some(instance))?;
+        Ok(store.elements[index].states.remove(key).is_some())
+    }
+
+    pub(super) fn begin_handler_install(&self, name: &str, instance: Uuid, event: ScriptUiEventKind, registration: Uuid) -> Result<(), String> {
+        self.check_live()?;
+        {
+            let mut store = self.store.borrow_mut();
+            let index = Self::element_index(&store, name, Some(instance))?;
+            let element = &mut store.elements[index];
+            element.events_version = element.events_version.checked_add(1).ok_or_else(|| "UI event version overflow".to_owned())?;
+            element.handlers[event_index(event)] = Some(UiHandler { registration, active: false });
+        }
+        self.publish();
+        Ok(())
+    }
+
+    pub(super) fn clear_handler(&self, name: &str, instance: Uuid, event: ScriptUiEventKind) -> Result<Option<Uuid>, String> {
+        self.check_live()?;
+        let registration = {
+            let mut store = self.store.borrow_mut();
+            let index = Self::element_index(&store, name, Some(instance))?;
+            let element = &mut store.elements[index];
+            let registration = element.handlers[event_index(event)].take().map(|handler| handler.registration);
+            if registration.is_some() {
+                element.events_version = element.events_version.checked_add(1).ok_or_else(|| "UI event version overflow".to_owned())?;
+            }
+            registration
+        };
+        if registration.is_some() { self.publish(); }
+        Ok(registration)
+    }
+
+    pub(super) fn complete_handler_install(&self, name: &str, instance: Uuid, event: ScriptUiEventKind, registration: Uuid, installed: bool) -> bool {
+        if self.session.is_stopped() { return false; }
+        let current = {
+            let mut store = self.store.borrow_mut();
+            let Some(index) = store.elements.iter().position(|element| element.name == name) else { return false };
+            let element = &mut store.elements[index];
+            let Some(handler) = element.handlers[event_index(event)].as_mut() else { return false };
+            if element.instance != instance || handler.registration != registration { return false; }
+            handler.active = installed;
+            true
+        };
+        if current && installed { self.publish(); }
+        current
+    }
+
+    pub(super) fn installed_handler_registration(&self, event: &ScriptUiEvent) -> Option<Uuid> {
+        if event.session_id != self.session_id || self.session.is_stopped() { return None; }
+        let store = self.store.borrow();
+        let element = store.elements.iter().find(|element| element.name == event.element_id && element.instance == event.instance_id)?;
+        if element.events_version != event.events_version { return None; }
+        element.handlers[event_index(event.event)].as_ref().filter(|handler| handler.active).map(|handler| handler.registration)
     }
 }
 
@@ -85,734 +536,402 @@ impl Drop for ScriptUiState {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use rquickjs::{Context, Runtime};
-
-    struct CallbackMouse(std::rc::Rc<std::cell::RefCell<Vec<i32>>>);
-
-    impl crate::script::bindings::MouseInput for CallbackMouse {
-        fn click_at(&mut self, x: i32, _: i32, _: crate::script::bindings::Button) -> Result<(), crate::script::bindings::MouseInputError> {
-            self.0.borrow_mut().push(x);
-            Ok(())
-        }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn ui_and_detached_jobs_run_during_default_cadence_delay() {
-        use crate::{app::{PauseUpdate, ScriptCommand, StateUpdate}, bridge::{QueuedScriptUiEvent, ScriptUiEvent, ScriptUiEventKind, ScriptUiPublisher, WsConnection}, capture::{CaptureState, LockState}, script::{bindings::{HostControls, MouseInput, SharedMouse}, lifecycle::run_with_controls_and_lifecycle_with_control, ScriptControl}};
-        use std::{cell::RefCell, rc::Rc, sync::{Arc, atomic::AtomicBool}, time::{Duration, Instant}};
-        use tokio::sync::{mpsc, watch};
-        struct TimedMouse(Rc<RefCell<Vec<(i32, Instant)>>>);
-        impl MouseInput for TimedMouse {
-            fn click_at(&mut self, x: i32, _: i32, _: crate::script::bindings::Button) -> Result<(), crate::script::bindings::MouseInputError> {
-                self.0.borrow_mut().push((x, Instant::now()));
-                Ok(())
-            }
-        }
-        let path = std::env::temp_dir().join(format!("rev-idle-ui-cadence-{}.js", uuid::Uuid::new_v4()));
-        std::fs::write(&path, r#"
-            export function afterLoad() {
-                rev.ui.button = { onClick() { rev.click(7, 7); } };
-                (async () => { await rev.sleep(10); rev.click(9, 9); })();
-            }
-            export default function() { rev.click(1, 1); }
-        "#).unwrap();
-        let clicks = Rc::new(RefCell::new(Vec::new()));
-        let controls: HostControls = (Rc::new(RefCell::new(TimedMouse(clicks.clone()))) as SharedMouse).into();
-        let (commands, command_rx) = mpsc::channel(8);
-        let (events, event_rx) = mpsc::channel(8);
-        let (_pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
-        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-        let (states, _) = watch::channel(StateUpdate::new(false, false, false, false, false));
-        let publisher = ScriptUiPublisher::default();
-        let snapshots = publisher.subscribe();
-        CaptureState.set_enabled(false);
-        tokio::task::LocalSet::new().run_until(async {
-            let runner = tokio::task::spawn_local(run_with_controls_and_lifecycle_with_control(
-                command_rx, event_rx, WsConnection::disconnected_for_test(), pause_rx, Some(path.clone()), controls,
-                Duration::from_millis(500), shutdown_rx, Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)),
-                CaptureState, LockState::default(), None, states, ScriptControl::default(), publisher,
-            ));
-            tokio::time::timeout(Duration::from_secs(1), async {
-                while !clicks.borrow().iter().any(|(id, _)| *id == 1) { tokio::task::yield_now().await; }
-            }).await.unwrap();
-            let snapshot = snapshots.borrow().clone();
-            events.send(QueuedScriptUiEvent {
-                event: ScriptUiEvent {
-                    session_id: snapshot.session_id.unwrap(), element_id: "button".to_owned(),
-                    instance_id: snapshot.elements[0].instance_id, events_version: snapshot.elements[0].events_version,
-                    event: ScriptUiEventKind::Click,
-                },
-                generation: 0,
-                capture_epoch: CaptureState.epoch(),
-            }).await.unwrap();
-            tokio::time::timeout(Duration::from_millis(250), async {
-                while ![7, 9].into_iter().all(|expected| clicks.borrow().iter().any(|(id, _)| *id == expected)) {
-                    tokio::task::yield_now().await;
-                }
-            }).await.unwrap();
-            assert_eq!(clicks.borrow().iter().filter(|(id, _)| *id == 1).count(), 1);
-            tokio::time::timeout(Duration::from_secs(1), async {
-                while clicks.borrow().iter().filter(|(id, _)| *id == 1).count() < 2 { tokio::task::yield_now().await; }
-            }).await.unwrap();
-            let defaults: Vec<Instant> = clicks.borrow().iter().filter_map(|(id, time)| (*id == 1).then_some(*time)).collect();
-            assert!(defaults[1].duration_since(defaults[0]) >= Duration::from_millis(500));
-            commands.send(ScriptCommand::Exit).await.unwrap();
-            tokio::time::timeout(Duration::from_secs(1), runner).await.unwrap().unwrap().unwrap();
-        }).await;
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[tokio::test]
-    async fn ui_callback_runs_while_main_awaits_and_while_paused() {
-        use crate::{bridge::{ScriptUiEvent, ScriptUiEventKind, ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
-        use std::{cell::RefCell, rc::Rc, time::Duration};
-        let clicks = Rc::new(RefCell::new(Vec::new()));
-        let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(clicks.clone()))) as SharedMouse).into();
-        let publisher = ScriptUiPublisher::default();
-        let snapshots = publisher.subscribe();
-        let session = ScriptSession::new_with_connection_and_control(r#"
-            let release;
-            export function afterLoad() {
-                rev.ui.button = { text: 'ready', onClick() { rev.click(7, 1); rev.ui.button.text = 'callback'; } };
-                rev.ui.release = { onClick() { release(); } };
-            }
-            export default async function() {
-                rev.ui.button.text = 'waiting';
-                await new Promise(resolve => { release = resolve; });
-                rev.ui.button.text += '-default';
-            }
-        "#, "callback.js", WsConnection::disconnected_for_test(), SessionControl::standalone(), publisher).await.unwrap();
-        session.run_after_load(controls.clone()).await.unwrap();
-        let invocation = session.invoke((), controls.clone());
-        tokio::pin!(invocation);
-        assert!(tokio::time::timeout(Duration::from_millis(10), &mut invocation).await.is_err());
-        controls.actions_paused.set_paused(true);
-        let snapshot = snapshots.borrow().clone();
-        session.dispatch_ui_event(ScriptUiEvent {
-            session_id: snapshot.session_id.unwrap(), element_id: "button".to_owned(),
-            instance_id: snapshot.elements[0].instance_id, events_version: snapshot.elements[0].events_version,
-            event: ScriptUiEventKind::Click,
-        }, controls.clone()).await.unwrap();
-        assert_eq!(*clicks.borrow(), vec![7]);
-        assert_eq!(snapshots.borrow().elements[0].text, "callback");
-        session.dispatch_ui_event(ScriptUiEvent {
-            session_id: snapshot.session_id.unwrap(), element_id: "release".to_owned(),
-            instance_id: snapshot.elements[1].instance_id, events_version: snapshot.elements[1].events_version,
-            event: ScriptUiEventKind::Click,
-        }, controls).await.unwrap();
-        tokio::time::timeout(Duration::from_secs(1), invocation).await.unwrap().unwrap();
-        assert_eq!(snapshots.borrow().elements[0].text, "callback-default");
-    }
-
-    #[tokio::test]
-    async fn ui_callbacks_overlap_after_await() {
-        use crate::{bridge::{ScriptUiEvent, ScriptUiEventKind, ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
-        use std::{cell::RefCell, rc::Rc, time::Duration};
-        let clicks = Rc::new(RefCell::new(Vec::new()));
-        let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(clicks.clone()))) as SharedMouse).into();
-        let publisher = ScriptUiPublisher::default();
-        let snapshots = publisher.subscribe();
-        let session = ScriptSession::new_with_connection_and_control(r#"
-            let count = 0, release;
-            export function afterLoad() {
-                rev.ui.button = { async onClick() {
-                    const id = ++count;
-                    rev.click(id, 1);
-                    if (id === 1) await new Promise(resolve => { release = resolve; });
-                    else { await rev.sleep(1); rev.click(-id, 1); release(); return; }
-                    rev.click(-id, 1);
-                } };
-            }
-            export default function() {}
-        "#, "callback.js", WsConnection::disconnected_for_test(), SessionControl::standalone(), publisher).await.unwrap();
-        session.run_after_load(controls.clone()).await.unwrap();
-        let snapshot = snapshots.borrow().clone();
-        let event = ScriptUiEvent {
-            session_id: snapshot.session_id.unwrap(), element_id: "button".to_owned(),
-            instance_id: snapshot.elements[0].instance_id, events_version: snapshot.elements[0].events_version,
-            event: ScriptUiEventKind::Click,
-        };
-        let (first, second) = tokio::time::timeout(Duration::from_secs(1), async {
-            tokio::join!(session.dispatch_ui_event(event.clone(), controls.clone()), session.dispatch_ui_event(event, controls))
-        }).await.unwrap();
-        first.unwrap(); second.unwrap();
-        assert_eq!(*clicks.borrow(), vec![1, 2, -2, -1]);
-    }
-
-    #[tokio::test]
-    async fn ui_callback_error_is_isolated() {
-        use crate::{bridge::{ScriptUiEvent, ScriptUiEventKind, ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
-        use std::{cell::RefCell, rc::Rc};
-        let clicks = Rc::new(RefCell::new(Vec::new()));
-        let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(clicks.clone()))) as SharedMouse).into();
-        let publisher = ScriptUiPublisher::default();
-        let snapshots = publisher.subscribe();
-        let session = ScriptSession::new_with_connection_and_control(r#"
-            export function afterLoad() {
-                rev.ui.sync = { onClick() { throw new Error('sync broken'); } };
-                rev.ui.async = { async onClick() { await rev.sleep(1); throw new Error('async broken'); } };
-                rev.ui.good = { onClick() { rev.click(9, 1); } };
-            }
-            export default function() { rev.click(10, 1); }
-        "#, "callback.js", WsConnection::disconnected_for_test(), SessionControl::standalone(), publisher).await.unwrap();
-        session.run_after_load(controls.clone()).await.unwrap();
-        let snapshot = snapshots.borrow().clone();
-        for element in &snapshot.elements {
-            let result = session.dispatch_ui_event(ScriptUiEvent {
-                session_id: snapshot.session_id.unwrap(), element_id: element.id.clone(),
-                instance_id: element.instance_id, events_version: element.events_version, event: ScriptUiEventKind::Click,
-            }, controls.clone()).await;
-            if element.id == "good" { result.unwrap(); }
-            else { assert!(result.unwrap_err().contains(&format!("{} broken", element.id))); }
-        }
-        session.invoke((), controls).await.unwrap();
-        assert_eq!(*clicks.borrow(), vec![9, 10]);
-        assert!(!session.is_stopped());
-    }
-
-    #[test]
-    fn ui_registry_native_roots_drop_before_runtime() {
-        let runtime = Runtime::new().unwrap();
-        let context = Context::full(&runtime).unwrap();
-        let publisher = crate::bridge::ScriptUiPublisher::default();
-        let ui = context.with(|ctx| super::ScriptUiState::new(
-            &ctx, publisher, crate::bridge::WsConnection::disconnected_for_test(), crate::script::control::SessionControl::standalone(),
-        ).unwrap());
-        context.with(|ctx| {
-            ctx.globals().set("ui", ui.registry(&ctx).unwrap()).unwrap();
-            ctx.eval::<(), _>("ui.a = {text: 'root', onClick() { ui.a.text = 'clicked'; }};").unwrap();
-        });
-        drop(ui);
-        drop(context);
-        drop(runtime);
-    }
-
-    #[tokio::test]
-    async fn ui_registry_survives_invocations_and_pause() {
-        use crate::script::{bindings::{Button, HostControls, MouseInput, SharedMouse}, control::SessionControl, session::ScriptSession};
-        use std::{cell::RefCell, rc::Rc};
-        struct Mouse;
-        impl MouseInput for Mouse {
-            fn click_at(&mut self, _: i32, _: i32, _: Button) -> Result<(), crate::script::bindings::MouseInputError> { panic!("no input expected"); }
-        }
-        let controls: HostControls = (Rc::new(RefCell::new(Mouse)) as SharedMouse).into();
-        let publisher = crate::bridge::ScriptUiPublisher::default();
-        let snapshots = publisher.subscribe();
-        let session = ScriptSession::new_with_connection_and_control(
-            r#"
-                let original;
-                export function afterLoad() { rev.ui.a = { text: 'loaded' }; original = rev.ui.a; }
-                export default function() {
-                    if (rev.ui.a !== original) throw new Error('registry identity changed');
-                    rev.ui.a.text = rev.paused ? 'paused' : 'running';
-                }
-            "#,
-            "ui-test.js", crate::bridge::WsConnection::disconnected_for_test(), SessionControl::standalone(), publisher,
-        ).await.unwrap();
-        session.run_after_load(controls.clone()).await.unwrap();
-        let instance = snapshots.borrow().elements[0].instance_id;
-        session.invoke((), controls.clone()).await.unwrap();
-        controls.actions_paused.set_paused(true);
-        session.invoke((), controls).await.unwrap();
-        assert_eq!(snapshots.borrow().elements[0].instance_id, instance);
-        assert_eq!(snapshots.borrow().elements[0].text, "paused");
-        drop(session);
-        assert_eq!(snapshots.borrow().session_id, None);
-    }
-
-    #[tokio::test]
-    async fn script_ui_same_value_writes_do_not_publish() {
-        use crate::script::{bindings::{Button, HostControls, MouseInput, SharedMouse}, control::SessionControl, session::ScriptSession};
-        use futures_util::StreamExt;
-        use std::{cell::RefCell, rc::Rc, time::Duration};
-        struct Mouse;
-        impl MouseInput for Mouse {
-            fn click_at(&mut self, _: i32, _: i32, _: Button) -> Result<(), crate::script::bindings::MouseInputError> { panic!("no input expected"); }
-        }
-        let controls: HostControls = (Rc::new(RefCell::new(Mouse)) as SharedMouse).into();
-        let (address, server) = crate::bridge::test_support::raw_server().await;
-        let connection = crate::bridge::WsConnection::connect_for_test(address, Duration::from_millis(10), Duration::from_secs(1));
-        let publisher = crate::bridge::ScriptUiPublisher::default();
-        let snapshots = publisher.subscribe();
-        let session = ScriptSession::new_with_connection_and_control(
-            r#"
-                export default function() {
-                    if (!rev.ui.a) rev.ui.a = { text: 'same', color: [1,2,3] };
-                    rev.ui.a.text = rev.paused ? 'paused' : 'same';
-                    rev.ui.a.color = [1,2,3];
-                }
-            "#,
-            "ui-test.js", connection.clone(), SessionControl::standalone(), publisher,
-        ).await.unwrap();
-        session.invoke((), controls.clone()).await.unwrap();
-        let revision = snapshots.borrow().revision;
-        let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
-        let task = tokio::spawn(crate::bridge::publish_script_ui(connection.clone(), snapshots.clone(), shutdown_rx));
-        let mut socket = server.await.unwrap();
-        tokio::time::timeout(Duration::from_secs(1), socket.next()).await.unwrap().unwrap().unwrap();
-        for _ in 0..10 { session.invoke((), controls.clone()).await.unwrap(); }
-        assert_eq!(snapshots.borrow().revision, revision);
-        assert!(tokio::time::timeout(Duration::from_millis(40), socket.next()).await.is_err());
-        controls.actions_paused.set_paused(true);
-        session.invoke((), controls).await.unwrap();
-        let packet = tokio::time::timeout(Duration::from_secs(1), socket.next()).await.unwrap().unwrap().unwrap();
-        let packet: serde_json::Value = serde_json::from_str(packet.to_text().unwrap()).unwrap();
-        assert_eq!(packet["payload"]["elements"][0]["text"], "paused");
-        drop(session);
-        shutdown.send(true).unwrap();
-        task.await.unwrap();
-        connection.shutdown().await;
-    }
-
-    fn check(source: &str) {
-        let runtime = Runtime::new().unwrap();
-        let context = Context::full(&runtime).unwrap();
-        context.with(|ctx| {
-            ctx.eval::<(), _>(format!(r#"
-                let snapshots = [], serial = 0, stopped = false, failPublish = false;
-                const api = ({})((json) => {{ if (failPublish) throw new Error('publish failed'); snapshots.push(JSON.parse(json)); }}, () => String(++serial), () => stopped, 'session');
-                const ui = api.registry;
-                function assert(condition, message = 'assertion failed') {{ if (!condition) throw new Error(message); }}
-                function throws(action) {{ let thrown = false; try {{ action(); }} catch (_) {{ thrown = true; }} assert(thrown, 'expected rejection'); }}
-                {}
-            "#, include_str!("ui.js"), source)).unwrap_or_else(|error| {
-                panic!("{}", rquickjs::CaughtError::from_error(&ctx, error));
-            });
-        });
-    }
-
-    #[test]
-    fn ui_registry_create_update_replace_delete() {
-        check(r#"
-            assert(ui.missing === undefined);
-            ui.a = { text: 'first' }; ui.b = {};
-            const old = ui.a;
-            ui.a.text = 'changed'; assert(ui.a === old && old.text === 'changed');
-            ui.a = { text: 'changed' }; assert(ui.a !== old);
-            assert(Object.keys(ui).join(',') === 'a,b');
-            throws(() => old.text = 'stale');
-            delete ui.a; assert(ui.a === undefined);
-            ui.a = {}; assert(Object.keys(ui).join(',') === 'b,a');
-            ui.__proto__ = { text: 'prototype key' }; ui.constructor = {};
-            assert(ui.__proto__.text === 'prototype key' && Object.getPrototypeOf(ui) === null);
-        "#);
-    }
-
-    #[test]
-    fn ui_dimensions_are_readonly_methods_not_definition_fields() {
-        check(r#"
-            ui.a = { text: 'measure me' };
-            assert(typeof ui.a.width === 'function' && typeof ui.a.height === 'function');
-            assert(typeof ui.a.globalXPos === 'function' && typeof ui.a.globalYPos === 'function');
-            assert(ui.a.width === ui.a.width && 'width' in ui.a && 'height' in ui.a);
-            assert(Object.keys(ui.a).join() === 'text');
-            throws(() => ui.a.width = () => 10);
-            throws(() => delete ui.a.height);
-            throws(() => ui.b = { width: () => 10 });
-            assert(snapshots.length === 1);
-        "#);
-    }
-
-    #[tokio::test]
-    async fn ui_dimensions_request_current_revision_and_reject_stale_elements() {
-        use crate::script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession};
-        use futures_util::{SinkExt, StreamExt};
-        use std::{cell::RefCell, rc::Rc, time::Duration};
-        use tokio_tungstenite::tungstenite::Message;
-
-        let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(Rc::new(RefCell::new(Vec::new()))))) as SharedMouse).into();
-        controls.actions_paused.set_paused(true);
-        let (address, server) = crate::bridge::test_support::raw_server().await;
-        let connection = crate::bridge::WsConnection::connect_for_test(address, Duration::from_millis(10), Duration::from_secs(1));
-        let publisher = crate::bridge::ScriptUiPublisher::default();
-        let snapshots = publisher.subscribe();
-        let session = ScriptSession::new_with_connection_and_control(
-            r#"
-                export default async function() {
-                    rev.ui.a = { text: 'initial', hidden: true, padding: { thickness: 3 }, border: { thickness: 9 } };
-                    rev.ui.a.text = 'updated';
-                    const original = rev.ui.a;
-                    if (await original.width() !== 123.5 || await original.height() !== 27.25)
-                        throw new Error('wrong dimensions');
-                    delete rev.ui.a;
-                    async function rejects(read) {
-                        try { await read(); } catch (error) {
-                            if (error.message.includes('no longer exists')) return;
-                            throw error;
-                        }
-                        throw new Error('stale measurement accepted');
+impl ScriptUiBindings {
+    pub(super) fn new<'js>(
+        ctx: &Ctx<'js>,
+        state: Rc<ScriptUiState>,
+        connection: WsConnection,
+        session: SessionControl,
+        transfer: Rc<FunctionTransfer>,
+        background: Rc<BackgroundRegistry>,
+    ) -> rquickjs::Result<Self> {
+        let host = Object::new(ctx.clone())?;
+        let host_state = state.clone();
+        host.set("lookup", Function::new(ctx.clone(), move |name: String| host_state.lookup(&name).map(|value| value.to_string()))?)?;
+        let host_state = state.clone();
+        host.set("names", Function::new(ctx.clone(), move || host_state.names())?)?;
+        let host_session = session.clone();
+        host.set("stopped", Function::new(ctx.clone(), move || host_session.is_stopped())?)?;
+        let host_state = state.clone();
+        host.set("record", Function::new(ctx.clone(), move |name: String, instance: String| {
+            let instance = Uuid::parse_str(&instance).map_err(|error| ui_error(error.to_string()))?;
+            host_state.record_json(&name, instance).map_err(ui_error)
+        })?)?;
+        let host_state = state.clone();
+        let define_background = background.clone();
+        host.set("define", Function::new(ctx.clone(), move |name: String, json: String| {
+            host_state.replace(&name, &json).map(|(instance, old)| {
+                if let Some((old_instance, events)) = old {
+                    for event in events {
+                        define_background.unregister(&BackgroundTarget::Ui { name: name.clone(), instance: old_instance, event });
                     }
-                    await rejects(() => original.width());
-                    rev.ui.a = { text: 'replacement' };
-                    await rejects(() => original.height());
-                    const pending = rev.ui.a.width();
-                    rev.ui.a = { text: 'newer replacement' };
-                    await rejects(() => pending);
                 }
-            "#,
-            "ui-dimensions.js", connection.clone(), SessionControl::standalone(), publisher,
-        ).await.unwrap();
-        let mut socket = server.await.unwrap();
-        let peer = async {
-            for index in 0..3 {
-                let message = tokio::time::timeout(Duration::from_secs(2), socket.next()).await.unwrap().unwrap().unwrap();
-                let envelope: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
-                assert_eq!(envelope["type"], "ScriptUiMeasureReq");
-                assert_eq!(envelope["payload"]["elementId"], "a");
-                let snapshot = snapshots.borrow();
-                assert_eq!(envelope["payload"]["sessionId"], snapshot.session_id.unwrap().to_string());
-                if index < 2 {
-                    assert_eq!(snapshot.elements[0].text, "updated");
-                    assert_eq!(envelope["payload"]["revision"], snapshot.revision);
-                    assert_eq!(envelope["payload"]["instanceId"], snapshot.elements[0].instance_id.to_string());
-                } else if !snapshot.elements.is_empty() {
-                    assert!(envelope["payload"]["revision"].as_u64().unwrap() < snapshot.revision);
-                    assert_ne!(envelope["payload"]["instanceId"], snapshot.elements[0].instance_id.to_string());
+                instance.to_string()
+            }).map_err(ui_error)
+        })?)?;
+        let host_state = state.clone();
+        let remove_background = background.clone();
+        host.set("remove", Function::new(ctx.clone(), move |name: String| {
+            host_state.remove(&name).map(|old| {
+                if let Some((instance, events)) = old {
+                    for event in events {
+                        remove_background.unregister(&BackgroundTarget::Ui { name: name.clone(), instance, event });
+                    }
                 }
-                drop(snapshot);
-                socket.send(Message::Text(serde_json::json!({
-                    "uuid": envelope["uuid"], "type": "ScriptUiMeasureRes", "payload": {
-                        "width": 123.5, "height": 27.25,
-                        "globalX": serde_json::Value::Null,
-                        "globalY": serde_json::Value::Null,
-                    },
-                }).to_string().into())).await.unwrap();
-            }
-        };
-        let (result, ()) = tokio::join!(session.invoke((), controls), peer);
-        result.unwrap();
-        connection.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn ui_global_position_getters_preserve_dimensions_when_mount_is_inaccessible() {
-        use crate::script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession};
-        use futures_util::{SinkExt, StreamExt};
-        use std::{cell::RefCell, rc::Rc, time::Duration};
-        use tokio_tungstenite::tungstenite::Message;
-
-        let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(Rc::new(RefCell::new(Vec::new()))))) as SharedMouse).into();
-        controls.actions_paused.set_paused(true);
-        let (address, server) = crate::bridge::test_support::raw_server().await;
-        let connection = crate::bridge::WsConnection::connect_for_test(address, Duration::from_millis(10), Duration::from_secs(1));
-        let publisher = crate::bridge::ScriptUiPublisher::default();
-        let snapshots = publisher.subscribe();
-        let session = ScriptSession::new_with_connection_and_control(
-            r#"
-                export default async function() {
-                    rev.ui.a = { basedOn: 'scene:7/Panel[0]' };
-                    if (await rev.ui.a.globalXPos() !== 321.5 || await rev.ui.a.globalYPos() !== 654.25)
-                        throw new Error('wrong global position');
-                    try { await rev.ui.a.globalXPos(); throw new Error('inaccessible position accepted'); }
-                    catch (error) { if (!error.message.includes('basedOn target is inaccessible')) throw error; }
-                    if (await rev.ui.a.width() !== 123.5 || await rev.ui.a.height() !== 27.25)
-                        throw new Error('dimensions rejected with inaccessible position');
+            }).map_err(ui_error)
+        })?)?;
+        let host_state = state.clone();
+        host.set("setField", Function::new(ctx.clone(), move |name: String, instance: String, field: String, json: String| {
+            let instance = Uuid::parse_str(&instance).map_err(|error| ui_error(error.to_string()))?;
+            host_state.set_field(&name, instance, &field, &json).map(|_| ()).map_err(ui_error)
+        })?)?;
+        let host_state = state.clone();
+        host.set("deleteField", Function::new(ctx.clone(), move |name: String, instance: String, field: String| {
+            let instance = Uuid::parse_str(&instance).map_err(|error| ui_error(error.to_string()))?;
+            host_state.delete_field(&name, instance, &field).map(|_| ()).map_err(ui_error)
+        })?)?;
+        let host_state = state.clone();
+        host.set("stateKeys", Function::new(ctx.clone(), move |name: String, instance: String| {
+            let instance = Uuid::parse_str(&instance).map_err(|error| ui_error(error.to_string()))?;
+            host_state.state_keys(&name, instance).map_err(ui_error)
+        })?)?;
+        let host_state = state.clone();
+        host.set("stateGet", Function::new(ctx.clone(), move |name: String, instance: String, key: String| {
+            let instance = Uuid::parse_str(&instance).map_err(|error| ui_error(error.to_string()))?;
+            host_state.state_json(&name, instance, &key).map_err(ui_error)
+        })?)?;
+        let host_state = state.clone();
+        host.set("stateSet", Function::new(ctx.clone(), move |name: String, instance: String, key: String, json: String| {
+            let instance = Uuid::parse_str(&instance).map_err(|error| ui_error(error.to_string()))?;
+            host_state.set_state(&name, instance, &key, &json).map(|_| ()).map_err(ui_error)
+        })?)?;
+        let host_state = state.clone();
+        host.set("stateDelete", Function::new(ctx.clone(), move |name: String, instance: String, key: String| {
+            let instance = Uuid::parse_str(&instance).map_err(|error| ui_error(error.to_string()))?;
+            host_state.delete_state(&name, instance, &key).map(|_| ()).map_err(ui_error)
+        })?)?;
+        let measure_state = state.clone();
+        let measure_session = session.clone();
+        let measurements = state.publisher.subscribe();
+        host.set("measure", Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, name: String, instance: String, kind: String| {
+            let connection = connection.clone();
+            let state = measure_state.clone();
+            let session = measure_session.clone();
+            let revision = measurements.borrow().revision;
+            async move {
+                reject_if_stopped(&ctx, &session)?;
+                let instance = Uuid::parse_str(&instance).map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
+                state.checked(&name, instance).map_err(|error| Exception::throw_message(&ctx, &error))?;
+                let measured = connection.request(ScriptUiMeasureReq { session_id: state.session_id(), revision, element_id: name.clone(), instance_id: instance })
+                    .await
+                    .map_err(|error| bridge_error(&ctx, error.to_string()))?;
+                reject_if_stopped(&ctx, &session)?;
+                state.checked(&name, instance).map_err(|error| Exception::throw_message(&ctx, &error))?;
+                if !measured.width.is_finite() || measured.width < 0.0 || !measured.height.is_finite() || measured.height < 0.0 {
+                    return Err(Exception::throw_message(&ctx, "invalid UI dimensions"));
                 }
-            "#,
-            "ui-global-position-getters.js", connection.clone(), SessionControl::standalone(), publisher,
-        ).await.unwrap();
-        let mut socket = server.await.unwrap();
-        let peer = async {
-            for index in 0..5 {
-                let message = tokio::time::timeout(Duration::from_secs(2), socket.next()).await.unwrap().unwrap().unwrap();
-                let envelope: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
-                assert_eq!(envelope["type"], "ScriptUiMeasureReq");
-                let snapshot = snapshots.borrow();
-                assert_eq!(envelope["payload"]["sessionId"], snapshot.session_id.unwrap().to_string());
-                assert_eq!(envelope["payload"]["revision"], snapshot.revision);
-                assert_eq!(envelope["payload"]["instanceId"], snapshot.elements[0].instance_id.to_string());
-                drop(snapshot);
-                socket.send(Message::Text(serde_json::json!({
-                    "uuid": envelope["uuid"], "type": "ScriptUiMeasureRes", "payload": {
-                        "width": 123.5, "height": 27.25,
-                        "globalX": if index == 0 { serde_json::json!(321.5) } else { serde_json::Value::Null },
-                        "globalY": if index == 1 { serde_json::json!(654.25) } else { serde_json::Value::Null },
-                    },
-                }).to_string().into())).await.unwrap();
+                Ok(match kind.as_str() {
+                    "width" => measured.width.into_js(&ctx)?,
+                    "height" => measured.height.into_js(&ctx)?,
+                    "globalX" => match measured.global_x { Some(value) => value.into_js(&ctx)?, None => Value::new_null(ctx.clone()) },
+                    "globalY" => match measured.global_y { Some(value) => value.into_js(&ctx)?, None => Value::new_null(ctx.clone()) },
+                    _ => return Err(Exception::throw_message(&ctx, "invalid UI measurement")),
+                })
             }
-        };
-        let (result, ()) = tokio::join!(session.invoke((), controls), peer);
-        result.unwrap();
-        connection.shutdown().await;
-    }
-
-    #[test]
-    fn ui_registry_font_updates_and_resets_without_replacing_element() {
-        check(r#"
-            ui.a = { text: 'default', onClick() {} };
-            const original = ui.a, first = snapshots.at(-1)[0];
-            assert(ui.a.font === '' && first.font === '');
-            ui.a.font = 'Consolas';
-            assert(ui.a === original && ui.a.font === 'Consolas');
-            assert(snapshots.at(-1)[0].font === 'Consolas');
-            assert(snapshots.at(-1)[0].instanceId === first.instanceId && snapshots.at(-1)[0].eventsVersion === first.eventsVersion);
-            const count = snapshots.length;
-            ui.a.font = 'Consolas';
-            for (const value of [null, undefined, 14, {}, [], new String('Arial')]) {
-                throws(() => ui.a.font = value);
-                throws(() => ui.a = { text: 'invalid replacement', font: value });
+        }))?)?;
+        let handler_state = state.clone();
+        let handler_transfer = Rc::downgrade(&transfer);
+        let handler_background = background.clone();
+        let handler_session = session.clone();
+        host.set("handlerRegister", Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String, instance: String, event: String, callback: Function<'js>| {
+            reject_if_stopped(&ctx, &handler_session)?;
+            let instance = Uuid::parse_str(&instance).map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
+            let event = parse_event(&event).map_err(|error| Exception::throw_message(&ctx, error.as_str()))?;
+            handler_state.checked(&name, instance).map_err(|error| Exception::throw_message(&ctx, error.as_str()))?;
+            let Some(handler_transfer) = handler_transfer.upgrade() else {
+                return Err(Exception::throw_message(&ctx, "script session stopped"));
+            };
+            let descriptor = handler_transfer.capture(&ctx, callback)?;
+            let target = BackgroundTarget::Ui { name: name.clone(), instance, event };
+            handler_background.unregister(&target);
+            let registration = handler_background.register(target.clone(), descriptor);
+            if let Err(error) = handler_state.begin_handler_install(&name, instance, event, registration) {
+                handler_background.unregister(&target);
+                return Err(Exception::throw_message(&ctx, &error));
             }
-            assert(ui.a === original && ui.a.font === 'Consolas' && snapshots.length === count);
-            delete ui.a.font;
-            assert(ui.a.font === '' && snapshots.at(-1)[0].font === '');
-            const resetCount = snapshots.length;
-            delete ui.a.font; ui.a.font = '';
-            assert(snapshots.length === resetCount);
-            ui.b = { text: 'named', font: 'Noto Sans CJK TC' };
-            assert(snapshots.at(-1)[1].font === 'Noto Sans CJK TC');
-        "#);
+            Ok(registration.to_string())
+        })?)?;
+        let handler_background_status = background.clone();
+        host.set("handlerStatus", Function::new(ctx.clone(), move |registration: String| {
+            let registration = Uuid::parse_str(&registration).ok();
+            Ok::<Option<&'static str>, rquickjs::Error>(registration.and_then(|registration| match handler_background_status.status(registration) {
+                Some(BackgroundRegistrationStatus::Pending) => Some("pending"),
+                Some(BackgroundRegistrationStatus::Active) => Some("active"),
+                Some(BackgroundRegistrationStatus::Failed) => Some("failed"),
+                None => None,
+            }))
+        })?)?;
+        let handler_state = state.clone();
+        let handler_background = background.clone();
+        let handler_session = session.clone();
+        host.set("handlerClear", Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String, instance: String, event: String| {
+            reject_if_stopped(&ctx, &handler_session)?;
+            let instance = Uuid::parse_str(&instance).map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
+            let event = parse_event(&event).map_err(|error| Exception::throw_message(&ctx, error.as_str()))?;
+            handler_state.clear_handler(&name, instance, event).map_err(|error| Exception::throw_message(&ctx, error.as_str()))?;
+            handler_background.unregister(&BackgroundTarget::Ui { name, instance, event });
+            Ok::<(), rquickjs::Error>(())
+        })?)?;
+        let factory: Function = ctx.eval(include_str!("ui.js"))?;
+        let api: Object = factory.call((host,))?;
+        Ok(Self { state, api: Persistent::save(ctx, api) })
     }
 
-    #[test]
-    fn ui_registry_size_updates_and_resets_without_replacing_element() {
-        check(r#"
-            ui.a = { text: 'default', onClick() {} };
-            const original = ui.a, first = snapshots.at(-1)[0];
-            assert(ui.a.size === 14 && first.size === 14);
-            ui.a.size = 24;
-            assert(ui.a === original && ui.a.size === 24);
-            assert(snapshots.at(-1)[0].size === 24);
-            assert(snapshots.at(-1)[0].instanceId === first.instanceId && snapshots.at(-1)[0].eventsVersion === first.eventsVersion);
-            const count = snapshots.length;
-            ui.a.size = 24;
-            for (const value of [null, undefined, 0, -1, 1.5, Infinity, 2147483648, '14', {}, [], new Number(14)]) {
-                throws(() => ui.a.size = value);
-                throws(() => ui.a = { text: 'invalid replacement', size: value });
-            }
-            assert(ui.a === original && ui.a.size === 24 && snapshots.length === count);
-            delete ui.a.size;
-            assert(ui.a.size === 14 && snapshots.at(-1)[0].size === 14);
-            const resetCount = snapshots.length;
-            delete ui.a.size; ui.a.size = 14;
-            assert(snapshots.length === resetCount);
-            ui.b = { text: 'large', size: 32 };
-            assert(snapshots.at(-1)[1].size === 32);
-        "#);
+    pub(super) fn registry<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
+        self.api.clone().restore(ctx)?.get("registry")
     }
 
-    #[test]
-    fn ui_registry_hidden_defaults_updates_and_remains_reactive() {
-        check(r#"
-            ui.a = { text: 'visible', onClick() {} };
-            const original = ui.a, first = snapshots.at(-1)[0];
-            assert(ui.a.hidden === false && first.hidden === false);
-            ui.a.hidden = true;
-            assert(ui.a === original && ui.a.hidden === true && snapshots.at(-1)[0].hidden === true);
-            ui.a.text = 'updated while hidden';
-            assert(ui.a === original && snapshots.at(-1)[0].hidden === true && snapshots.at(-1)[0].text === 'updated while hidden');
-            const count = snapshots.length;
-            ui.a.hidden = true;
-            for (const value of [null, undefined, 0, 1, '', {}, [], new Boolean(true)]) {
-                throws(() => ui.a.hidden = value);
-                throws(() => ui.b = { hidden: value });
-            }
-            assert(ui.a === original && ui.a.hidden === true && snapshots.length === count);
-            delete ui.a.hidden;
-            assert(ui.a.hidden === false && snapshots.at(-1)[0].hidden === false);
-            ui.b = { hidden: true };
-            assert(ui.b.hidden === true && snapshots.at(-1)[1].hidden === true);
-        "#);
-    }
-
-    #[test]
-    fn ui_registry_based_on_validates_publishes_updates_and_resets_on_delete() {
-        check(r#"
-            ui.a = { basedOn: 'scene:7/Panel[0]' };
-            assert(snapshots.at(-1)[0].basedOn === 'scene:7/Panel[0]');
-            ui.a.basedOn = 'scene:8/Panel[1]';
-            assert(snapshots.at(-1)[0].basedOn === 'scene:8/Panel[1]');
-            delete ui.a.basedOn;
-            assert(snapshots.at(-1)[0].basedOn === '');
-            throws(() => ui.a.basedOn = 1);
-        "#);
-    }
-
-    #[test]
-    fn ui_registry_alignment_fields_validate_update_and_reset() {
-        check(r#"
-            ui.a = { text: 'aligned', onClick() {} };
-            const original = ui.a, first = snapshots.at(-1)[0];
-            assert(ui.a.alignX === 'left' && ui.a.alignY === 'center');
-            assert(first.alignX === 'left' && first.alignY === 'center');
-            for (const alignX of ['left', 'center', 'right']) {
-                for (const alignY of ['top', 'center', 'bottom']) {
-                    ui.a.alignX = alignX; ui.a.alignY = alignY;
-                    const state = snapshots.at(-1)[0];
-                    assert(state.alignX === alignX && state.alignY === alignY);
-                    assert(ui.a === original && state.instanceId === first.instanceId && state.eventsVersion === first.eventsVersion);
-                }
-            }
-            const count = snapshots.length;
-            ui.a.alignX = 'right'; ui.a.alignY = 'bottom';
-            for (const value of ['middle', 'LEFT', '', null, undefined, 1, {}, new String('center')]) {
-                throws(() => ui.a.alignX = value); throws(() => ui.a.alignY = value);
-                throws(() => ui.a = { text: 'invalid replacement', alignX: value });
-                throws(() => ui.a = { text: 'invalid replacement', alignY: value });
-            }
-            throws(() => ui.a.alignX = 'top'); throws(() => ui.a.alignY = 'left');
-            assert(ui.a === original && ui.a.alignX === 'right' && ui.a.alignY === 'bottom' && snapshots.length === count);
-            delete ui.a.alignX; delete ui.a.alignY;
-            assert(ui.a.alignX === 'left' && ui.a.alignY === 'center');
-            assert(snapshots.at(-1)[0].alignX === 'left' && snapshots.at(-1)[0].alignY === 'center');
-            ui.b = { alignX: 'center', alignY: 'top' };
-            assert(snapshots.at(-1)[1].alignX === 'center' && snapshots.at(-1)[1].alignY === 'top');
-        "#);
-    }
-
-    #[test]
-    fn ui_registry_accepts_styles_in_initial_definition() {
-        check(r#"
-            const original = { text: 'Click Me', border: { thickness: 2, color: [255,0,0] },
-                corner: { radius: 5, topLeft: 0, bottomLeft: 0 }, padding: { thickness: 4, left: 0, right: 8 }, onClick() {} };
-            ui.a = original;
-            const a = snapshots.at(-1)[0];
-            assert(a.border.thickness === 2 && a.border.color.join() === '255,0,0,255');
-            assert(a.corner.topLeft === 0 && a.corner.topRight === 5 && a.corner.bottomLeft === 0);
-            assert(JSON.stringify(a.padding) === '{"top":4,"right":8,"bottom":4,"left":0}');
-            assert(a.events.join() === 'click');
-            original.border.color[0] = 0; assert(ui.a.border.color[0] === 255);
-            ui.b = {}; ui.b.border = original.border; ui.b.corner = original.corner; ui.b.padding = original.padding;
-            assert(snapshots.at(-1)[1].corner.topRight === a.corner.topRight);
-        "#);
-    }
-
-    #[test]
-    fn ui_registry_validates_atomically() {
-        check(r#"
-            ui.a = { text: 'valid' }; const original = ui.a; const count = snapshots.length;
-            for (const value of [null, undefined, [], { unknown: 1 }, { posX: Infinity }, { lenX: { min: 2, max: 1 } },
-                { border: { thickness: -1 } }, { corner: { radias: 5 } }, { padding: { left: NaN } }, { color: [256,0,0] }]) {
-                throws(() => ui.a = value); assert(ui.a === original && snapshots.length === count);
-            }
-            throws(() => ui.a.border = { color: [0,0,0,-1] });
-            assert(ui.a.text === 'valid');
-            stopped = true; throws(() => ui.a.text = 'late'); throws(() => delete ui.a); throws(() => ui.new = {});
-        "#);
-    }
-
-    #[test]
-    fn ui_registry_keeps_validation_independent_of_script_intrinsics() {
-        check(r#"
-            ui.a = { text: 'valid' };
-            const original = ui.a, count = snapshots.length;
-            Number.isFinite = () => true;
-            Number.isInteger = () => true;
-            JSON.stringify = () => { throw new Error('script serializer'); };
-            Object.prototype.min = 1000;
-            Object.prototype.toJSON = () => { throw new Error('script prototype serializer'); };
-            Array.prototype.map = () => [];
-            Map.prototype.get = () => undefined;
-            throws(() => ui.a.posX = NaN);
-            throws(() => ui.a.color = [1.5, 0, 0]);
-            assert(ui.a === original && ui.a.posX === 0 && snapshots.length === count);
-            ui.a.lenX = {};
-            assert(snapshots.at(-1)[0].lenX.min === 0);
-            ui.a.text = 'still valid';
-            assert(ui.a.text === 'still valid' && snapshots.at(-1)[0].text === 'still valid');
-        "#);
-    }
-
-    #[test]
-    fn ui_registry_publication_failure_preserves_requested_state() {
-        check(r#"
-            ui.a = { text: 'before', onClick() {} }; ui.b = {};
-            const original = ui.a, count = snapshots.length, handler = ui.a.onClick;
-            failPublish = true;
-            throws(() => ui.a.text = 'after');
-            throws(() => ui.a.onClick = () => {});
-            throws(() => delete ui.a.text);
-            throws(() => ui.a = { text: 'replacement' });
-            throws(() => delete ui.a);
-            assert(ui.a === original && ui.a.text === 'before' && ui.a.onClick === handler);
-            assert(Object.keys(ui).join() === 'a,b' && snapshots.length === count);
-            failPublish = false;
-            ui.a.text = 'after';
-            assert(snapshots.at(-1)[0].eventsVersion === 1 && ui.a.text === 'after');
-        "#);
-    }
-
-    #[test]
-    fn ui_registry_rejects_stale_proxy_and_nested_mutation() {
-        check(r#"
-            ui.a = { color: [1,2,3], border: { color: [4,5,6] }, lenX: { min: 2 }, corner: { radius: 3 }, padding: { left: 1 } };
-            for (const field of ['color','border','lenX','corner','padding']) {
-                assert(Object.isFrozen(ui.a[field])); throws(() => ui.a[field].unknown = 2);
-            }
-            throws(() => ui.a.border.color[0] = 9);
-            throws(() => Object.defineProperty(ui.a, 'text', { value: 'bypass' }));
-            throws(() => Object.setPrototypeOf(ui, {}));
-            throws(() => Object.defineProperty(ui, 'a', { value: {} }));
-            const old = ui.a; delete ui.a; throws(() => old.text = 'late');
-        "#);
-    }
-
-    #[test]
-    fn ui_registry_same_value_assignment_is_noop() {
-        check(r#"
-            const handler = () => {};
-            ui.a = { text: 'x', color: [1,2,3], corner: { radius: 5, topLeft: 0 }, onClick: handler };
-            const count = snapshots.length, first = snapshots.at(-1)[0];
-            ui.a.text = 'x'; ui.a.color = [1,2,3]; ui.a.corner = { topLeft: 0, radius: 5 }; ui.a.onClick = handler;
-            delete ui.absent; delete ui.a.padding;
-            assert(snapshots.length === count);
-            ui.a.text = 'y'; ui.a.text = 'y'; assert(snapshots.length === count + 1);
-            assert(snapshots.at(-1)[0].eventsVersion === first.eventsVersion);
-            ui.a.onClick = () => {}; assert(snapshots.at(-1)[0].eventsVersion > first.eventsVersion);
-            const old = ui.a; ui.a = { text: 'y' }; assert(ui.a !== old);
-        "#);
-    }
-
-    #[test]
-    fn ui_registry_border_corner_padding_defaults_and_overrides() {
-        check(r#"
-            ui.a = {};
-            let state = snapshots.at(-1)[0];
-            assert(state.border.thickness === 0 && state.corner.topLeft === 0 && state.padding.left === 0);
-            assert(state.color.join() === '0,0,0,0' && state.textColor.join() === '255,255,255,255');
-            ui.a.border = { thickness: 2.5, color: [1,2,3] };
-            ui.a.corner = { radius: 99.5, topLeft: 0 };
-            ui.a.padding = { thickness: 1.5, bottom: 0 };
-            state = snapshots.at(-1)[0];
-            assert(state.corner.topRight === 99.5 && state.padding.top === 1.5 && state.padding.bottom === 0);
-            const revision = snapshots.length;
-            ui.a.corner = { radius: 199.5, topLeft: 0 };
-            assert(snapshots.length === revision + 1 && snapshots.at(-1)[0].corner.topRight === 199.5);
-            delete ui.a.border; delete ui.a.corner; delete ui.a.padding;
-            state = snapshots.at(-1)[0];
-            assert(state.border.thickness === 0 && state.corner.topRight === 0 && state.padding.top === 0);
-        "#);
-    }
-
-    #[test]
-    fn ui_callback_does_not_expose_registry_storage_as_this() {
-        check(r#"
-            let receiver;
-            ui.a = { text: 'safe', onClick() { 'use strict'; receiver = this; } };
-            const state = snapshots.at(-1)[0];
-            api.dispatch({ sessionId: 'session', elementId: 'a', instanceId: state.instanceId, eventsVersion: state.eventsVersion, event: 'click' });
-            assert(receiver === undefined);
-        "#);
-    }
-
-    #[test]
-    fn ui_event_rejects_old_session_instance_and_handler() {
-        check(r#"
-            let calls = 0;
-            ui.a = { onClick() { calls++; } };
-            const state = snapshots.at(-1)[0];
-            const event = { sessionId: 'session', elementId: 'a', instanceId: state.instanceId, eventsVersion: state.eventsVersion, event: 'click' };
-            api.dispatch(event); assert(calls === 1);
-            ui.a.text = 'visual'; api.dispatch(event); assert(calls === 2);
-            ui.a.onClick = () => { calls += 100; }; api.dispatch(event); assert(calls === 2);
-            api.dispatch({ ...event, sessionId: 'old' }); assert(calls === 2);
-            delete ui.a; api.dispatch(event); assert(calls === 2);
-            ui.a = { onClick() { calls += 1000; } };
-            api.dispatch(event); assert(calls === 2);
-            const replacement = snapshots.at(-1)[0];
-            api.dispatch({ ...event, instanceId: replacement.instanceId, eventsVersion: replacement.eventsVersion });
-            assert(calls === 1002);
-        "#);
+    pub(super) fn element<'js>(&self, ctx: &Ctx<'js>, name: &str, instance: Uuid) -> rquickjs::Result<Object<'js>> {
+        self.state.checked(name, instance).map_err(ui_error)?;
+        let api = self.api.clone().restore(ctx)?;
+        let element: Function = api.get("element")?;
+        element.call((name.to_owned(), instance.to_string()))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_runtime_ui_shared_store_and_states() {
+        let publisher = ScriptUiPublisher::default();
+        let snapshots = publisher.subscribe();
+        let state = ScriptUiState::new(publisher, SessionControl::standalone());
+        let (main_instance, _) = state.replace("from_main", r#"{"text":"main","states":{"count":1,"settings":{"enabled":false}}}"#).unwrap();
+        let (background_instance, _) = state.replace("from_background", r#"{"text":"background","states":{"count":2}}"#).unwrap();
+        assert_eq!(snapshots.borrow().elements.iter().map(|element| element.id.as_str()).collect::<Vec<_>>(), ["from_main", "from_background"]);
+        let revision_before_state = snapshots.borrow().revision;
+        state.set_field("from_background", background_instance, "text", r#""written""#).unwrap();
+        state.set_state("from_main", main_instance, "count", "10").unwrap();
+        assert_eq!(snapshots.borrow().elements[1].text, "written");
+        assert_eq!(snapshots.borrow().revision, revision_before_state + 1);
+        assert_eq!(state.state_json("from_main", main_instance, "settings").unwrap(), Some(r#"{"enabled":false}"#.to_owned()));
+        state.set_state("from_main", main_instance, "settings", r#"{"enabled":true}"#).unwrap();
+        assert_eq!(state.state_json("from_main", main_instance, "settings").unwrap(), Some(r#"{"enabled":true}"#.to_owned()));
+        assert_eq!(snapshots.borrow().revision, revision_before_state + 1);
+    }
+
+    #[test]
+    fn two_runtime_ui_atomic_replacement_and_proxy_identity() {
+        let publisher = ScriptUiPublisher::default();
+        let snapshots = publisher.subscribe();
+        let state = ScriptUiState::new(publisher, SessionControl::standalone());
+        let (original, _) = state.replace("same", r#"{"text":"before"}"#).unwrap();
+        assert!(state.replace("same", r#"{"unknown":1}"#).is_err());
+        assert_eq!(state.lookup("same"), Some(original));
+        let event = ScriptUiEvent {
+            session_id: state.session_id(), element_id: "same".to_owned(), instance_id: original,
+            events_version: snapshots.borrow().elements[0].events_version, event: ScriptUiEventKind::Click,
+        };
+        assert_eq!(state.installed_handler_registration(&event), None);
+        let registration = Uuid::new_v4();
+        state.begin_handler_install("same", original, ScriptUiEventKind::Click, registration).unwrap();
+        let pending = snapshots.borrow().elements[0].events_version;
+        assert!(!state.installed_handler_registration(&ScriptUiEvent { events_version: pending, ..event.clone() }).is_some());
+        assert!(state.complete_handler_install("same", original, ScriptUiEventKind::Click, registration, true));
+        let active = ScriptUiEvent { events_version: snapshots.borrow().elements[0].events_version, ..event.clone() };
+        assert_eq!(state.installed_handler_registration(&active), Some(registration));
+        let (replacement, _) = state.replace("same", r#"{"text":"after"}"#).unwrap();
+        assert_ne!(replacement, original);
+        assert_eq!(state.installed_handler_registration(&active), None);
+        assert!(state.record_json("same", replacement).unwrap().contains("after"));
+    }
+
+    #[test]
+    fn ui_state_defaults_hidden_and_stacking_identity() {
+        let publisher = ScriptUiPublisher::default();
+        let snapshots = publisher.subscribe();
+        let state = ScriptUiState::new(publisher, SessionControl::standalone());
+        let (first, _) = state.replace("a", "{}").unwrap();
+        assert!(!snapshots.borrow().elements[0].hidden);
+        state.set_field("a", first, "hidden", "true").unwrap();
+        assert!(snapshots.borrow().elements[0].hidden);
+        let (second, _) = state.replace("b", "{}").unwrap();
+        let (replacement, _) = state.replace("a", r#"{"text":"replacement"}"#).unwrap();
+        assert_ne!(replacement, first);
+        assert_eq!(snapshots.borrow().elements.iter().map(|element| element.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(snapshots.borrow().elements[1].instance_id, second);
+    }
+
+    #[test]
+    fn two_runtime_ui_proxy_and_state_identity() {
+        use rquickjs::{Context, Runtime};
+
+        let main_runtime = Runtime::new().unwrap();
+        let main_context = Context::full(&main_runtime).unwrap();
+        let background_runtime = Runtime::new().unwrap();
+        let background_context = Context::full(&background_runtime).unwrap();
+        let session = SessionControl::standalone();
+        let publisher = ScriptUiPublisher::default();
+        let state = Rc::new(ScriptUiState::new(publisher, session.clone()));
+        let background = Rc::new(BackgroundRegistry::new(session.clone()));
+        let main_transfer = main_context.with(|ctx| Rc::new(FunctionTransfer::new(&ctx).unwrap()));
+        let background_transfer = background_context.with(|ctx| Rc::new(FunctionTransfer::new(&ctx).unwrap()));
+        let main_bindings = main_context.with(|ctx| {
+            ScriptUiBindings::new(
+                &ctx,
+                state.clone(),
+                WsConnection::disconnected_for_test(),
+                session.clone(),
+                main_transfer.clone(),
+                background.clone(),
+            ).unwrap()
+        });
+        let background_bindings = background_context.with(|ctx| {
+            ScriptUiBindings::new(
+                &ctx,
+                state.clone(),
+                WsConnection::disconnected_for_test(),
+                session.clone(),
+                background_transfer.clone(),
+                background.clone(),
+            ).unwrap()
+        });
+
+        main_context.with(|ctx| {
+            ctx.globals().set("ui", main_bindings.registry(&ctx).unwrap()).unwrap();
+            ctx.eval::<(), _>(r#"
+                ui.main = { text: "main", states: { nested: { enabled: false } } };
+                globalThis.mainProxy = ui.main;
+                mainProxy.states.nested = { enabled: true };
+                if (ui.main !== mainProxy) throw new Error("main proxy identity changed");
+            "#).unwrap();
+        });
+        background_context.with(|ctx| {
+            ctx.globals().set("ui", background_bindings.registry(&ctx).unwrap()).unwrap();
+            ctx.eval::<(), _>(r#"
+                ui.background = { text: "background", states: { count: 2 } };
+                ui.main.states.count = 10;
+                globalThis.backgroundProxy = ui.background;
+                if (ui.background !== backgroundProxy) throw new Error("background proxy identity changed");
+            "#).unwrap();
+        });
+        assert_eq!(state.state_json("main", state.lookup("main").unwrap(), "nested"), Ok(Some(r#"{"enabled":true}"#.to_owned())));
+        assert_eq!(state.state_json("main", state.lookup("main").unwrap(), "count"), Ok(Some("10".to_owned())));
+        assert_eq!(state.names(), vec!["main", "background"]);
+
+        background_context.with(|ctx| {
+            ctx.eval::<(), _>(r#"ui.main = { text: "replacement", states: { count: 1 } };"#).unwrap();
+        });
+        main_context.with(|ctx| {
+            ctx.eval::<(), _>(r#"
+                let stale = mainProxy;
+                let rejected = false;
+                try { stale.text = "stale"; } catch (_) { rejected = true; }
+                if (!rejected) throw new Error("stale visual proxy was accepted");
+                if (ui.main === stale || ui.main.text !== "replacement") throw new Error("replacement identity mismatch");
+                rejected = false;
+                try { stale.states.count = 4; } catch (_) { rejected = true; }
+                if (!rejected) throw new Error("stale state proxy was accepted");
+            "#).unwrap();
+        });
+
+        drop(background_bindings);
+        drop(main_bindings);
+        drop(background_transfer);
+        drop(main_transfer);
+        drop(background);
+        drop(state);
+        drop(background_context);
+        drop(background_runtime);
+        drop(main_context);
+        drop(main_runtime);
+    }
+
+    #[test]
+    fn ui_handler_install_races_and_replacement_invalidate_stale_work() {
+        let publisher = ScriptUiPublisher::default();
+        let snapshots = publisher.subscribe();
+        let state = ScriptUiState::new(publisher, SessionControl::standalone());
+        let (instance, _) = state.replace("button", "{}").unwrap();
+        let first = Uuid::new_v4();
+        state.begin_handler_install("button", instance, ScriptUiEventKind::Click, first).unwrap();
+        let pending_version = snapshots.borrow().elements[0].events_version;
+        let event = ScriptUiEvent {
+            session_id: state.session_id(), element_id: "button".to_owned(), instance_id: instance,
+            events_version: pending_version, event: ScriptUiEventKind::Click,
+        };
+        assert_eq!(state.installed_handler_registration(&event), None);
+        let second = Uuid::new_v4();
+        state.begin_handler_install("button", instance, ScriptUiEventKind::Click, second).unwrap();
+        assert!(!state.complete_handler_install("button", instance, ScriptUiEventKind::Click, first, true));
+        assert_eq!(state.installed_handler_registration(&event), None);
+        assert!(state.complete_handler_install("button", instance, ScriptUiEventKind::Click, second, true));
+        let active = ScriptUiEvent { events_version: snapshots.borrow().elements[0].events_version, ..event.clone() };
+        assert_eq!(state.installed_handler_registration(&active), Some(second));
+        let (replacement, _) = state.replace("button", "{}").unwrap();
+        assert!(!state.complete_handler_install("button", instance, ScriptUiEventKind::Click, second, true));
+        assert_eq!(state.installed_handler_registration(&active), None);
+        let third = Uuid::new_v4();
+        state.begin_handler_install("button", replacement, ScriptUiEventKind::Click, third).unwrap();
+        assert!(!state.complete_handler_install("button", replacement, ScriptUiEventKind::Click, second, true));
+        assert!(state.complete_handler_install("button", replacement, ScriptUiEventKind::Click, third, false));
+        let failed_version = snapshots.borrow().elements[0].events_version;
+        assert_eq!(state.installed_handler_registration(&ScriptUiEvent { instance_id: replacement, events_version: failed_version, ..active }), None);
+        let fourth = Uuid::new_v4();
+        state.begin_handler_install("button", replacement, ScriptUiEventKind::Click, fourth).unwrap();
+        assert_eq!(state.clear_handler("button", replacement, ScriptUiEventKind::Click).unwrap(), Some(fourth));
+        assert!(!state.complete_handler_install("button", replacement, ScriptUiEventKind::Click, fourth, true));
+    }
+
+    #[test]
+    fn ui_callback_setter_retries_failed_function_without_exposing_properties() {
+        use rquickjs::{Context, Runtime};
+
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            let source = format!(r#"
+                const records = new Map(), statuses = new Map(), registrations = [];
+                let nextRegistration = 0;
+                const host = {{
+                    stopped: () => false,
+                    lookup: name => records.has(name) ? records.get(name).instance : undefined,
+                    names: () => [...records.keys()],
+                    record: (name, instance) => JSON.stringify(records.get(name).instance === instance ? records.get(name) : (() => {{ throw new Error('stale'); }})()),
+                    define: (name, json) => {{ const instance = 'instance-' + name; const definition = JSON.parse(json); records.set(name, {{ instance, values: definition, states: {{}}, eventsVersion: 1 }}); return instance; }},
+                    remove: name => records.delete(name),
+                    setField: (name, instance, field, json) => {{ const record = records.get(name); if (record.instance !== instance) throw new Error('stale'); if (field === 'states') record.states = JSON.parse(json); else record.values[field] = JSON.parse(json); }},
+                    deleteField: (name, instance, field) => {{ const record = records.get(name); if (field === 'states') record.states = {{}}; else delete record.values[field]; }},
+                    stateKeys: (name, instance) => Object.keys(records.get(name).states),
+                    stateGet: (name, instance, key) => records.get(name).states[key] === undefined ? undefined : JSON.stringify(records.get(name).states[key]),
+                    stateSet: (name, instance, key, json) => records.get(name).states[key] = JSON.parse(json),
+                    stateDelete: (name, instance, key) => delete records.get(name).states[key],
+                    measure: async () => 0,
+                    handlerRegister: (name, instance, event, callback) => {{ const registration = 'registration-' + (++nextRegistration); registrations.push(registration); statuses.set(registration, 'pending'); return registration; }},
+                    handlerStatus: registration => statuses.get(registration),
+                    handlerClear: () => {{}},
+                }};
+                const ui = ({}) (host).registry;
+                ui.button = {{}};
+                const callback = function() {{}};
+                if (ui.button.setOnClick(callback) !== undefined) throw new Error('setter returned a value');
+                if (ui.button.setOnClick(callback) !== undefined) throw new Error('pending retry returned a value');
+                statuses.set(registrations[0], 'failed');
+                ui.button.setOnClick(callback);
+                if (registrations.length !== 2 || registrations[0] === registrations[1]) throw new Error('failed registration did not retry');
+                if ('onClick' in ui.button || Object.keys(ui.button).includes('onClick') || Object.getOwnPropertyDescriptor(ui.button, 'onClick') !== undefined) throw new Error('legacy callback property exposed');
+                let rejected = false;
+                try {{ ui.button.setOnClick(undefined); }} catch (_) {{ rejected = true; }}
+                if (!rejected) throw new Error('undefined callback accepted');
+                ui.button.setOnClick(null);
+            "#, include_str!("ui.js"));
+            ctx.eval::<(), _>(source).unwrap();
+        });
+    }
+}
+
+#[cfg(test)]
+#[path = "ui_tests.rs"]
+mod legacy_tests;

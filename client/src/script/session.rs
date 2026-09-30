@@ -1,8 +1,10 @@
 use super::{
+    background::{BackgroundRegistry, ScriptBackground},
     bindings::HostControls,
     control::SessionControl,
     loader::ScriptModules,
-    ui::ScriptUiState,
+    transfer::FunctionTransfer,
+    ui::{ScriptUiBindings, ScriptUiState},
 };
 use crate::bridge::{ScriptUiPublisher, WsConnection};
 use rquickjs::{
@@ -83,6 +85,7 @@ pub(super) fn format_console_message(args: Rest<Value>) -> rquickjs::Result<Stri
 pub(super) struct ScriptSession {
     // Rust drops fields in declaration order. Persistent roots must be gone
     // before their context and runtime.
+    background: Option<ScriptBackground>,
     script: Persistent<Function<'static>>,
     after_load: Option<Persistent<Function<'static>>>,
     on_connect: Option<Persistent<Function<'static>>>,
@@ -91,9 +94,12 @@ pub(super) struct ScriptSession {
     after_resume: Option<Persistent<Function<'static>>>,
     parse: Persistent<Function<'static>>,
     freeze: Persistent<Function<'static>>,
+    transfer: Option<Rc<FunctionTransfer>>,
+    ui_bindings: Option<Rc<ScriptUiBindings>>,
     ui: Option<Rc<ScriptUiState>>,
     context: AsyncContext,
     runtime: AsyncRuntime,
+    background_registry: Rc<BackgroundRegistry>,
     connection: WsConnection,
     session_control: SessionControl,
     pub(super) screen_ownership: Rc<super::ownership::ScreenOwnershipState>,
@@ -102,6 +108,9 @@ pub(super) struct ScriptSession {
 impl Drop for ScriptSession {
     fn drop(&mut self) {
         self.session_control.stop();
+        self.background.take();
+        self.ui_bindings.take();
+        self.transfer.take();
         self.ui.take();
         self.screen_ownership.close();
     }
@@ -136,8 +145,11 @@ impl ScriptSession {
         session_control: SessionControl,
         ui_publisher: ScriptUiPublisher,
     ) -> Result<Self, String> {
-        let mut modules = ScriptModules::default();
+        let modules = ScriptModules::default();
         modules.insert(name, source.to_owned())?;
+        let ui = Rc::new(ScriptUiState::new(ui_publisher, session_control.clone()));
+        let background_registry = Rc::new(BackgroundRegistry::new(session_control.clone()));
+        let screen_ownership = Rc::new(super::ownership::ScreenOwnershipState::default());
         let runtime = AsyncRuntime::new().map_err(|error| error.to_string())?;
         runtime.set_loader(modules.clone(), modules.clone()).await;
         let interrupt_control = session_control.clone();
@@ -148,12 +160,14 @@ impl ScriptSession {
         let name = name.to_owned();
 
         let context_session_control = session_control.clone();
-        let context_ui_publisher = ui_publisher.clone();
         let context_connection = connection.clone();
-        let (script, after_load, on_connect, on_disconnect, before_pause, after_resume, parse, freeze, ui) = context
+        let context_ui = ui.clone();
+        let context_background = background_registry.clone();
+        let context_modules = modules.clone();
+        let (script, after_load, on_connect, on_disconnect, before_pause, after_resume, parse, freeze, transfer, ui_bindings) = context
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<_> = async {
-                    modules.install_stack_trace(&ctx)?;
+                    context_modules.install_stack_trace(&ctx)?;
                     let console = Object::new(ctx.clone())?;
                     console.set(
                         "log",
@@ -188,11 +202,14 @@ impl ScriptSession {
                         ownership_prototype.get::<_, Function>("release")?,
                     )?;
 
-                    let ui = Rc::new(ScriptUiState::new(
+                    let transfer = Rc::new(FunctionTransfer::new(&ctx)?);
+                    let ui_bindings = Rc::new(ScriptUiBindings::new(
                         &ctx,
-                        context_ui_publisher,
+                        context_ui,
                         context_connection,
                         context_session_control.clone(),
+                        transfer.clone(),
+                        context_background,
                     )?);
 
                     if context_session_control.is_stopped() {
@@ -202,6 +219,7 @@ impl ScriptSession {
                         ));
                     }
 
+                    let mut modules = context_modules.clone();
                     let (module, promise) = modules.load(&ctx, &name, None)?.eval()?;
                     promise.into_future::<()>().await?;
                     let namespace = module.namespace()?;
@@ -229,7 +247,8 @@ impl ScriptSession {
                         after_resume.map(|hook| Persistent::save(&ctx, hook)),
                         Persistent::save(&ctx, parse),
                         Persistent::save(&ctx, freeze),
-                        ui,
+                        transfer,
+                        ui_bindings,
                     ))
                 }
                 .await;
@@ -238,7 +257,17 @@ impl ScriptSession {
             })
             .await?;
 
+        let background = ScriptBackground::new(
+            modules,
+            background_registry.clone(),
+            ui.clone(),
+            connection.clone(),
+            session_control.clone(),
+            screen_ownership.clone(),
+        ).await?;
+
         Ok(Self {
+            background: Some(background),
             script,
             after_load,
             on_connect,
@@ -247,12 +276,15 @@ impl ScriptSession {
             after_resume,
             parse,
             freeze,
+            transfer: Some(transfer),
+            ui_bindings: Some(ui_bindings),
             context,
             runtime,
+            background_registry,
             connection,
             session_control,
             ui: Some(ui),
-            screen_ownership: Rc::default(),
+            screen_ownership,
         })
     }
 
@@ -269,7 +301,9 @@ impl ScriptSession {
         let parse = self.parse.clone();
         let freeze = self.freeze.clone();
         let session_control = self.session_control.clone();
-        let ui = self.ui.as_ref().expect("script UI state must exist").clone();
+        let ui = self.ui_bindings.as_ref().expect("script UI bindings must exist").clone();
+        let transfer = self.transfer.as_ref().expect("script function transfer must exist").clone();
+        let background = self.background_registry.clone();
         let screen_ownership = self.screen_ownership.clone();
 
         self.context
@@ -286,6 +320,8 @@ impl ScriptSession {
                         session_control,
                         screen_ownership,
                         ui,
+                        transfer,
+                        background,
                     )?;
                     ctx.globals().set("rev", rev)?;
                     let hook: Function = hook.restore(&ctx)?;
@@ -329,54 +365,10 @@ impl ScriptSession {
     pub(super) async fn dispatch_ui_event_if_current(
         &self,
         event: crate::bridge::ScriptUiEvent,
-        controls: HostControls,
+        _controls: HostControls,
         current: impl Fn() -> bool + 'static,
     ) -> Result<(), String> {
-        if self.session_control.is_stopped() {
-            return Err(SessionControl::error_message().to_owned());
-        }
-        let connection = self.connection.clone();
-        let parse = self.parse.clone();
-        let freeze = self.freeze.clone();
-        let session_control = self.session_control.clone();
-        let ui = self.ui.as_ref().expect("script UI state must exist").clone();
-        let screen_ownership = self.screen_ownership.clone();
-        let element_id = event.element_id.clone();
-        let event_kind = event.event;
-
-        self.context
-            .async_with(async move |ctx| {
-                let result: rquickjs::Result<()> = async {
-                    let parse: Function = parse.restore(&ctx)?;
-                    let freeze: Function = freeze.restore(&ctx)?;
-                    let rev = super::bindings::create_rev(
-                        ctx.clone(),
-                        connection,
-                        controls,
-                        parse,
-                        freeze,
-                        session_control,
-                        screen_ownership,
-                        ui.clone(),
-                    )?;
-                    ctx.globals().set("rev", rev)?;
-                    if !current() {
-                        return Ok(());
-                    }
-                    let result = ui.dispatch(&ctx, &event)?;
-                    let _: Value = result.into_future().await?;
-                    Ok(())
-                }
-                .await;
-
-                result.map_err(|error| {
-                    format!(
-                        "{event_kind:?} handler for UI element {element_id:?}: {}",
-                        CaughtError::from_error(&ctx, error),
-                    )
-                })
-            })
-            .await
+        self.background_registry.dispatch_ui(event, current).await
     }
 
     pub(super) async fn run_before_pause(&self, controls: HostControls) -> Result<(), String> {
@@ -393,6 +385,14 @@ impl ScriptSession {
 
     pub(super) fn is_stopped(&self) -> bool {
         self.session_control.is_stopped()
+    }
+
+    pub(super) fn is_paused(&self) -> bool {
+        self.session_control.is_paused()
+    }
+
+    pub(super) fn acknowledge_pause(&self, paused: bool) {
+        self.session_control.acknowledge_pause(paused);
     }
 
     #[cfg(test)]
@@ -416,7 +416,9 @@ impl ScriptSession {
         let parse = self.parse.clone();
         let freeze = self.freeze.clone();
         let session_control = self.session_control.clone();
-        let ui = self.ui.as_ref().expect("script UI state must exist").clone();
+        let ui = self.ui_bindings.as_ref().expect("script UI bindings must exist").clone();
+        let transfer = self.transfer.as_ref().expect("script function transfer must exist").clone();
+        let background = self.background_registry.clone();
         let screen_ownership = self.screen_ownership.clone();
         let connection = self.connection.clone();
 
@@ -436,6 +438,8 @@ impl ScriptSession {
                         session_control,
                         screen_ownership,
                         ui,
+                        transfer,
+                        background,
                     )?;
                     ctx.globals().set("rev", rev)?;
                     let result: MaybePromise = script.call(())?;
@@ -466,6 +470,10 @@ impl ScriptSession {
 
     pub(super) fn drive(&self) -> impl std::future::Future<Output = ()> + use<> {
         self.runtime.drive()
+    }
+
+    pub(super) fn drive_background(&self, controls: HostControls) -> impl std::future::Future<Output = ()> + '_ {
+        self.background.as_ref().expect("script background must exist").run(controls)
     }
 }
 

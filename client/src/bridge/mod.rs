@@ -25,7 +25,6 @@ pub(crate) use transfer::transfer;
 pub(crate) use scroll_into_view::scroll_into_view;
 pub(crate) use connection::{ConnectionEvent, WsConnection, WsError};
 pub(crate) use control::{publish_state, register_control_handlers};
-pub(crate) use packets::{ScriptUiSnapshot, ScriptUiElementState, ScriptUiEvent, ScriptUiPointer, ScriptUiPointerPhase, ScriptUiMeasureReq};
-#[cfg(test)]
-pub(crate) use packets::ScriptUiEventKind;
+pub(crate) use packets::{ScriptUiSnapshot, ScriptUiElementState, ScriptUiEvent, ScriptUiPointer, ScriptUiPointerPhase, ScriptUiMeasureReq,
+    ScriptUiEventKind, ScriptUiBorderState, ScriptUiCornerState, ScriptUiLengthState, ScriptUiPaddingState};
 pub(crate) use script_ui::{ScriptUiPublisher, QueuedScriptUiEvent, publish_script_ui, register_script_ui_handlers};

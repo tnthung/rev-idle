@@ -8,11 +8,13 @@ use super::lifecycle::{
     run_with_controls,
     run_with_controls_and_connection,
     run_with_controls_and_lifecycle,
+    run_with_controls_and_lifecycle_with_control,
     run_with_controls_and_state,
     CaptureAction,
 };
 use super::session::ScriptSession;
 use super::session::format_console_message;
+use super::ScriptControl;
 use crate::{app::{PauseUpdate, ScriptCommand, ScriptPhase, StateUpdate}, capture::{CaptureState, LockState}};
 use rquickjs::{function::Rest, AsyncContext, AsyncRuntime, Value};
 use tokio::sync::{mpsc, watch};
@@ -170,12 +172,12 @@ async fn ensure_running_waits_for_resume() {
         .await
         .unwrap();
     let (controls, events) = recording_controls();
-    controls.actions_paused.set_paused(true);
+    session.acknowledge_pause(true);
     let invocation = session.invoke(State::default(), controls.clone());
     tokio::pin!(invocation);
     assert!(tokio::time::timeout(Duration::from_millis(20), &mut invocation).await.is_err());
     assert!(events.borrow().is_empty());
-    controls.actions_paused.set_paused(false);
+    session.acknowledge_pause(false);
     tokio::time::timeout(Duration::from_secs(1), &mut invocation)
         .await
         .unwrap()
@@ -190,15 +192,15 @@ async fn ensure_running_rechecks_rapid_transitions() {
         rev.click(3, 3);
     }"#).await.unwrap();
     let (controls, events) = recording_controls();
-    controls.actions_paused.set_paused(true);
+    session.acknowledge_pause(true);
     let invocation = session.invoke((), controls.clone());
     tokio::pin!(invocation);
     assert!(tokio::time::timeout(Duration::from_millis(10), &mut invocation).await.is_err());
-    controls.actions_paused.set_paused(false);
-    controls.actions_paused.set_paused(true);
+    session.acknowledge_pause(false);
+    session.acknowledge_pause(true);
     assert!(tokio::time::timeout(Duration::from_millis(10), &mut invocation).await.is_err());
     assert!(events.borrow().is_empty());
-    controls.actions_paused.set_paused(false);
+    session.acknowledge_pause(false);
     tokio::time::timeout(Duration::from_secs(1), invocation).await.unwrap().unwrap();
     assert_eq!(*events.borrow(), vec![HostEvent::Click(3, 3, Button::Left)]);
 }
@@ -212,7 +214,7 @@ async fn ensure_running_cannot_wake_in_replacement_session() {
         crate::bridge::WsConnection::disconnected_for_test(), old_control.clone(), crate::bridge::ScriptUiPublisher::default(),
     ).await.unwrap();
     let (controls, events) = recording_controls();
-    controls.actions_paused.set_paused(true);
+    old_control.acknowledge_pause(true);
     let invocation = old.invoke((), controls.clone());
     tokio::pin!(invocation);
     assert!(tokio::time::timeout(Duration::from_millis(10), &mut invocation).await.is_err());
@@ -221,7 +223,6 @@ async fn ensure_running_cannot_wake_in_replacement_session() {
         "export default async function() { await rev.ensureRunning(); rev.click(2, 2); }", "new-checkpoint.js",
         crate::bridge::WsConnection::disconnected_for_test(), control.register_session(), crate::bridge::ScriptUiPublisher::default(),
     ).await.unwrap();
-    controls.actions_paused.set_paused(false);
     replacement.invoke((), controls).await.unwrap();
     assert!(tokio::time::timeout(Duration::from_secs(1), invocation).await.unwrap().is_err());
     assert!(old.is_stopped());
@@ -2063,7 +2064,7 @@ async fn console_commands_control_context_lifetime() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn paused_default_failure_stops_the_session() {
+async fn paused_default_failure_stops_after_resume() {
     let path = std::env::temp_dir().join(format!("rev-idle-paused-failure-{}.js", uuid::Uuid::new_v4()));
     std::fs::write(&path, r#"
         let reject;
@@ -2087,9 +2088,13 @@ async fn paused_default_failure_stops_the_session() {
         }).await.unwrap();
         commands.send(ScriptCommand::Pause).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
-            while state_rx.borrow().phase != ScriptPhase::Stopped { state_rx.changed().await.unwrap(); }
+            while state_rx.borrow().phase != ScriptPhase::Paused { state_rx.changed().await.unwrap(); }
         }).await.unwrap();
         assert_eq!(*events.borrow(), vec![HostEvent::Click(1, 1, Button::Left)]);
+        commands.send(ScriptCommand::Resume).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while state_rx.borrow().phase != ScriptPhase::Stopped { state_rx.changed().await.unwrap(); }
+        }).await.unwrap();
         commands.send(ScriptCommand::Exit).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), runner).await.unwrap().unwrap().unwrap();
     }).await;
@@ -2199,7 +2204,7 @@ async fn pause_and_resume_hooks_run_around_the_actual_transition() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn connection_hooks_survive_a_pause_during_disconnect() {
+async fn two_runtime_pause_hooks_and_connections() {
     use futures_util::StreamExt;
     use std::fs;
     use tokio_tungstenite::{tungstenite::protocol::Role, WebSocketStream};
@@ -2215,6 +2220,8 @@ async fn connection_hooks_survive_a_pause_during_disconnect() {
             export function afterLoad() { rev.click(1, 1); }
             export function onConnect() { rev.click(2, 2); }
             export async function onDisconnect() { rev.click(3, 3); await rev.sleep(100); rev.click(4, 4); }
+            export function beforePause() { rev.click(7, Number(rev.paused)); }
+            export function afterResume() { rev.click(8, Number(rev.paused)); }
             export function beforeStop() { rev.click(99, 99); }
             export default async function() {
                 if (++invocations > 1) rev.click(9, 9);
@@ -2296,14 +2303,25 @@ async fn connection_hooks_survive_a_pause_during_disconnect() {
                 "onDisconnect must win over the in-flight request failure"
             );
             pause_tx.send_replace(gate.set_paused(true));
-            assert_eq!(tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(), (4, 4), "pause must preserve the in-flight disconnect hook");
+            assert_eq!(tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(), (7, 0), "beforePause must run before acknowledgment");
+            assert!(tokio::time::timeout(Duration::from_millis(30), event_rx.recv()).await.is_err(), "acknowledged pause must retain the in-flight disconnect hook");
             let (stream, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept()).await.unwrap().unwrap();
             let mut reconnected = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
-            assert_eq!(tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(), (2, 2));
-            assert!(tokio::time::timeout(Duration::from_millis(30), event_rx.recv()).await.is_err(), "reconnect must preserve pause");
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            assert!(event_rx.try_recv().is_err(), "connection hooks must remain deferred while paused");
+            reconnected.close(None).await.unwrap();
+            drop(listener);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert!(event_rx.try_recv().is_err(), "disconnect hooks must remain deferred while paused");
             command_tx.send(ScriptCommand::Resume).await.unwrap();
-            assert_eq!(tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap(), (9, 9));
-            tokio::time::timeout(Duration::from_secs(1), reconnected.next()).await.unwrap().unwrap().unwrap();
+            let mut resumed = Vec::new();
+            while resumed.len() < 5 {
+                resumed.push(tokio::time::timeout(Duration::from_secs(1), event_rx.recv()).await.unwrap().unwrap());
+            }
+            assert_eq!(resumed, vec![(8, 0), (4, 4), (2, 2), (3, 3), (4, 4)]);
+            let mut deferred_connection_hooks = vec!["disconnect"];
+            deferred_connection_hooks.extend(resumed.iter().filter_map(|event| match event.0 { 2 => Some("connect"), 3 => Some("disconnect"), _ => None }));
+            assert_eq!(deferred_connection_hooks, vec!["disconnect", "connect", "disconnect"]);
 
             command_tx.send(ScriptCommand::Exit).await.unwrap();
             tokio::time::timeout(Duration::from_secs(1), runner)
@@ -2312,7 +2330,8 @@ async fn connection_hooks_survive_a_pause_during_disconnect() {
                 .unwrap()
                 .unwrap();
             connection.shutdown().await;
-            assert!(event_rx.try_recv().is_err(), "Exit must skip beforeStop");
+            let unexpected = event_rx.try_recv();
+            assert!(unexpected.is_err(), "Exit must skip beforeStop: {unexpected:?}");
         })
         .await;
 
@@ -2798,18 +2817,173 @@ async fn pause_preserves_in_flight_default_and_blocks_next_call() {
         assert_eq!(*events.borrow(), vec![HostEvent::Click(1, 0, Button::Left)]);
         pause_tx.send_replace(gate.set_paused(true));
         tokio::time::timeout(Duration::from_secs(1), async {
-            while events.borrow().len() < 3 { tokio::task::yield_now().await; }
+            while events.borrow().len() < 2 { tokio::task::yield_now().await; }
         }).await.unwrap();
-        assert_eq!(*events.borrow(), vec![HostEvent::Click(1, 0, Button::Left), HostEvent::Click(8, 8, Button::Left), HostEvent::Click(1, 1, Button::Left)]);
+        assert_eq!(*events.borrow(), vec![HostEvent::Click(1, 0, Button::Left), HostEvent::Click(8, 8, Button::Left)]);
         while state_rx.borrow().phase != ScriptPhase::Paused { state_rx.changed().await.unwrap(); }
-        assert!(tokio::time::timeout(Duration::from_millis(30), async {
-            while events.borrow().len() == 3 { tokio::task::yield_now().await; }
-        }).await.is_err(), "pause must withhold the next default call");
+        let main_steps_at_ack = events.borrow().len();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let main_steps_after_ack = events.borrow().len();
+        assert_eq!(main_steps_after_ack, main_steps_at_ack, "pause must withhold the next default call");
         commands.send(ScriptCommand::Resume).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             while events.borrow().len() < 5 { tokio::task::yield_now().await; }
         }).await.unwrap();
-        assert_eq!(&events.borrow()[3..], &[HostEvent::Click(9, 9, Button::Left), HostEvent::Click(2, 0, Button::Left)]);
+        assert_eq!(&events.borrow()[2..], &[
+            HostEvent::Click(1, 1, Button::Left),
+            HostEvent::Click(9, 9, Button::Left),
+            HostEvent::Click(2, 0, Button::Left),
+        ]);
+        commands.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner).await.unwrap().unwrap().unwrap();
+    }).await;
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn two_runtime_pause_detached_timer_and_promise() {
+    let path = std::env::temp_dir().join(format!("rev-idle-two-runtime-pause-{}.js", uuid::Uuid::new_v4()));
+    std::fs::write(&path, r#"
+        export function afterLoad() {
+            rev.ui.main = { text: "idle" };
+            rev.ui.detached = { text: "waiting" };
+            rev.ui.background = { text: "0" };
+            rev.daemon.monitor = async function() {
+                let count = 0;
+                while (true) {
+                    rev.ui.background.text = String(++count);
+                    await rev.sleep(2);
+                }
+            };
+        }
+        let starts = 0;
+        export default async function() {
+            const start = ++starts;
+            let value = 41;
+            rev.ui.main.text = `started-${start}`;
+            (async () => {
+                await rev.sleep(20);
+                rev.ui.detached.text = "done";
+            })();
+            await rev.sleep(40);
+            value++;
+            rev.ui.main.text = `resumed-${start}-${value}`;
+            await new Promise(() => {});
+        }
+    "#).unwrap();
+    let publisher = crate::bridge::ScriptUiPublisher::default();
+    let mut snapshots = publisher.subscribe();
+    let (controls, _) = recording_controls();
+    let gate = controls.actions_paused.clone();
+    let (commands, command_rx) = mpsc::channel(8);
+    let (_ui_events_tx, ui_events) = mpsc::channel(1);
+    let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+    let (states, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    tokio::task::LocalSet::new().run_until(async {
+        let runner = tokio::task::spawn_local(run_with_controls_and_lifecycle_with_control(
+            command_rx,
+            ui_events,
+            crate::bridge::WsConnection::disconnected_for_test(),
+            pause_rx,
+            Some(path.clone()),
+            controls,
+            Duration::from_millis(2),
+            shutdown,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            CaptureState::default(),
+            LockState::default(),
+            None,
+            states,
+            ScriptControl::default(),
+            publisher,
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if snapshots.borrow().elements.iter().any(|element| element.id == "main" && element.text == "started-1")
+                    && snapshots.borrow().elements.iter().any(|element| element.id == "background" && element.text != "0")
+                {
+                    break;
+                }
+                snapshots.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        pause_tx.send_replace(gate.set_paused(true));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while state_rx.borrow().phase != ScriptPhase::Paused { state_rx.changed().await.unwrap(); }
+        }).await.unwrap();
+        let main_steps_at_ack = snapshots.borrow().elements.iter().find(|element| element.id == "main").unwrap().text.clone();
+        let detached_at_ack = snapshots.borrow().elements.iter().find(|element| element.id == "detached").unwrap().text.clone();
+        let background_steps_at_ack = snapshots.borrow().elements.iter().find(|element| element.id == "background").unwrap().text.parse::<usize>().unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let main_steps_after_ack = snapshots.borrow().elements.iter().find(|element| element.id == "main").unwrap().text.clone();
+        let detached_after_ack = snapshots.borrow().elements.iter().find(|element| element.id == "detached").unwrap().text.clone();
+        let background_steps_after_ack = snapshots.borrow().elements.iter().find(|element| element.id == "background").unwrap().text.parse::<usize>().unwrap();
+        assert_eq!(main_steps_after_ack, main_steps_at_ack);
+        assert_eq!(detached_after_ack, detached_at_ack);
+        assert!(background_steps_after_ack > background_steps_at_ack);
+
+        commands.send(ScriptCommand::Resume).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if snapshots.borrow().elements.iter().any(|element| element.id == "main" && element.text == "resumed-1-42")
+                    && snapshots.borrow().elements.iter().any(|element| element.id == "detached" && element.text == "done")
+                {
+                    break;
+                }
+                snapshots.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        assert!(!snapshots.borrow().elements.iter().any(|element| element.id == "main" && element.text.contains("started-2")));
+        commands.send(ScriptCommand::Exit).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), runner).await.unwrap().unwrap().unwrap();
+    }).await;
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn two_runtime_pause_stale_request_is_not_acknowledged() {
+    let path = std::env::temp_dir().join(format!("rev-idle-two-runtime-stale-pause-{}.js", uuid::Uuid::new_v4()));
+    std::fs::write(&path, r#"
+        export async function beforePause() {
+            rev.click(1, 0);
+            await rev.sleep(40);
+            rev.click(2, 0);
+        }
+        export default async function() { await new Promise(() => {}); }
+    "#).unwrap();
+    let (controls, events) = recording_controls();
+    let gate = controls.actions_paused.clone();
+    let (commands, command_rx) = mpsc::channel(8);
+    let (pause_tx, pause_rx) = watch::channel(PauseUpdate::initial());
+    let (states, mut state_rx) = watch::channel(StateUpdate::new(false, false, false, false, false));
+    tokio::task::LocalSet::new().run_until(async {
+        let runner = tokio::task::spawn_local(run_with_controls_and_state(
+            command_rx, states, pause_rx, Some(path.clone()), controls, LockState::default(), Duration::from_millis(2),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while state_rx.borrow().phase != ScriptPhase::Running { state_rx.changed().await.unwrap(); }
+        }).await.unwrap();
+        pause_tx.send_replace(gate.set_paused(true));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while events.borrow().len() < 1 { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        pause_tx.send_replace(gate.set_paused(false));
+        pause_tx.send_replace(gate.set_paused(true));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while events.borrow().len() < 3 { tokio::task::yield_now().await; }
+        }).await.unwrap();
+        assert_eq!(&events.borrow()[..3], &[
+            HostEvent::Click(1, 0, Button::Left),
+            HostEvent::Click(2, 0, Button::Left),
+            HostEvent::Click(1, 0, Button::Left),
+        ]);
+        assert_eq!(state_rx.borrow().phase, ScriptPhase::Running, "stale pause request was acknowledged");
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while state_rx.borrow().phase != ScriptPhase::Paused { state_rx.changed().await.unwrap(); }
+        }).await.unwrap();
+        assert_eq!(events.borrow()[3], HostEvent::Click(2, 0, Button::Left));
         commands.send(ScriptCommand::Exit).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), runner).await.unwrap().unwrap().unwrap();
     }).await;

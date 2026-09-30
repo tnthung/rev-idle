@@ -35,7 +35,7 @@ It does not install browser or Node.js host APIs. In particular, scripts cannot 
 
 ## Imports
 
-Static imports, re-exports, and dynamic `import()` share the same resolver.
+Static imports, re-exports, and dynamic `import()` share the same resolver. The session has separate main and background runtimes. Main runs the default export and ordinary detached work; the background runtime runs registered daemons and UI callbacks. Static imports are replayed from the defining module's retained snapshot in each runtime, while explicit dynamic imports keep their existing fresh-source behavior.
 
 - A specifier must start with `./` or `../` and is resolved relative to the importing module.
 - `.js` is appended when the specifier has no extension.
@@ -97,11 +97,11 @@ export default async function() {
 }
 ```
 
-Pause prevents new default invocations. The current invocation, detached promises, and UI callbacks continue. Connection notifications also preserve the current invocation; the existing connection rule still controls when another default call may start. There is at most one default invocation in flight.
+Pause prevents new default invocations and stops polling the current invocation and ordinary detached main work. Background daemons and UI callbacks continue. Connection notifications also preserve the current invocation; the existing connection rule still controls when another default call may start. There is at most one default invocation in flight.
 
 Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before each automatic loop iteration to wait during pause, especially before reading data used for the next action. Monitoring loops can omit the checkpoint. Game/window controls and ordinary `Action` calls remain available while paused. `Action.loopDetached()` checks for resume at each repetition.
 
-`rev.stop()` works from defaults, hooks, and background/UI callbacks. Stop, reload, replacement, exit, and uncaught default failures cancel the session and skip `beforeStop`. Host cleanup removes custom UI and releases input locks and ownership. It does not depend on JavaScript `finally`; perform script-specific cleanup explicitly before requesting Stop. Already-dispatched game actions may finish. Engine interruption cannot preempt a blocking native call such as synchronous `rev.shell` until that call returns.
+`rev.stop()` works from defaults, hooks, daemons, and UI callbacks. Stop, reload, replacement, exit, and uncaught default failures cancel both runtimes and skip `beforeStop`. Host cleanup removes custom UI and releases input locks and ownership. It does not depend on JavaScript `finally`; perform script-specific cleanup explicitly before requesting Stop. Already-dispatched game actions may finish. Engine interruption cannot preempt a blocking native call such as synchronous `rev.shell` until that call returns.
 
 ## `rev`
 
@@ -134,6 +134,7 @@ Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before 
 | `rev.paused` | `boolean` | Live, read-only pause flag. |
 | `rev.ensureRunning()` | `Promise<void>` | Resolves while running; waits while paused; rejects with `script session stopped` on termination. |
 | `rev.stop()` | `void` | Terminates the entire session and interrupts JavaScript. |
+| `rev.daemon` | `Record<string, RevDaemon \| undefined>` | Assign a function to register a background daemon; `delete rev.daemon.name` retires it. Reads are for presence checks and do not return the installed function. |
 | `rev.ui` | element registry | Creates, replaces, updates, and removes session-owned UI. |
 | `rev.global` | property proxy | Stores process-local JSON values shared by all script sessions. |
 
@@ -151,15 +152,16 @@ export function afterLoad() {
     border: { thickness: 2, color: [255, 0, 0, 180] },
     corner: { radius: 5, topLeft: 0, bottomLeft: 0 },
     padding: { thickness: 4, left: 0, right: 8 },
-    onHover() { rev.ui.button.color = [0, 120, 0]; },
-    onLeave() { rev.ui.button.color = [40, 40, 40]; },
-    async onClick() {
-      const button = rev.ui.button;
-      button.text = "You clicked me!";
-      await rev.sleep(1000);
-      if (rev.ui.button === button) button.text = "Click Me";
-    },
+    states: { clicks: 0 },
   };
+  rev.ui.button.setOnHover!(function() { this.color = [0, 120, 0]; });
+  rev.ui.button.setOnLeave!(function() { this.color = [40, 40, 40]; });
+  rev.ui.button.setOnClick!(async function() {
+    this.states.clicks = typeof this.states.clicks === "number" ? this.states.clicks + 1 : 1;
+    this.text = "You clicked me!";
+    await rev.sleep(1000);
+    if (rev.ui.button === this) this.text = "Click Me";
+  });
   rev.ui.label = { text: "Ready", font: "Consolas", size: 18, posX: 100, posY: -140 };
   rev.ui.signal = { posX: 80, posY: -140, lenX: 12, lenY: 12, color: [0, 255, 0] };
 }
@@ -167,7 +169,7 @@ export function afterLoad() {
 export default function() {}
 ```
 
-Use `delete rev.ui.button` to remove an element. Assigning a whole definition replaces its identity; field updates preserve it. Check identity after an `await` before updating a captured element. A write through a deleted/replaced proxy throws. Equal field writes are no-ops, including structurally equal colors/styles and identical handler functions. Changes publish snapshots asynchronously, independently of the 50 ms default-call delay; unchanged UI is not periodically resent.
+Use `delete rev.ui.button` to remove an element. Assigning a whole definition replaces its identity; field updates preserve it. Check identity after an `await` before updating a captured element. A write through a deleted/replaced proxy throws. Configure callbacks only with `setOnClick`, `setOnHover`, and `setOnLeave`; pass `null` to clear one. Callback properties are absent, and definitions cannot supply or override host methods. Equal field writes are no-ops, including structurally equal colors/styles and identical handler functions. Changes publish snapshots asynchronously, independently of the 50 ms default-call delay; unchanged UI is not periodically resent.
 
 Colors use RGB or RGBA bytes. Lengths are fixed numbers or automatic `{ min, max }` bounds. Padding contributes to automatic size and is included in fixed sizes. Its `thickness` is the fallback for `top`, `right`, `bottom`, and `left`. Border is an external outline: it adds no size or hit area. Corner `radius` is the fallback for each named corner; explicit zero stays square. Replace compound fields as a whole, for example `rev.ui.button.border = { thickness: 1, color: [0, 255, 0] }`; nested writes throw. Text is plain and clipped inside the padded rounded box.
 
@@ -183,10 +185,10 @@ Positive positions measure from the left/top; negative positions measure from th
 
 Press F6 while the game is focused to hide or show all script-created UI. Hidden widgets keep their state and receive script updates, but do not receive pointer events. The control bar stays visible.
 
-UI remains visible and callbacks remain usable while paused. A monitor can update it during pause while maintenance waits:
+UI remains visible and callbacks remain usable while paused. Register a monitor as a daemon when it should keep running; ordinary detached main maintenance waits:
 
 ```javascript
-async function monitor() {
+rev.daemon.monitor = async function() {
   while (rev.ui.label) {
     rev.ui.label.text = rev.paused ? "Paused" : "Running";
     await rev.sleep(250);
@@ -203,6 +205,16 @@ async function maintenance() {
 ```
 
 Start these tasks from `afterLoad` with `.catch(console.error)`. Stop/reload removes all session UI. Disconnect retains visuals but disables interaction until a fresh snapshot arrives. Capture also disables custom interaction. The [original UI design](superpowers/specs/2026-09-28-script-ui-design.md) provides implementation background; this guide describes the current API. `scripts/ui_demo.ts` provides manual checks without automatic game actions.
+
+Load [two_runtime_demo.ts](../scripts/two_runtime_demo.ts) for a focused runtime demo: Pause freezes a default invocation and its detached counter while daemon ticks and asynchronous buttons continue. Send requests while paused, then Resume to see the same invocation token handle them. The demo also exercises imported callback code, `setOnClick(null)`, and daemon replacement waiting for the current run to finish. The file's opening comments give the walkthrough; it only updates its own UI.
+
+### Daemons, states, and transfer limits
+
+`rev.daemon.name = fn` registers or replaces a background function. A daemon runs once after installation and does not restart automatically when it returns or rejects. `delete rev.daemon.name` retires the name; a running invocation may finish, and a replacement waits for its returned promise. Daemon reads are presence checks only. Daemons have `this === undefined`, so use `rev.global` or element `states` for communication. A daemon failure is reported with its name and does not stop the session.
+
+Element definitions may include JSON-only `states`. Live elements always expose a state map, and callback `this` is the element with that map. State values are copied through the host; nested objects need reassignment after mutation. State maps disappear when an element is replaced or deleted. Use `rev.global` for other JSON communication; functions, promises, class instances, and original lexical closures do not cross runtimes.
+
+Transferred daemons and callbacks replay their defining module's retained static imports in the background runtime. References to locals outside the transferred function are ordinary missing-name errors when reached. Callback installation is asynchronous and can fail naturally; the original main function is never invoked as a fallback.
 
 ### State
 

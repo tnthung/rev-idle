@@ -1,4 +1,6 @@
 mod loader;
+mod transfer;
+mod background;
 mod history;
 mod bindings;
 mod session;
@@ -16,6 +18,12 @@ mod tests;
 
 #[cfg(test)]
 mod worker_tests;
+
+#[cfg(test)]
+mod migration_tests;
+
+#[cfg(test)]
+mod transfer_tests;
 
 #[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

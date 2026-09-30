@@ -71,7 +71,6 @@ fn terminal_generation(control: &ScriptControl) -> u64 {
         control.request_internal_terminal()
     }
 }
-
 fn unpack_command(command: ScriptCommand) -> (ScriptCommand, Option<u64>) {
     match command {
         ScriptCommand::Terminal { command, generation } => (*command, Some(generation)),
@@ -301,9 +300,6 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                 session.screen_ownership.attach(lock_state, state_updates.clone());
                 connection_events = Some(connection.connection_events());
                 connected = *connection_generation.borrow() != 0;
-                if let Err(error) = session.run_after_load(controls.clone()).await {
-                    eprintln!("afterLoad hook failed: {error}");
-                }
                 current_path = Some(absolute_path.clone());
                 history::record(&mut script_history, absolute_path.clone());
                 if script_history_writable
@@ -333,22 +329,12 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
     script_running.store(session.is_some(), Ordering::Release);
     let initial_hotkey_update = *hotkey_pauses.borrow_and_update();
     let mut paused = false;
-    apply_hotkey_update(
-        initial_hotkey_update,
-        &controls.actions_paused,
-        session.is_some(),
-        &mut paused,
-    );
-    if let Some(active) = session.as_ref() {
-        active.screen_ownership.set_paused(paused);
+    if session.is_none() {
+        controls.actions_paused.reset_if_current(initial_hotkey_update);
     }
     let mut hotkey_channel_open = true;
     let mut terminal_updates = script_control.subscribe_terminal();
     terminal_updates.borrow_and_update();
-    // A non-stop command pulled off `commands` while an invocation was in
-    // flight (see below) can't be pushed back onto the mpsc channel, so it
-    // waits here and takes priority over the channel on the next iteration.
-    let mut pending_command: Option<(ScriptCommand, Option<u64>)> = None;
     let mut script_history_strings = script_history
         .iter()
         .map(|path| path.to_string_lossy().into_owned())
@@ -360,11 +346,28 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
     let mut ui_events_open = true;
     let mut pending_ui_events: VecDeque<QueuedScriptUiEvent> = VecDeque::new();
     let mut callbacks: FuturesUnordered<Pin<Box<dyn Future<Output = Result<(), String>>>>> = FuturesUnordered::new();
+    let mut background: Option<Pin<Box<dyn Future<Output = ()>>>> = session.as_ref().map(|active| {
+        let active = active.clone();
+        let controls = controls.clone();
+        Box::pin(async move { active.drive_background(controls).await }) as Pin<Box<dyn Future<Output = ()>>>
+    });
+    let mut after_load_pending = session.is_some();
+    let mut main_hook: Option<Pin<Box<dyn Future<Output = Result<(), String>>>>> = None;
+    let mut main_hook_name = "";
+    let mut connection_hooks = VecDeque::new();
+    let mut before_pause: Option<(PauseUpdate, Pin<Box<dyn Future<Output = Result<(), String>>>>)> = None;
+    let mut after_resume: Option<Pin<Box<dyn Future<Output = Result<(), String>>>>> = None;
+    let mut lock_after_resume = false;
 
     loop {
         if *shutdown.borrow() {
             let generation = terminal_generation(&script_control);
             drop(invocation.take());
+            drop(background.take());
+            drop(main_hook.take());
+            drop(before_pause.take());
+            drop(after_resume.take());
+            connection_hooks.clear();
             callbacks.clear();
             pending_ui_events.clear();
             drop(connection_events.take());
@@ -383,6 +386,29 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
 
         if session.is_none() {
             script_control.acknowledge_unpaired_terminal();
+        } else if session.as_ref().is_some_and(|active| active.is_stopped()) {
+            drop(invocation.take());
+            next_invocation_at = None;
+            drop(background.take());
+            drop(main_hook.take());
+            drop(before_pause.take());
+            drop(after_resume.take());
+            connection_hooks.clear();
+            callbacks.clear();
+            pending_ui_events.clear();
+            drop(connection_events.take());
+            if let Some(active) = session.as_ref() {
+                active.terminate();
+            }
+            lock_state.set_enabled(false);
+            controls.actions_paused.set_paused(false);
+            drop(session.take());
+            script_running.store(false, Ordering::Release);
+            console_locked.store(false, Ordering::Release);
+            paused = false;
+            println!("script stopped");
+            script_control.acknowledge_unpaired_terminal();
+            continue;
         }
 
         if script_history_checked_at.elapsed() >= Duration::from_secs(1) {
@@ -427,6 +453,64 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
         // drift out of sync with them.
         console_locked.store(session.is_some() && !paused, Ordering::Release);
 
+        if let Some(active) = session.as_ref() {
+            paused = active.is_paused();
+            let requested = controls.actions_paused.current_update();
+            if paused && !requested.paused() {
+                active.acknowledge_pause(false);
+                paused = false;
+                capture_state.set_enabled(false);
+                if lock_after_resume {
+                    active.screen_ownership.set_manual_lock();
+                    lock_after_resume = false;
+                }
+                active.screen_ownership.set_paused(false);
+                let active = active.clone();
+                let controls = controls.clone();
+                after_resume = Some(Box::pin(async move { active.run_after_resume(controls).await }));
+                println!("script resumed");
+            } else if !paused
+                && requested.paused()
+                && before_pause.is_none()
+                && after_resume.is_none()
+                && !after_load_pending
+                && main_hook_name != "afterLoad"
+            {
+                let active = active.clone();
+                let controls = controls.clone();
+                before_pause = Some((requested, Box::pin(async move { active.run_before_pause(controls).await })));
+            }
+
+            if !paused
+                && before_pause.is_none()
+                && after_resume.is_none()
+                && main_hook.is_none()
+            {
+                if after_load_pending {
+                    let active = active.clone();
+                    let controls = controls.clone();
+                    main_hook = Some(Box::pin(async move { active.run_after_load(controls).await }));
+                    main_hook_name = "afterLoad";
+                    after_load_pending = false;
+                } else if !requested.paused()
+                    && let Some(event) = connection_hooks.pop_front()
+                {
+                    let active = active.clone();
+                    let controls = controls.clone();
+                    match event {
+                        ConnectionEvent::Connected => {
+                            main_hook = Some(Box::pin(async move { active.run_on_connect(controls).await }));
+                            main_hook_name = "onConnect";
+                        }
+                        ConnectionEvent::Disconnected => {
+                            main_hook = Some(Box::pin(async move { active.run_on_disconnect(controls).await }));
+                            main_hook_name = "onDisconnect";
+                        }
+                    }
+                }
+            }
+        }
+
         while let Some(event) = pending_ui_events.pop_front() {
             let Some(active) = session.as_ref().cloned() else { break };
             let generations = connection.connection_generation();
@@ -449,10 +533,20 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
         }
 
         if invocation.is_none()
+            && main_hook.is_none()
+            && before_pause.is_none()
+            && after_resume.is_none()
+            && !after_load_pending
+            && connection_hooks.is_empty()
             && next_invocation_at.is_none_or(|deadline| deadline <= tokio::time::Instant::now())
             && session
                 .as_ref()
-                .is_some_and(|active| !active.is_stopped() && !paused && (connected || !active.has_connection_hooks()))
+                .is_some_and(|active| {
+                    !active.is_stopped()
+                        && !paused
+                        && !controls.actions_paused.is_paused()
+                        && (connected || !active.has_connection_hooks())
+                })
         {
             let active = session.as_ref().expect("eligible script session must exist").clone();
             let controls = controls.clone();
@@ -461,41 +555,20 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
         }
 
         let mut completed_invocation = None;
-        let command = if let Some(command) = pending_command.take() {
-            Some(command)
-        } else if session
-            .as_ref()
-            .is_some_and(|active| !active.is_stopped() && !paused && (connected || !active.has_connection_hooks()))
-        {
-            match commands.try_recv() {
-                Ok(command) => Some(unpack_command(command)),
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    let generation = terminal_generation(&script_control);
-                    drop(invocation.take());
-                    callbacks.clear();
-                    pending_ui_events.clear();
-                    drop(connection_events.take());
-                    if let Some(active) = session.as_ref() {
-                        active.terminate();
-                    }
-                    drop(session.take());
-                    script_control.acknowledge_terminal(generation);
-                    script_running.store(false, Ordering::Release);
-                    capture_state.set_enabled(false);
-                    lock_state.set_enabled(false);
-                    controls.actions_paused.set_paused(false);
-                    console_locked.store(false, Ordering::Release);
-                    return Ok(());
-                }
-            }
-        } else {
-            tokio::select! {
+        let mut completed_before_pause = None;
+        let mut completed_after_resume = None;
+        let mut completed_main_hook = None;
+        let command = tokio::select! {
                 biased;
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         let generation = terminal_generation(&script_control);
                         drop(invocation.take());
+                        drop(background.take());
+                        drop(main_hook.take());
+                        drop(before_pause.take());
+                        drop(after_resume.take());
+                        connection_hooks.clear();
                         callbacks.clear();
                         pending_ui_events.clear();
                         drop(connection_events.take());
@@ -524,6 +597,11 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                     None => {
                         let generation = terminal_generation(&script_control);
                         drop(invocation.take());
+                        drop(background.take());
+                        drop(main_hook.take());
+                        drop(before_pause.take());
+                        drop(after_resume.take());
+                        connection_hooks.clear();
                         callbacks.clear();
                         pending_ui_events.clear();
                         drop(connection_events.take());
@@ -556,29 +634,42 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                     None
                 }
                 result = async {
-                    match invocation.as_mut() {
+                    match before_pause.as_mut() {
+                        Some((update, future)) => Some((*update, future.await)),
+                        None => std::future::pending().await,
+                    }
+                }, if !paused && after_resume.is_none() => {
+                    before_pause = None;
+                    completed_before_pause = result;
+                    None
+                }
+                result = async {
+                    match after_resume.as_mut() {
                         Some(future) => Some(future.await),
                         None => std::future::pending().await,
                     }
-                } => {
-                    invocation = None;
-                    completed_invocation = result;
+                }, if !paused => {
+                    after_resume = None;
+                    completed_after_resume = result;
+                    None
+                }
+                result = async {
+                    match main_hook.as_mut() {
+                        Some(future) => Some(future.await),
+                        None => std::future::pending().await,
+                    }
+                }, if !paused && before_pause.is_none() && after_resume.is_none() => {
+                    main_hook = None;
+                    completed_main_hook = result;
                     None
                 }
                 changed = hotkey_pauses.changed(), if hotkey_channel_open => {
                     match changed {
                         Ok(()) => {
                             let update = *hotkey_pauses.borrow_and_update();
-                            apply_hotkey_update_and_report(
-                                update,
-                                &controls.actions_paused,
-                                &controls,
-                                &lock_state,
-                                session.as_ref().map(|value| &**value),
-                                &mut paused,
-                            )
-                            .await;
-                            disable_capture_if_running(&capture_state, session.is_some(), paused);
+                            if session.is_none() {
+                                controls.actions_paused.reset_if_current(update);
+                            }
                         }
                         Err(_) => hotkey_channel_open = false,
                     }
@@ -593,19 +684,11 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                     match event {
                         Some(ConnectionEvent::Connected) => {
                             connected = true;
-                            if let Some(active) = session.as_ref()
-                                && let Err(error) = active.run_on_connect(controls.clone()).await
-                            {
-                                eprintln!("onConnect hook failed: {error}");
-                            }
+                            connection_hooks.push_back(ConnectionEvent::Connected);
                         }
                         Some(ConnectionEvent::Disconnected) => {
                             connected = false;
-                            if let Some(active) = session.as_ref()
-                                && let Err(error) = active.run_on_disconnect(controls.clone()).await
-                            {
-                                eprintln!("onDisconnect hook failed: {error}");
-                            }
+                            connection_hooks.push_back(ConnectionEvent::Disconnected);
                         }
                         None => {
                             connected = false;
@@ -613,6 +696,16 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                         }
                     }
                     continue;
+                }
+                result = async {
+                    match invocation.as_mut() {
+                        Some(future) => Some(future.await),
+                        None => std::future::pending().await,
+                    }
+                }, if !paused && before_pause.is_none() && after_resume.is_none() && main_hook.is_none() => {
+                    invocation = None;
+                    completed_invocation = result;
+                    None
                 }
                 _ = async {
                     match next_invocation_at {
@@ -628,12 +721,56 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                         Some(active) => active.drive().await,
                         None => std::future::pending().await,
                     }
-                } => {
+                }, if !paused
+                    && !controls.actions_paused.is_paused()
+                    && before_pause.is_none()
+                    && after_resume.is_none()
+                    && main_hook.is_none()
+                    && invocation.is_none() => {
                     tokio::task::yield_now().await;
                     None
                 }
-            }
+                _ = async {
+                    match background.as_mut() {
+                        Some(future) => future.await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    background = None;
+                    None
+                }
         };
+
+        if let Some((update, result)) = completed_before_pause {
+            if let Err(error) = result {
+                eprintln!("beforePause hook failed: {error}");
+            }
+            if controls.actions_paused.is_current(update) && update.paused()
+                && let Some(active) = session.as_ref()
+            {
+                active.acknowledge_pause(true);
+                active.screen_ownership.set_paused(true);
+                paused = true;
+                lock_state.set_enabled(false);
+                println!("script paused");
+            }
+            continue;
+        }
+
+        if let Some(result) = completed_after_resume {
+            if let Err(error) = result {
+                eprintln!("afterResume hook failed: {error}");
+            }
+            continue;
+        }
+
+        if let Some(result) = completed_main_hook {
+            if let Err(error) = result {
+                eprintln!("{main_hook_name} hook failed: {error}");
+            }
+            main_hook_name = "";
+            continue;
+        }
 
         if let Some(result) = completed_invocation {
             let terminal = match result {
@@ -654,6 +791,11 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
             };
             if terminal {
                 next_invocation_at = None;
+                background = None;
+                main_hook = None;
+                before_pause = None;
+                after_resume = None;
+                connection_hooks.clear();
                 callbacks.clear();
                 pending_ui_events.clear();
                 connection_events = None;
@@ -702,6 +844,11 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                     let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
                     invocation = None;
                     next_invocation_at = None;
+                    background = None;
+                    main_hook = None;
+                    before_pause = None;
+                    after_resume = None;
+                    connection_hooks.clear();
                     callbacks.clear();
                     pending_ui_events.clear();
                     let (path, lock_after_load) = match load {
@@ -728,9 +875,6 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                                 loaded.screen_ownership.attach(lock_state, state_updates.clone());
                                 connection_events = Some(connection.connection_events());
                                 connected = *connection_generation.borrow() != 0;
-                                if let Err(error) = loaded.run_after_load(controls.clone()).await {
-                                    eprintln!("afterLoad hook failed: {error}");
-                                }
                                 current_path = Some(absolute_path.clone());
                                 history::record(&mut script_history, absolute_path.clone());
                                 script_history_strings = script_history
@@ -746,7 +890,13 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                                 if lock_after_load {
                                     loaded.screen_ownership.set_manual_lock();
                                 }
+                                background = Some({
+                                    let loaded = loaded.clone();
+                                    let controls = controls.clone();
+                                    Box::pin(async move { loaded.drive_background(controls).await })
+                                });
                                 session = Some(loaded);
+                                after_load_pending = true;
                                 script_running.store(true, Ordering::Release);
                                 println!("running {}", absolute_path.display());
                             }
@@ -776,6 +926,12 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                 ScriptCommand::Reload | ScriptCommand::ReloadLocked => {
                     let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
                     invocation = None;
+                    next_invocation_at = None;
+                    background = None;
+                    main_hook = None;
+                    before_pause = None;
+                    after_resume = None;
+                    connection_hooks.clear();
                     callbacks.clear();
                     pending_ui_events.clear();
                     let lock_after_load = matches!(command, ScriptCommand::ReloadLocked);
@@ -797,9 +953,6 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                                 loaded.screen_ownership.attach(lock_state, state_updates.clone());
                                 connection_events = Some(connection.connection_events());
                                 connected = *connection_generation.borrow() != 0;
-                                if let Err(error) = loaded.run_after_load(controls.clone()).await {
-                                    eprintln!("afterLoad hook failed: {error}");
-                                }
                                 current_path = Some(absolute_path.clone());
                                 history::record(&mut script_history, absolute_path.clone());
                                 script_history_strings = script_history
@@ -815,7 +968,13 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                                 if lock_after_load {
                                     loaded.screen_ownership.set_manual_lock();
                                 }
+                                background = Some({
+                                    let loaded = loaded.clone();
+                                    let controls = controls.clone();
+                                    Box::pin(async move { loaded.drive_background(controls).await })
+                                });
                                 session = Some(loaded);
+                                after_load_pending = true;
                                 script_running.store(true, Ordering::Release);
                                 println!("reloaded {}", absolute_path.display());
                             }
@@ -845,63 +1004,50 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                     }
                 }
                 ScriptCommand::Pause => {
-                    if let Some(active) = session.as_ref() {
-                        active.screen_ownership.set_paused(true);
-                    }
-                    lock_state.set_enabled(false);
                     if session.is_none() {
                         controls.actions_paused.set_paused(false);
                         println!("no script is running");
-                    } else if paused {
-                        controls.actions_paused.set_paused(true);
+                    } else if controls.actions_paused.is_paused() {
                         println!("script is already paused");
                     } else {
-                        if let Some(active) = session.as_ref()
-                            && let Err(error) = active.run_before_pause(controls.clone()).await
-                        {
-                            eprintln!("beforePause hook failed: {error}");
-                        }
                         controls.actions_paused.set_paused(true);
-                        paused = true;
-                        println!("script paused");
                     }
                 }
                 ScriptCommand::Resume | ScriptCommand::ResumeLocked => {
-                    let lock_after_resume = matches!(command, ScriptCommand::ResumeLocked);
+                    lock_after_resume |= matches!(command, ScriptCommand::ResumeLocked);
                     if session.is_none() {
+                        lock_after_resume = false;
                         lock_state.set_enabled(false);
                         controls.actions_paused.set_paused(false);
                         println!("script is stopped; use reload or load");
-                    } else if paused {
-                        capture_state.set_enabled(false);
-                        if let Some(active) = session.as_ref() {
-                            if lock_after_resume {
-                                active.screen_ownership.set_manual_lock();
-                            }
-                            active.screen_ownership.set_paused(false);
-                        }
+                    } else if controls.actions_paused.is_paused() {
                         controls.actions_paused.set_paused(false);
-                        paused = false;
-                        println!("script resumed");
-                        if let Some(active) = session.as_ref()
-                            && let Err(error) = active.run_after_resume(controls.clone()).await
+                        if session.as_ref().is_some_and(|active| !active.is_paused())
+                            && lock_after_resume
+                            && let Some(active) = session.as_ref()
                         {
-                            eprintln!("afterResume hook failed: {error}");
+                            active.screen_ownership.set_manual_lock();
+                            lock_after_resume = false;
                         }
                     } else {
-                        if let Some(active) = session.as_ref() {
-                            if lock_after_resume {
-                                active.screen_ownership.set_manual_lock();
-                            }
-                            active.screen_ownership.set_paused(false);
+                        if lock_after_resume
+                            && let Some(active) = session.as_ref()
+                        {
+                            active.screen_ownership.set_manual_lock();
+                            lock_after_resume = false;
                         }
-                        controls.actions_paused.set_paused(false);
                         println!("script is already running");
                     }
                 }
                 ScriptCommand::Stop => {
                     let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
                     invocation = None;
+                    next_invocation_at = None;
+                    background = None;
+                    main_hook = None;
+                    before_pause = None;
+                    after_resume = None;
+                    connection_hooks.clear();
                     callbacks.clear();
                     pending_ui_events.clear();
                     connection_events = None;
@@ -955,6 +1101,11 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                 ScriptCommand::Exit => {
                     let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
                     drop(invocation.take());
+                    drop(background.take());
+                    drop(main_hook.take());
+                    drop(before_pause.take());
+                    drop(after_resume.take());
+                    connection_hooks.clear();
                     callbacks.clear();
                     pending_ui_events.clear();
                     drop(connection_events.take());
@@ -972,17 +1123,8 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
                 }
                 ScriptCommand::SetPaused(requested_paused) => {
                     let update = controls.actions_paused.current_update();
-                    if update.paused() == requested_paused {
-                        apply_hotkey_update_and_report(
-                            update,
-                            &controls.actions_paused,
-                            &controls,
-                            &lock_state,
-                            session.as_ref().map(|value| &**value),
-                            &mut paused,
-                        )
-                        .await;
-                        disable_capture_if_running(&capture_state, session.is_some(), paused);
+                    if session.is_none() && update.paused() == requested_paused {
+                        controls.actions_paused.reset_if_current(update);
                     }
                 }
                 ScriptCommand::Terminal { .. } => unreachable!("terminal command must be unpacked before dispatch"),
@@ -991,278 +1133,7 @@ pub(super) async fn run_with_controls_and_lifecycle_with_control(
             continue;
         }
 
-        if hotkey_channel_open {
-            match hotkey_pauses.has_changed() {
-                Ok(true) => {
-                    let update = *hotkey_pauses.borrow_and_update();
-                    apply_hotkey_update_and_report(
-                        update,
-                        &controls.actions_paused,
-                        &controls,
-                        &lock_state,
-                        session.as_ref().map(|value| &**value),
-                        &mut paused,
-                    )
-                    .await;
-                    disable_capture_if_running(&capture_state, session.is_some(), paused);
-                    continue;
-                }
-                Ok(false) => {}
-                Err(_) => hotkey_channel_open = false,
-            }
-        }
-
-        if let Some(events) = connection_events.as_mut() {
-            match events.try_recv() {
-                Ok(ConnectionEvent::Connected) => {
-                    connected = true;
-                    if let Some(active) = session.as_ref()
-                        && let Err(error) = active.run_on_connect(controls.clone()).await
-                    {
-                        eprintln!("onConnect hook failed: {error}");
-                    }
-                    continue;
-                }
-                Ok(ConnectionEvent::Disconnected) => {
-                    connected = false;
-                    if let Some(active) = session.as_ref()
-                        && let Err(error) = active.run_on_disconnect(controls.clone()).await
-                    {
-                        eprintln!("onDisconnect hook failed: {error}");
-                    }
-                    continue;
-                }
-                Err(mpsc::error::TryRecvError::Empty) => {}
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    connected = false;
-                    connection_events = None;
-                }
-            }
-        }
-
-        let Some(active) = session.as_ref().cloned() else {
-            continue;
-        };
-        if active.is_stopped() {
-            invocation = None;
-            next_invocation_at = None;
-            callbacks.clear();
-            pending_ui_events.clear();
-            connection_events = None;
-            active.terminate();
-            lock_state.set_enabled(false);
-            controls.actions_paused.set_paused(false);
-            session = None;
-            script_running.store(false, Ordering::Release);
-            paused = false;
-            drop(active);
-            script_control.acknowledge_unpaired_terminal();
-            continue;
-        }
-        let drive = active.drive();
-        tokio::pin!(drive);
-        let mut terminal = None;
-        tokio::select! {
-            biased;
-            callback = callbacks.next(), if !callbacks.is_empty() => {
-                if let Some(Err(error)) = callback {
-                    if active.is_stopped() {
-                        terminal = Some(true);
-                    } else {
-                        eprintln!("[Script UI] callback failed: {error}");
-                    }
-                }
-            }
-            event = ui_events.recv(), if ui_events_open => {
-                match event {
-                    Some(event) => pending_ui_events.push_back(event),
-                    None => ui_events_open = false,
-                }
-            }
-            changed = terminal_updates.changed() => {
-                let _ = changed;
-            }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    let generation = terminal_generation(&script_control);
-                    drop(invocation.take());
-                    callbacks.clear();
-                    pending_ui_events.clear();
-                    drop(connection_events.take());
-                    active.terminate();
-                    drop(session.take());
-                    script_control.acknowledge_terminal(generation);
-                    script_running.store(false, Ordering::Release);
-                    console_locked.store(false, Ordering::Release);
-                    return Ok(());
-                }
-            }
-            command = commands.recv() => match command {
-                Some(command) => {
-                    let (command, command_generation) = unpack_command(command);
-                    if command_generation.is_some_and(|generation| {
-                        generation <= script_control.acknowledged_generation()
-                            || generation < script_control.requested_generation()
-                    }) {
-                        continue;
-                    }
-                    match command {
-                        ScriptCommand::Stop => {
-                            let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
-                            invocation = None;
-                            callbacks.clear();
-                            pending_ui_events.clear();
-                            drop(connection_events.take());
-                            active.terminate();
-                            lock_state.set_enabled(false);
-                            controls.actions_paused.set_paused(false);
-                            session = None;
-                            script_control.acknowledge_terminal(generation);
-                            script_running.store(false, Ordering::Release);
-                            console_locked.store(false, Ordering::Release);
-                            paused = false;
-                            println!("script stopped");
-                        }
-                        ScriptCommand::Exit => {
-                            let generation = command_generation.unwrap_or_else(|| terminal_generation(&script_control));
-                            drop(invocation.take());
-                            callbacks.clear();
-                            pending_ui_events.clear();
-                            drop(connection_events.take());
-                            active.terminate();
-                            capture_state.set_enabled(false);
-                            lock_state.set_enabled(false);
-                            controls.actions_paused.set_paused(false);
-                            drop(session.take());
-                            script_control.acknowledge_terminal(generation);
-                            script_running.store(false, Ordering::Release);
-                            console_locked.store(false, Ordering::Release);
-                            return Ok(());
-                        }
-                        other => {
-                            pending_command = Some((other, command_generation));
-                        }
-                    }
-                }
-                None => {
-                    let generation = terminal_generation(&script_control);
-                    drop(invocation.take());
-                    callbacks.clear();
-                    pending_ui_events.clear();
-                    drop(connection_events.take());
-                    active.terminate();
-                    drop(session.take());
-                    script_control.acknowledge_terminal(generation);
-                    script_running.store(false, Ordering::Release);
-                    capture_state.set_enabled(false);
-                    lock_state.set_enabled(false);
-                    controls.actions_paused.set_paused(false);
-                    console_locked.store(false, Ordering::Release);
-                    return Ok(());
-                }
-            },
-            changed = hotkey_pauses.changed(), if hotkey_channel_open => {
-                if changed.is_err() {
-                    hotkey_channel_open = false;
-                } else {
-                    let update = *hotkey_pauses.borrow_and_update();
-                    apply_hotkey_update_and_report(
-                        update,
-                        &controls.actions_paused,
-                        &controls,
-                        &lock_state,
-                        Some(&active),
-                        &mut paused,
-                    ).await;
-                    disable_capture_if_running(&capture_state, true, paused);
-                }
-            }
-            event = async {
-                match connection_events.as_mut() {
-                    Some(events) => events.recv().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                match event {
-                    Some(ConnectionEvent::Connected) => {
-                        connected = true;
-                        if let Err(error) = active.run_on_connect(controls.clone()).await {
-                            eprintln!("onConnect hook failed: {error}");
-                        }
-                    }
-                    Some(ConnectionEvent::Disconnected) => {
-                        connected = false;
-                        if let Err(error) = active.run_on_disconnect(controls.clone()).await {
-                            eprintln!("onDisconnect hook failed: {error}");
-                        }
-                    }
-                    None => {
-                        connected = false;
-                        connection_events = None;
-                    }
-                }
-            }
-            _ = async {
-                match next_invocation_at {
-                    Some(deadline) => tokio::time::sleep_until(deadline).await,
-                    None => std::future::pending().await,
-                }
-            }, if invocation.is_none() && next_invocation_at.is_some() => {
-                next_invocation_at = None;
-            }
-            result = async {
-                match invocation.as_mut() {
-                    Some(future) => Some(future.await),
-                    None => std::future::pending().await,
-                }
-            } => {
-                invocation = None;
-                terminal = Some(match result.expect("invocation result must exist") {
-                    Ok(stop_requested) => stop_requested,
-                    Err(error) => {
-                        let disconnected = *connection.connection_generation().borrow() == 0;
-                        if disconnected {
-                            connected = false;
-                        }
-                        if error.disconnected && active.has_connection_hooks() {
-                            false
-                        } else {
-                            eprintln!("script invocation failed: {error}");
-                            true
-                        }
-                    }
-                });
-            }
-            _ = &mut drive => {}
-        }
-
-        if terminal == Some(true) {
-            invocation = None;
-            next_invocation_at = None;
-            callbacks.clear();
-            pending_ui_events.clear();
-            connection_events = None;
-            if let Some(active) = session.as_ref() {
-                active.terminate();
-            }
-            lock_state.set_enabled(false);
-            controls.actions_paused.set_paused(false);
-            session = None;
-            script_running.store(false, Ordering::Release);
-            console_locked.store(false, Ordering::Release);
-            paused = false;
-            println!("script stopped");
-            drop(active);
-            script_control.acknowledge_unpaired_terminal();
-            continue;
-        }
-
-        if terminal == Some(false) {
-            next_invocation_at = Some(tokio::time::Instant::now() + loop_delay);
-            continue;
-        }
-
-        tokio::task::yield_now().await;
+        continue;
     }
 }
 
@@ -1314,58 +1185,5 @@ pub(super) fn apply_hotkey_update(
         true
     } else {
         false
-    }
-}
-
-/// Applies a hotkey-driven pause/resume update and prints its result. The
-/// `ActionGate` itself was already flipped by the hotkey handler before this
-/// update was published, so unlike the `Pause`/`Resume` commands there is no
-/// window to run `beforePause` before actions actually stop; the hooks still
-/// run here so scripts see hotkey-triggered pauses the same as command ones.
-async fn apply_hotkey_update_and_report(
-    update: PauseUpdate,
-    gate: &ActionGate,
-    controls: &HostControls,
-    lock_state: &LockState,
-    session: Option<&ScriptSession>,
-    lifecycle_paused: &mut bool,
-) {
-    let was_paused = *lifecycle_paused;
-    if !apply_hotkey_update(
-        update,
-        gate,
-        session.is_some(),
-        lifecycle_paused,
-    ) {
-        return;
-    }
-    if let Some(active) = session {
-        active.screen_ownership.set_paused(*lifecycle_paused);
-    } else if *lifecycle_paused {
-        lock_state.set_enabled(false);
-    }
-
-    if session.is_none() {
-        println!("no script is running");
-    } else if *lifecycle_paused == was_paused {
-        if *lifecycle_paused {
-            println!("script is already paused");
-        } else {
-            println!("script is already running");
-        }
-    } else if *lifecycle_paused {
-        if let Some(active) = session
-            && let Err(error) = active.run_before_pause(controls.clone()).await
-        {
-            eprintln!("beforePause hook failed: {error}");
-        }
-        println!("script paused");
-    } else {
-        println!("script resumed");
-        if let Some(active) = session
-            && let Err(error) = active.run_after_resume(controls.clone()).await
-        {
-            eprintln!("afterResume hook failed: {error}");
-        }
     }
 }

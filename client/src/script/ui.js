@@ -1,28 +1,31 @@
-(function (publish, identity, stopped, sessionId, measure) {
-    // Capture host machinery before the user module can change its realm.
-    const { create, keys, hasOwn, freeze, setPrototypeOf } = Object;
-    const { ownKeys, apply } = Reflect;
+(function (host) {
+    // Capture host machinery before the user module can change this realm.
+    const { create, keys, hasOwn, freeze } = Object;
+    const { ownKeys } = Reflect;
     const { isFinite, isInteger } = Number;
     const { isArray } = Array;
-    const { stringify } = JSON;
-    const NativeProxy = Proxy, NativeError = Error, NativeTypeError = TypeError, string = String;
+    const { stringify, parse } = JSON;
+    const NativeProxy = Proxy, NativeError = Error, NativeTypeError = TypeError, NativeWeakSet = WeakSet, string = String;
     const elements = new Map();
-    const get = elements.get.bind(elements), has = elements.has.bind(elements);
-    const set = elements.set.bind(elements), remove = elements.delete.bind(elements), each = elements.forEach.bind(elements);
-    const handlers = { onHover: 'hover', onLeave: 'leave', onClick: 'click' };
+    const states = new Map();
+    const elementGet = elements.get.bind(elements), elementHas = elements.has.bind(elements), elementSet = elements.set.bind(elements);
+    const stateGet = states.get.bind(states), stateHas = states.has.bind(states), stateSet = states.set.bind(states);
     const defaults = {
-        hidden: false, basedOn: '', text: '', font: '', size: 14, posX: 0, posY: 0, lenX: { min: 0 }, lenY: { min: 0 },
-        alignX: 'left', alignY: 'center',
+        hidden: false, basedOn: '', text: '', font: '', size: 14, posX: 0, posY: 0,
+        lenX: { min: 0 }, lenY: { min: 0 }, alignX: 'left', alignY: 'center',
         color: [0, 0, 0, 0], textColor: [255, 255, 255, 255],
-        border: { thickness: 0, color: [255, 255, 255, 255] },
-        corner: { radius: 0 }, padding: { thickness: 0 },
+        border: { thickness: 0, color: [255, 255, 255] }, corner: { radius: 0 }, padding: { thickness: 0 },
     };
+    const legacyHandlers = { __proto__: null, onClick: true, onHover: true, onLeave: true };
 
-    function readonly(value) {
+    function readonly(value, seen = new NativeWeakSet()) {
         if (value === null || typeof value !== 'object') return value;
+        if (seen.has(value)) throw new NativeTypeError('UI value is not JSON serializable');
+        seen.add(value);
         const copy = isArray(value) ? [] : create(null);
         const fields = keys(value);
-        for (let i = 0; i < fields.length; i++) copy[fields[i]] = readonly(value[fields[i]]);
+        for (let i = 0; i < fields.length; i++) copy[fields[i]] = readonly(value[fields[i]], seen);
+        seen.delete(value);
         freeze(copy);
         return new NativeProxy(copy, {
             set() { throw new NativeTypeError('Replace the whole UI field'); },
@@ -31,13 +34,42 @@
             setPrototypeOf() { throw new NativeTypeError('Replace the whole UI field'); },
         });
     }
-    const defaultKeys = keys(defaults), handlerKeys = keys(handlers);
+    const defaultKeys = keys(defaults);
     for (let i = 0; i < defaultKeys.length; i++) defaults[defaultKeys[i]] = readonly(defaults[defaultKeys[i]]);
 
+    function ensureLive() {
+        if (host.stopped()) throw new NativeError('script session stopped');
+    }
+
+    function encode(value) {
+        const json = stringify(value === undefined ? null : value);
+        if (json === undefined) throw new NativeTypeError('UI value is not JSON serializable');
+        return json;
+    }
+
+    function checkObject(value, field, allowed) {
+        if (value === null || typeof value !== 'object' || isArray(value)) throw new NativeTypeError(`Invalid ${field}`);
+        const result = create(null), fields = ownKeys(value);
+        for (let i = 0; i < fields.length; i++) {
+            const key = fields[i];
+            let known = false;
+            for (let j = 0; j < allowed.length; j++) if (allowed[j] === key) known = true;
+            if (typeof key !== 'string' || !known) throw new NativeTypeError(`Unknown ${field} field: ${string(key)}`);
+            result[key] = value[key];
+        }
+        return result;
+    }
+
     function validate(field, value) {
-        if (hasOwn(handlers, field)) {
-            if (typeof value !== 'function') throw new NativeTypeError(`${field} must be a function`);
-            return value;
+        if (legacyHandlers[field]) throw new NativeTypeError(`${field} is configured through its setter`);
+        if (field === 'states') {
+            if (value === null || typeof value !== 'object' || isArray(value)) throw new NativeTypeError('Invalid states');
+            const copy = create(null), fields = ownKeys(value);
+            for (let i = 0; i < fields.length; i++) {
+                if (typeof fields[i] !== 'string') throw new NativeTypeError('State keys must be strings');
+                copy[fields[i]] = value[fields[i]];
+            }
+            return readonly(copy);
         }
         if (!hasOwn(defaults, field)) throw new NativeTypeError(`Unknown UI field: ${string(field)}`);
         if (field === 'hidden') {
@@ -74,161 +106,188 @@
             }
             return readonly(copy);
         }
-        if (value === null || typeof value !== 'object' || isArray(value)) throw new NativeTypeError(`Invalid ${field}`);
         const allowed = field === 'border' ? ['thickness', 'color']
             : field === 'corner' ? ['radius', 'topLeft', 'topRight', 'bottomLeft', 'bottomRight']
             : field === 'padding' ? ['thickness', 'top', 'right', 'bottom', 'left'] : ['min', 'max'];
-        const copy = create(null), fields = ownKeys(value);
+        const copy = checkObject(value, field, allowed), fields = keys(copy);
         for (let i = 0; i < fields.length; i++) {
-            const key = fields[i];
-            let known = false;
-            for (let j = 0; j < allowed.length; j++) if (allowed[j] === key) known = true;
-            if (!known) throw new NativeTypeError(`Unknown ${field} field: ${string(key)}`);
-            const item = value[key];
+            const key = fields[i], item = copy[key];
             if (field === 'border' && key === 'color') copy[key] = validate('color', item);
-            else {
-                if (typeof item !== 'number' || !isFinite(item) || item < 0) throw new NativeTypeError(`Invalid ${field}.${key}`);
-                copy[key] = item;
-            }
+            else if (typeof item !== 'number' || !isFinite(item) || item < 0) throw new NativeTypeError(`Invalid ${field}.${key}`);
         }
         if ((field === 'lenX' || field === 'lenY') && copy.max !== undefined && copy.max < (copy.min ?? 0)) throw new NativeTypeError('Maximum length is less than minimum');
         return readonly(copy);
     }
 
-    function equal(left, right) {
-        if (left === right) return true;
-        if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
-        const fields = keys(left);
-        if (fields.length !== keys(right).length) return false;
+    function prepareDefinition(definition) {
+        ensureLive();
+        if (definition === null || typeof definition !== 'object' || isArray(definition)) throw new NativeTypeError('UI definition must be an object');
+        const values = create(null), fields = ownKeys(definition);
         for (let i = 0; i < fields.length; i++) {
-            const key = fields[i];
-            if (!hasOwn(right, key) || !equal(left[key], right[key])) return false;
+            const field = fields[i];
+            if (typeof field !== 'string') throw new NativeTypeError('UI definition fields must be strings');
+            values[field] = validate(field, definition[field]);
         }
-        return true;
+        return encode(values);
     }
 
-    function changed(changedKey, replacement) {
-        const states = setPrototypeOf([], null);
-        function append(element, id) {
-            const values = { __proto__: null, ...defaults, ...element.values };
-            const lengths = create(null), axes = ['lenX', 'lenY'];
-            for (let i = 0; i < axes.length; i++) {
-                const axis = axes[i];
-                const length = values[axis];
-                lengths[axis] = typeof length === 'number' ? { __proto__: null, fixed: length, min: 0, max: null }
-                    : { __proto__: null, fixed: null, min: length.min ?? 0, max: length.max ?? null };
-            }
-            const corner = create(null), padding = create(null);
-            const corners = ['topLeft', 'topRight', 'bottomLeft', 'bottomRight'], edges = ['top', 'right', 'bottom', 'left'];
-            for (let i = 0; i < corners.length; i++) corner[corners[i]] = values.corner[corners[i]] ?? values.corner.radius ?? 0;
-            for (let i = 0; i < edges.length; i++) padding[edges[i]] = values.padding[edges[i]] ?? values.padding.thickness ?? 0;
-            const colors = create(null), colorNames = ['color', 'textColor'];
-            for (let i = 0; i < colorNames.length; i++) {
-                const color = values[colorNames[i]];
-                colors[colorNames[i]] = setPrototypeOf([color[0], color[1], color[2], color[3] ?? 255], null);
-            }
-            const borderColor = values.border.color ?? defaults.border.color;
-            const events = setPrototypeOf([], null);
-            for (let i = 0; i < handlerKeys.length; i++) if (element.values[handlerKeys[i]]) events[events.length] = handlers[handlerKeys[i]];
-            states[states.length] = { __proto__: null, id, instanceId: element.instanceId, eventsVersion: element.eventsVersion,
-                hidden: values.hidden, basedOn: values.basedOn, text: values.text, font: values.font, size: values.size, alignX: values.alignX, alignY: values.alignY, posX: values.posX, posY: values.posY, ...lengths, ...colors,
-                border: { __proto__: null, thickness: values.border.thickness ?? 0, color: setPrototypeOf([borderColor[0], borderColor[1], borderColor[2], borderColor[3] ?? 255], null) },
-                corner, padding, events };
-        }
-        each((element, id) => {
-            if (id !== changedKey) append(element, id);
-            else if (replacement) append(replacement, id);
+    function record(name, instance) {
+        return parse(host.record(name, instance));
+    }
+
+    function stateProxy(name, instance) {
+        if (stateHas(instance)) return stateGet(instance);
+        const proxy = new NativeProxy(create(null), {
+            get(_, field) {
+                if (typeof field !== 'string') return undefined;
+                const value = host.stateGet(name, instance, field);
+                return value === undefined ? undefined : parse(value);
+            },
+            has(_, field) { return typeof field === 'string' && host.stateGet(name, instance, field) !== undefined; },
+            ownKeys() { return host.stateKeys(name, instance); },
+            getOwnPropertyDescriptor(_, field) {
+                if (typeof field !== 'string') return undefined;
+                const value = host.stateGet(name, instance, field);
+                return value === undefined ? undefined : { configurable: true, enumerable: true, writable: true, value: parse(value) };
+            },
+            set(_, field, value) {
+                ensureLive();
+                if (typeof field !== 'string') throw new NativeTypeError('State keys must be strings');
+                host.stateSet(name, instance, field, encode(value));
+                return true;
+            },
+            deleteProperty(_, field) {
+                ensureLive();
+                if (typeof field === 'string') host.stateDelete(name, instance, field);
+                return true;
+            },
+            defineProperty() { throw new NativeTypeError('UI state property descriptors are unsupported'); },
+            setPrototypeOf() { throw new NativeTypeError('UI state prototypes are unsupported'); },
+            preventExtensions() { throw new NativeTypeError('UI state maps cannot be frozen'); },
         });
-        if (replacement && !has(changedKey)) append(replacement, changedKey);
-        publish(stringify(states));
+        stateSet(instance, proxy);
+        return proxy;
+    }
+
+    function elementProxy(name, instance) {
+        if (elementHas(instance)) return elementGet(instance);
+        const eventMethods = create(null), elementCallbacks = create(null);
+        const method = event => callback => {
+            ensureLive();
+            if (callback !== null && typeof callback !== 'function') throw new NativeTypeError(`${event} callback must be a function or null`);
+            if (callback === null) {
+                host.handlerClear(name, instance, event);
+                delete elementCallbacks[event];
+                return undefined;
+            }
+            const previous = elementCallbacks[event];
+            if (previous !== undefined && previous.callback === callback) {
+                const status = host.handlerStatus(previous.registration);
+                if (status === 'pending' || status === 'active') return undefined;
+            }
+            const registration = host.handlerRegister(name, instance, event, callback);
+            elementCallbacks[event] = { callback, registration };
+            return undefined;
+        };
+        eventMethods.setOnClick = method('click');
+        eventMethods.setOnHover = method('hover');
+        eventMethods.setOnLeave = method('leave');
+        const dimension = kind => async () => {
+            ensureLive();
+            const value = await host.measure(name, instance, kind);
+            if ((kind === 'globalX' || kind === 'globalY') && value === null) throw new NativeError('UI element basedOn target is inaccessible');
+            return value;
+        };
+        const dimensions = {
+            width: dimension('width'),
+            height: dimension('height'),
+            globalXPos: dimension('globalX'),
+            globalYPos: dimension('globalY'),
+        };
+        const proxy = new NativeProxy(create(null), {
+            get(_, field) {
+                const values = record(name, instance).values;
+                if (field === 'states') return stateProxy(name, instance);
+                if (hasOwn(eventMethods, field)) return eventMethods[field];
+                if (hasOwn(dimensions, field)) return dimensions[field];
+                if (hasOwn(values, field)) return readonly(values[field]);
+                return hasOwn(defaults, field) ? defaults[field] : undefined;
+            },
+            has(_, field) {
+                const values = record(name, instance).values;
+                return field === 'states' || hasOwn(eventMethods, field) || hasOwn(dimensions, field) || hasOwn(values, field) || hasOwn(defaults, field);
+            },
+            ownKeys() {
+                const values = record(name, instance).values;
+                const fields = keys(values);
+                fields[fields.length] = 'states';
+                return fields;
+            },
+            getOwnPropertyDescriptor(_, field) {
+                if (field === 'states') return { configurable: true, enumerable: true, writable: true, value: stateProxy(name, instance) };
+                if (hasOwn(eventMethods, field)) return { configurable: true, enumerable: false, writable: false, value: eventMethods[field] };
+                if (hasOwn(dimensions, field)) return { configurable: true, enumerable: false, writable: false, value: dimensions[field] };
+                const values = record(name, instance).values;
+                return hasOwn(values, field) ? { configurable: true, enumerable: true, writable: true, value: readonly(values[field]) } : undefined;
+            },
+            set(_, field, value) {
+                ensureLive();
+                if (field === 'states') {
+                    host.setField(name, instance, 'states', encode(validate(field, value)));
+                    return true;
+                }
+                if (hasOwn(eventMethods, field) || hasOwn(dimensions, field)) throw new NativeTypeError('UI methods are read-only');
+                host.setField(name, instance, field, encode(validate(field, value)));
+                return true;
+            },
+            deleteProperty(_, field) {
+                ensureLive();
+                if (hasOwn(eventMethods, field) || hasOwn(dimensions, field)) throw new NativeTypeError('UI methods are read-only');
+                if (legacyHandlers[field]) return true;
+                if (field === 'states' || hasOwn(defaults, field)) host.deleteField(name, instance, field);
+                return true;
+            },
+            defineProperty() { throw new NativeTypeError('UI property descriptors are unsupported'); },
+            setPrototypeOf() { throw new NativeTypeError('UI prototypes are unsupported'); },
+            preventExtensions() { throw new NativeTypeError('UI elements cannot be frozen'); },
+        });
+        elementSet(instance, proxy);
+        return proxy;
     }
 
     const registry = new NativeProxy(create(null), {
-        get(_, key) { return get(key)?.proxy; },
-        has(_, key) { return has(key); },
-        ownKeys() { const names = []; each((_, key) => { names[names.length] = key; }); return names; },
+        get(_, key) {
+            if (typeof key !== 'string') return undefined;
+            const instance = host.lookup(key);
+            return instance === undefined ? undefined : elementProxy(key, instance);
+        },
+        has(_, key) { return typeof key === 'string' && host.lookup(key) !== undefined; },
+        ownKeys() { return host.names(); },
         getOwnPropertyDescriptor(_, key) {
-            return has(key) ? { configurable: true, enumerable: true, writable: true, value: get(key).proxy } : undefined;
+            if (typeof key !== 'string') return undefined;
+            const instance = host.lookup(key);
+            return instance === undefined ? undefined : { configurable: true, enumerable: true, writable: true, value: elementProxy(key, instance) };
         },
         set(_, key, definition) {
-            if (stopped()) throw new NativeError('script session stopped');
             if (typeof key !== 'string' || key.length === 0) throw new NativeTypeError('UI names must be nonempty strings');
-            if (definition === null || typeof definition !== 'object' || isArray(definition)) throw new NativeTypeError('UI definition must be an object');
-            let values = create(null);
-            const fields = ownKeys(definition);
-            for (let i = 0; i < fields.length; i++) values[fields[i]] = validate(fields[i], definition[fields[i]]);
-            if (stopped()) throw new NativeError('script session stopped');
-            const element = { values, instanceId: identity(), eventsVersion: 1, proxy: null };
-            async function dimension(kind) {
-                if (stopped()) throw new NativeError('script session stopped');
-                if (get(key) !== element) throw new NativeError('UI element no longer exists');
-                const size = await measure(key, element.instanceId, kind);
-                if (stopped()) throw new NativeError('script session stopped');
-                if (get(key) !== element) throw new NativeError('UI element no longer exists');
-                if ((kind === 'globalX' || kind === 'globalY') && size === null) throw new NativeError('UI element basedOn target is inaccessible');
-                return size;
-            }
-            const methods = { __proto__: null, width: () => dimension('width'), height: () => dimension('height'), globalXPos: () => dimension('globalX'), globalYPos: () => dimension('globalY') };
-            element.proxy = new NativeProxy(create(null), {
-                get(_, field) { return hasOwn(methods, field) ? methods[field] : hasOwn(values, field) ? values[field] : hasOwn(defaults, field) ? defaults[field] : undefined; },
-                has(_, field) { return hasOwn(methods, field) || hasOwn(values, field) || hasOwn(defaults, field); },
-                ownKeys() { return keys(values); },
-                getOwnPropertyDescriptor(_, field) {
-                    if (hasOwn(methods, field)) return { configurable: true, enumerable: false, writable: false, value: methods[field] };
-                    return hasOwn(values, field) ? { configurable: true, enumerable: true, writable: true, value: values[field] } : undefined;
-                },
-                set(_, field, value) {
-                    if (stopped()) throw new NativeError('script session stopped');
-                    if (get(key) !== element) throw new NativeError('UI element no longer exists');
-                    const next = validate(field, value);
-                    if (stopped()) throw new NativeError('script session stopped');
-                    if (get(key) !== element) throw new NativeError('UI element no longer exists');
-                    if (equal(hasOwn(values, field) ? values[field] : defaults[field], next)) return true;
-                    const nextValues = { __proto__: null, ...values, [field]: next };
-                    const eventsVersion = element.eventsVersion + (hasOwn(handlers, field) ? 1 : 0);
-                    changed(key, { ...element, values: nextValues, eventsVersion });
-                    element.values = values = nextValues;
-                    element.eventsVersion = eventsVersion;
-                    return true;
-                },
-                deleteProperty(_, field) {
-                    if (stopped()) throw new NativeError('script session stopped');
-                    if (get(key) !== element) throw new NativeError('UI element no longer exists');
-                    if (hasOwn(methods, field)) throw new NativeTypeError('UI methods are read-only');
-                    if (!hasOwn(values, field)) return true;
-                    const nextValues = { __proto__: null, ...values };
-                    delete nextValues[field];
-                    const eventsVersion = element.eventsVersion + (hasOwn(handlers, field) ? 1 : 0);
-                    changed(key, { ...element, values: nextValues, eventsVersion });
-                    element.values = values = nextValues;
-                    element.eventsVersion = eventsVersion;
-                    return true;
-                },
-                defineProperty() { throw new NativeTypeError('UI property descriptors are unsupported'); },
-                setPrototypeOf() { throw new NativeTypeError('UI prototypes are unsupported'); },
-                preventExtensions() { throw new NativeTypeError('UI elements cannot be frozen'); },
-            });
-            changed(key, element);
-            set(key, element);
+            const instance = host.define(key, prepareDefinition(definition));
+            elementProxy(key, instance);
             return true;
         },
         deleteProperty(_, key) {
-            if (stopped()) throw new NativeError('script session stopped');
-            if (has(key)) { changed(key, null); remove(key); }
+            ensureLive();
+            if (typeof key === 'string') host.remove(key);
             return true;
         },
         defineProperty() { throw new NativeTypeError('UI property descriptors are unsupported'); },
-        setPrototypeOf() { throw new NativeTypeError('UI prototypes are unsupported'); },
+        setPrototypeOf() { throw new NativeTypeError('UI registry prototypes are unsupported'); },
         preventExtensions() { throw new NativeTypeError('UI registry cannot be frozen'); },
     });
 
-    return { registry, dispatch(event) {
-        if (stopped() || event.sessionId !== sessionId) return;
-        const element = get(event.elementId);
-        if (!element || element.instanceId !== event.instanceId || element.eventsVersion !== event.eventsVersion) return;
-        for (let i = 0; i < handlerKeys.length; i++) {
-            const field = handlerKeys[i];
-            if (handlers[field] === event.event && element.values[field]) return apply(element.values[field], undefined, []);
-        }
-    } };
+    function element(name, instance) {
+        record(name, instance);
+        return elementProxy(name, instance);
+    }
+
+    return { registry, element };
 })

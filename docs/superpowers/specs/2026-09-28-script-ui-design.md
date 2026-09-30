@@ -1,6 +1,6 @@
 # Script UI and Cooperative Pause Design
 
-Status: implemented and automatically verified on 2026-09-29; installed-game validation remains outstanding. The cooperative pause, screen-ownership, and interrupting stop rules below reflect the agreed behavior. See the [implementation plan](../plans/2026-09-28-script-ui.md) for verification results.
+Status: historical UI design. The current two-runtime API supersedes callback and pause wording here; see the [JavaScript API guide](../../js_api_guide.md) and [two-runtime execution specification](../../../__explain.md). Installed-game validation remains outstanding.
 
 ## Goal
 
@@ -9,7 +9,7 @@ Allow a loaded script to create named, mutable UI elements inside the game throu
 ## Constraints
 
 - Preserve global `rev`, including its use inside imported `Action` helpers.
-- Use the existing QuickJS runtime and WebSocket bridge; add no runtime fork or dependency.
+- Use the existing QuickJS bridge and the two independently driven session runtimes selected by the current execution specification.
 - Preserve screen-ownership exclusivity and its existing pause/unlock behavior.
 - Keep the first UI version to a flat collection of rectangles with optional borders, rounded corners, padding, text, and pointer handlers.
 - Preserve the existing `{ uuid, type, payload }` packet envelope.
@@ -21,9 +21,9 @@ Allow a loaded script to create named, mutable UI elements inside the game throu
 
 ### Scheduling
 
-Pause prevents the lifecycle from starting another call to the default export. An invocation already in flight continues, including its promises and local variables. There is at most one default-export invocation in flight. Resume does not start a second invocation while the first is still pending.
+Pause prevents the lifecycle from starting another call to the default export. An invocation already in flight and ordinary detached main work stop being polled and resume with their locals intact. Background daemons and UI callbacks continue. There is at most one default-export invocation in flight. Resume does not start a second invocation while the first is still pending.
 
-The session continues processing JavaScript jobs and asynchronous host work while paused, even when no default invocation is active. Detached promises, monitoring loops, and UI handlers keep running unless they explicitly wait for resume. Existing connection conditions for starting default invocations remain in effect; a connection-state notification must not accidentally discard an in-flight invocation.
+The background runtime continues processing JavaScript jobs and asynchronous host work while paused, even when no default invocation is active. Existing connection conditions for starting default invocations remain in effect; a connection-state notification must not accidentally discard an in-flight invocation.
 
 Game-control methods such as `rev.click`, `rev.invoke`, `rev.input`, and calls through `Action` remain available while paused. Remove the old automatic pause no-ops from host bindings, including clipboard and window controls. Argument validation and connection errors retain their existing behavior.
 
@@ -131,16 +131,22 @@ interface RevUiElement {
   border?: RevUiBorder;
   corner?: RevUiCorner;
   padding?: RevUiPadding;
-  onHover?: () => void | Promise<void>;
-  onLeave?: () => void | Promise<void>;
-  onClick?: () => void | Promise<void>;
+  states?: Record<string, RevJsonValue>;
+  readonly setOnClick?: (callback: RevUiCallback | null) => void;
+  readonly setOnHover?: (callback: RevUiCallback | null) => void;
+  readonly setOnLeave?: (callback: RevUiCallback | null) => void;
 }
+
+type RevJsonValue = null | boolean | number | string | RevJsonValue[] | { [key: string]: RevJsonValue };
+type RevDaemon = (this: void) => void | Promise<void>;
+type RevUiCallback = (this: RevUiElement & { states: Record<string, RevJsonValue> }) => void | Promise<void>;
 
 // Additions to Rev; the existing Readonly<Rev> makes the registry reference readonly.
 interface Rev {
   readonly paused: boolean;
   ensureRunning(): Promise<void>;
   ui: Record<string, RevUiElement | undefined>;
+  daemon: Record<string, RevDaemon | undefined>;
 }
 ```
 
@@ -163,7 +169,7 @@ rev.ui.ele = {
 rev.ui.ele.border = { thickness: 1, color: [0, 255, 0] };
 ```
 
-Initial definitions and later property assignments use the same field types, defaults, copying, and validation rules. Every field in `RevUiElement`, including handlers, can be supplied in the initial object. A valid creation publishes the complete styled element in its first snapshot.
+Initial definitions and later property assignments use the same field types, defaults, copying, and validation rules. Definitions contain visual fields and optional JSON `states`; callbacks are configured afterward through the host setters. A valid creation publishes the complete styled element in its first snapshot.
 
 ### Registry and mutation
 
@@ -173,7 +179,7 @@ Initial definitions and later property assignments use the same field types, def
 - The registry is stable for the loaded session, including repeated default invocations and hooks. It is separate from process-wide JSON-only `rev.global`.
 - Names are nonempty strings stored in a prototype-free dictionary; names such as `__proto__` must work as ordinary keys.
 - Assignments validate before committing any change. Unknown fields (including nested border/corner/padding fields), invalid field types, non-finite coordinates, invalid lengths/colors/thickness/radii/padding, and an undefined/null whole definition throw synchronously without changing the previous instance.
-- Assigning the same value to an existing element field is a no-op after validation. Compare scalar values directly, arrays/objects structurally by their requested values (ignoring object key order), and handlers by function identity. A no-op preserves instance identity, handler version, and snapshot revision, creates no new dirty state, and sends no update. It must not clear an earlier pending change. Compare requested values before layout clamping, so distinct sizes/radii that happen to render alike still retain their new settings.
+- Assigning the same value to an existing element field is a no-op after validation. Compare scalar values directly and arrays/objects structurally by their requested values (ignoring object key order). Callback setter calls compare function identity. A no-op preserves instance identity, handler version, and snapshot revision, creates no new dirty state, and sends no update. It must not clear an earlier pending change. Compare requested values before layout clamping, so distinct sizes/radii that happen to render alike still retain their new settings.
 - Assigning a whole element definition remains replacement with a new instance identity, even when its fields match the previous definition. The same-value rule applies to field assignments. Deleting an absent element or an already-absent property creates no dirty state.
 - Definitions are copied into the managed element. Mutating the original input object later does not mutate the element.
 - Compound values are copied and returned deeply read-only: replace `color`, `textColor`, `lenX`, `lenY`, `border`, `corner`, or `padding` as a whole. This includes the nested `border.color` array. Nested mutation must throw rather than silently diverging from the renderer.
@@ -234,13 +240,13 @@ Use a separate persistent `ScreenSpaceOverlay` canvas at sorting order `32766`, 
 
 ### Pointer and callback behavior
 
-`onHover` fires on pointer entry, `onLeave` on exit, and `onClick` on left-button release over the same instance that received the press. They do not fire continuously every frame. Presence of any handler makes the element consume pointer hits; decorative elements allow them through. The child text never independently intercepts input.
+`setOnHover`, `setOnLeave`, and `setOnClick` configure one callback slot each. Passing a function registers or replaces it; passing `null` clears it. Callback properties are absent and cannot be supplied in definitions. A callback receives the live element as `this`, including its JSON `states` map. Daemons and callbacks run in the background runtime, so they remain usable while main is paused. Presence of any handler makes the element consume pointer hits; decorative elements allow them through. The child text never independently intercepts input.
 
 Dispatch events in arrival order, starting each handler on the session's JavaScript runtime. Track returned promises without waiting for one handler to finish before starting another. A rejected handler is logged with the element key, handler name, and stack; it does not unload the script or disable the element.
 
 Recheck the session, instance, and handler registration immediately before invoking a queued event. In-place visual edits preserve handlers. Changing a handler invalidates events targeting its previous registration. Deletion prevents future dispatch; an already-started handler may finish and should check identity before updating the element after an await.
 
-All callbacks work while paused, including calls through `Action`. A callback that calls `ensureRunning()` deliberately opts into waiting. Offloading the session cancels the remaining handler work.
+Callbacks work while paused, including calls through `Action`. A callback that calls `ensureRunning()` deliberately opts into waiting. Offloading the session cancels the remaining handler work. Functions transferred to background replay retained static imports; original lexical locals, class instances, and promises are not transported.
 
 ## 4. Transport and renderer
 
@@ -308,6 +314,8 @@ Add explicit checkpoints to automation loops in `scripts/unity_loop.ts`: zodiac,
 Make `Action.loopDetached()` wait at the start of each automatic repetition. Keep `Action.execute()` and ordinary Action calls available while paused; placing an unconditional checkpoint in that shared execution path would block manual UI handlers too.
 
 Finite action sequences already in progress may finish before reaching a checkpoint. Monitoring/UI loops omit checkpoints when continued operation during pause is intended. Existing `rev.sleep` is sufficient for the original one-second label-reset example; adding browser-style timers is outside this feature.
+
+The migrated `ui_demo.ts` stores counters in `rev.global` or element `states`, registers handlers with the three setters, and uses `rev.daemon.monitor` for work that must continue during pause. `history.ts` formats expanded and collapsed text in element states; its click handler toggles those states through `this`, so background callbacks do not depend on the main runtime's history cache. Use the [JavaScript API guide](../../js_api_guide.md) for the current examples and retirement rules.
 
 ## 7. Acceptance
 

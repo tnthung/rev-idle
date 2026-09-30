@@ -2,7 +2,12 @@ use crate::{
     app::ActionGate,
     bridge::{WsConnection, WsError},
     global_state::GlobalState,
-    script::{control::SessionControl, ui::ScriptUiState},
+    script::{
+        background::{BackgroundRegistry, BackgroundTarget},
+        control::SessionControl,
+        transfer::FunctionTransfer,
+        ui::ScriptUiBindings,
+    },
     window::{Axis, WindowControl},
 };
 use rquickjs::{
@@ -269,29 +274,29 @@ pub(super) fn create_rev<'js>(
     freeze: Function<'js>,
     session: SessionControl,
     screen_ownership: Rc<super::ownership::ScreenOwnershipState>,
-    ui: Rc<ScriptUiState>,
+    ui: Rc<ScriptUiBindings>,
+    transfer: Rc<FunctionTransfer>,
+    background: Rc<BackgroundRegistry>,
 ) -> rquickjs::Result<Object<'js>> {
     let rev = Object::new(ctx.clone())?;
-    let paused_gate = controls.actions_paused.clone();
+    let paused_session = session.clone();
     rev.prop(
         "paused",
-        Accessor::from(move || paused_gate.is_paused()).enumerable(),
+        Accessor::from(move || paused_session.is_paused()).enumerable(),
     )?;
-    let ensure_gate = controls.actions_paused.clone();
     let ensure_session = session.clone();
     rev.set(
         "ensureRunning",
         Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>| {
-            let gate = ensure_gate.clone();
             let session = ensure_session.clone();
             async move {
-                let mut pauses = gate.subscribe();
+                let mut pauses = session.subscribe_paused();
                 let mut stopped = session.subscribe_stopped();
                 loop {
                     if session.is_stopped() {
                         return Err(stopped_error(&ctx));
                     }
-                    if !gate.is_paused() {
+                    if !session.is_paused() {
                         return Ok::<(), Error>(());
                     }
                     tokio::select! {
@@ -307,6 +312,50 @@ pub(super) fn create_rev<'js>(
         }))?,
     )?;
     rev.set("ui", ui.registry(&ctx)?)?;
+    let daemon_transfer = Rc::downgrade(&transfer);
+    let daemon_background = background.clone();
+    let daemon_session = session.clone();
+    let daemon_set = Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String, function: Function<'js>| {
+        reject_if_stopped(&ctx, &daemon_session)?;
+        if name.is_empty() {
+            return Err(Error::new_from_js_message("string", "nonempty daemon name", "daemon names must be nonempty strings"));
+        }
+        let transfer = daemon_transfer.upgrade().ok_or_else(|| stopped_error(&ctx))?;
+        let descriptor = transfer.capture(&ctx, function)?;
+        daemon_background.register(BackgroundTarget::Daemon(name), descriptor);
+        Ok::<(), Error>(())
+    })?;
+    let daemon_background = background.clone();
+    let daemon_delete = Function::new(ctx.clone(), move |name: String| {
+        daemon_background.unregister(&BackgroundTarget::Daemon(name));
+        true
+    })?;
+    let daemon_background = background.clone();
+    let daemon_has = Function::new(ctx.clone(), move |name: String| daemon_background.contains_daemon(&name))?;
+    let daemon_names = Function::new(ctx.clone(), move || background.daemon_names())?;
+    let daemon_factory: Function = ctx.eval(r#"
+        (set, del, has, names) => new Proxy(Object.create(null), {
+            get: (_target, key) => {
+                if (typeof key !== 'string') return undefined;
+                throw new Error(`daemon ${JSON.stringify(key)} cannot be read`);
+            },
+            set: (_target, key, value) => {
+                if (typeof key !== 'string') throw new TypeError('daemon names must be strings');
+                if (typeof value !== 'function') throw new TypeError('daemon assignments require a function');
+                set(key, value);
+                return true;
+            },
+            has: (_target, key) => typeof key === 'string' && has(key),
+            deleteProperty: (_target, key) => typeof key === 'string' && del(key),
+            ownKeys: () => names(),
+            getOwnPropertyDescriptor: (_target, key) => {
+                if (typeof key !== 'string' || !has(key)) return undefined;
+                return { enumerable: true, configurable: true };
+            },
+        })
+    "#)?;
+    let daemon: Object = daemon_factory.call((daemon_set, daemon_delete, daemon_has, daemon_names))?;
+    rev.set("daemon", daemon)?;
     let screen_ownership_session = session.clone();
     rev.set(
         "screenOwnership",
@@ -696,23 +745,31 @@ pub(super) fn create_rev<'js>(
             ctx.clone(),
             Async(move |ctx: Ctx<'js>, milliseconds: f64| {
                 let session = sleep_session.clone();
-                async move {
-                if !milliseconds.is_finite()
+                let deadline = if !milliseconds.is_finite()
                     || milliseconds < 0.0
                     || milliseconds.fract() != 0.0
                     || milliseconds >= u64::MAX as f64
                 {
-                    return Err(Error::new_from_js_message(
+                    Err(Error::new_from_js_message(
                         "number",
                         "non-negative integer milliseconds",
                         "invalid sleep duration",
-                    ));
-                }
-
+                    ))
+                } else {
+                    tokio::time::Instant::now()
+                        .checked_add(Duration::from_millis(milliseconds as u64))
+                        .ok_or_else(|| Error::new_from_js_message(
+                            "number",
+                            "non-negative integer milliseconds",
+                            "sleep duration is too large",
+                        ))
+                };
+                async move {
+                let deadline = deadline?;
                 reject_if_stopped(&ctx, &session)?;
                 let mut stopped = session.subscribe_stopped();
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_millis(milliseconds as u64)) => Ok::<(), Error>(()),
+                    _ = tokio::time::sleep_until(deadline) => Ok::<(), Error>(()),
                     changed = stopped.changed() => {
                         let _ = changed;
                         Err(stopped_error(&ctx))

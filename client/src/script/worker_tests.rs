@@ -16,7 +16,12 @@ use tokio::sync::{mpsc, watch};
 
 #[test]
 fn stop_interrupts_infinite_javascript() {
-    for case in ["module", "import", "default", "hook", "detached", "ui", "self_default", "self_ui", "ui_sync_default", "stale_load", "delayed_load", "channel_close", "worker_drop", "wait_cancel", "canceled_startup", "channel_close_load"] {
+    for case in [
+        "module", "import", "default", "hook", "detached", "ui", "self_default", "self_ui", "ui_sync_default",
+        "background_dependency_init", "daemon_sync", "daemon_ready", "callback_ready", "background_self_stop", "pending_install_stop",
+        "pause_pending_timer", "pause_ready_chain", "pause_sync_segment", "stale_load", "delayed_load", "channel_close", "worker_drop",
+        "wait_cancel", "canceled_startup", "channel_close_load",
+    ] {
         let directory = std::env::temp_dir().join(format!("rev-idle-stop-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
         let output = fs::File::create(directory.join("child.log")).unwrap();
@@ -60,14 +65,55 @@ fn stop_interrupts_infinite_javascript() {
     }
 }
 
+#[test]
+fn two_runtime_teardown_invalidates_old_work() {
+    let case = "teardown";
+    let directory = std::env::temp_dir().join(format!("rev-idle-teardown-{}", uuid::Uuid::new_v4()));
+    fs::create_dir(&directory).unwrap();
+    let output = fs::File::create(directory.join("child.log")).unwrap();
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "script::worker_tests::interruption_child", "--nocapture"])
+        .env("REV_SCRIPT_STOP_CASE", case)
+        .env("REV_SCRIPT_STOP_DIR", &directory)
+        .env("APPDATA", directory.join("appdata"))
+        .stdout(Stdio::from(output.try_clone().unwrap()))
+        .stderr(Stdio::from(output))
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let child_status = loop {
+        if let Some(status) = child.try_wait().unwrap() { break Some(status); }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let output = fs::read_to_string(directory.join("child.log")).unwrap();
+    assert!(child_status.is_some_and(|status| status.success()), "teardown child failed or exceeded the 10-second watchdog\n{output}");
+    assert!(output.contains("two-runtime teardown invalidated old work"), "teardown proof missing\n{output}");
+    let directory = directory.canonicalize().unwrap();
+    assert!(directory.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+    fs::remove_dir_all(directory).unwrap();
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn interruption_child() {
     let Ok(case) = std::env::var("REV_SCRIPT_STOP_CASE") else { return; };
     let directory = PathBuf::from(std::env::var_os("REV_SCRIPT_STOP_DIR").unwrap());
     let entered_path = directory.join("entered.txt");
     let replacement_path = directory.join("replacement.txt");
+    let obsolete_started_path = directory.join("obsolete-started.txt");
+    let obsolete_finished_path = directory.join("obsolete-finished.txt");
+    let daemon_started_path = directory.join("daemon-started.txt");
+    let global_before_reload_path = directory.join("global-before-reload.txt");
     let entered = serde_json::to_string(&entered_path.to_string_lossy()).unwrap();
     let replacement = serde_json::to_string(&replacement_path.to_string_lossy()).unwrap();
+    let obsolete_started = serde_json::to_string(&obsolete_started_path.to_string_lossy()).unwrap();
+    let obsolete_finished = serde_json::to_string(&obsolete_finished_path.to_string_lossy()).unwrap();
+    let daemon_started = serde_json::to_string(&daemon_started_path.to_string_lossy()).unwrap();
+    let global_before_reload = serde_json::to_string(&global_before_reload_path.to_string_lossy()).unwrap();
     let source = match case.as_str() {
         "module" => "console.log('entered_loop'); while (true) {} export default function() {}".to_owned(),
         "import" => {
@@ -77,10 +123,27 @@ async fn interruption_child() {
         "default" | "delayed_load" | "channel_close" | "worker_drop" | "wait_cancel" => format!("export default async function() {{ using owner = await rev.screenOwnership(); rev.write_file({entered}, 'entered'); while (true) {{}} }}"),
         "hook" => format!("export function afterLoad() {{ rev.write_file({entered}, 'entered'); while (true) {{}} }} export default function() {{}}"),
         "detached" => format!("export function afterLoad() {{ (async () => {{ await rev.sleep(1); rev.write_file({entered}, 'entered'); while (true) {{}} }})(); }} export default async function() {{ await rev.sleep(60000); }}"),
-        "ui" => format!("export function afterLoad() {{ rev.ui.button = {{ onClick() {{ rev.write_file({entered}, 'entered'); while (true) {{}} }} }}; }} export default async function() {{ await rev.sleep(60000); }}"),
-        "ui_sync_default" => format!("export function afterLoad() {{ rev.ui.button = {{ onClick() {{ rev.write_file({entered}, 'entered'); while (true) {{}} }} }}; }} export default function() {{}}"),
+        "ui" => format!("export function afterLoad() {{ rev.ui.button = {{}}; rev.ui.button.setOnClick(function() {{ rev.write_file({entered}, 'entered'); while (true) {{}} }}); }} export default async function() {{ await rev.sleep(60000); }}"),
+        "ui_sync_default" => format!("export function afterLoad() {{ rev.ui.button = {{}}; rev.ui.button.setOnClick(function() {{ rev.write_file({entered}, 'entered'); while (true) {{}} }}); }} export default function() {{}}"),
         "self_default" => format!("export default function() {{ rev.write_file({entered}, 'entered'); try {{ rev.stop(); }} catch (_) {{}} finally {{ while (true) {{}} }} }}"),
-        "self_ui" => format!("export function afterLoad() {{ rev.ui.button = {{ async onClick() {{ await rev.sleep(1); rev.write_file({entered}, 'entered'); rev.stop(); while (true) {{}} }} }}; }} export default async function() {{ await rev.sleep(60000); }}"),
+        "self_ui" => format!("export function afterLoad() {{ rev.ui.button = {{}}; rev.ui.button.setOnClick(async function() {{ await rev.sleep(1); rev.write_file({entered}, 'entered'); rev.stop(); while (true) {{}} }}); }} export default async function() {{ await rev.sleep(60000); }}"),
+        "background_dependency_init" => {
+            fs::write(directory.join("dependency.js"), "globalThis.dependencyInit = (globalThis.dependencyInit ?? 0) + 1; export const marker = `dependency:${globalThis.dependencyInit}`;")
+                .unwrap();
+            format!("import {{ marker }} from './dependency.js'; export function afterLoad() {{ rev.daemon.dependency = function() {{ rev.write_file({entered}, marker); while (true) {{}} }}; }} export default function() {{}}")
+        }
+        "daemon_sync" => format!("export function afterLoad() {{ rev.daemon.sync = function() {{ rev.write_file({entered}, 'entered'); while (true) {{}} }}; }} export default function() {{}}"),
+        "daemon_ready" => format!("export function afterLoad() {{ rev.daemon.ready = async function() {{ rev.write_file({entered}, 'entered'); while (true) {{ await Promise.resolve().then(() => {{}}); }} }}; }} export default function() {{}}"),
+        "callback_ready" => format!("export function afterLoad() {{ rev.ui.button = {{}}; rev.ui.button.setOnClick(function() {{ rev.write_file({entered}, 'entered'); return (async function() {{ while (true) await Promise.resolve(); }})(); }}); }} export default function() {{}}"),
+        "background_self_stop" => format!("export function afterLoad() {{ rev.daemon.selfStop = function() {{ rev.write_file({entered}, 'entered'); rev.stop(); while (true) {{}} }}; }} export default function() {{}}"),
+        "pending_install_stop" => {
+            fs::write(directory.join("pending.js"), "if (typeof rev !== 'undefined') await new Promise(() => {}); export const marker = 'pending';").unwrap();
+            format!("import {{ marker }} from './pending.js'; export function afterLoad() {{ rev.ui.button = {{}}; rev.ui.button.setOnClick(function() {{ rev.write_file({entered}, marker); }}); }} export default function() {{}}")
+        }
+        "pause_pending_timer" => format!("export default async function() {{ rev.write_file({entered}, 'before'); await rev.sleep(200); rev.write_file({entered}, 'after'); await rev.sleep(60000); }}"),
+        "pause_ready_chain" => format!("export default async function() {{ rev.write_file({entered}, 'before'); for (let i = 0; i < 1000000; i++) await Promise.resolve(); rev.write_file({entered}, 'after'); await rev.sleep(60000); }}"),
+        "pause_sync_segment" => format!("export default async function() {{ rev.write_file({entered}, 'before'); const until = Date.now() + 1000; while (Date.now() < until) {{}} rev.write_file({entered}, 'after'); await rev.sleep(60000); }}"),
+        "teardown" => format!("export function afterLoad() {{ rev.global.teardownValue = 'before'; rev.write_file({global_before_reload}, String(rev.global.teardownValue)); rev.ui.button = {{}}; rev.ui.button.setOnClick(async function() {{ rev.write_file({obsolete_started}, 'started'); await this.width(); rev.global.teardownValue = 'obsolete'; rev.write_file({obsolete_finished}, 'finished'); }}); rev.daemon.old = async function() {{ rev.write_file({daemon_started}, 'started'); await rev.sleep(60000); }}; }} export default function() {{}}"),
         "stale_load" => format!("export function afterLoad() {{ rev.write_file({entered}, 'obsolete load ran'); }} export default function() {{}}"),
         "canceled_startup" => "console.log('unexpected_module'); export default function() {}".to_owned(),
         "channel_close_load" => "console.log('unexpected_module'); while (true) {} export default function() {}".to_owned(),
@@ -89,7 +152,11 @@ async fn interruption_child() {
     let source_path = directory.join("first.ts");
     let second_path = directory.join("second.js");
     fs::write(&source_path, source).unwrap();
-    fs::write(&second_path, format!("let wrote = false; export default function() {{ if (!wrote) {{ rev.write_file({replacement}, 'replacement'); wrote = true; }} }} export function beforeStop() {{ console.log('unexpected_before_stop'); while (true) {{}} }}")).unwrap();
+    fs::write(&second_path, if case == "teardown" {
+        format!("export default function() {{ rev.write_file({replacement}, String(rev.global.teardownValue)); }}")
+    } else {
+        format!("let wrote = false; export default function() {{ if (!wrote) {{ rev.write_file({replacement}, 'replacement'); wrote = true; }} }} export function beforeStop() {{ console.log('unexpected_before_stop'); while (true) {{}} }}")
+    }).unwrap();
 
     let (address, server) = crate::bridge::test_support::raw_server().await;
     let connection = WsConnection::connect_for_test(address, Duration::from_millis(10), Duration::from_secs(1));
@@ -156,10 +223,10 @@ async fn interruption_child() {
         assert!(!entered_path.exists(), "a delayed Load must not overtake a newer handled Stop");
     }
 
-    if case == "ui" || case == "self_ui" || case == "ui_sync_default" {
+    if case == "ui" || case == "self_ui" || case == "ui_sync_default" || case == "callback_ready" || case == "teardown" {
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if !snapshots.borrow_and_update().elements.is_empty() { break; }
+                if snapshots.borrow_and_update().elements.first().is_some_and(|element| element.events.contains(&ScriptUiEventKind::Click)) { break; }
                 snapshots.changed().await.unwrap();
             }
         }).await.unwrap();
@@ -172,6 +239,11 @@ async fn interruption_child() {
             },
         }).to_string().into())).await.unwrap();
     }
+    if case == "pending_install_stop" {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while snapshots.borrow_and_update().elements.is_empty() { snapshots.changed().await.unwrap(); }
+        }).await.unwrap();
+    }
     if case == "module" || case == "import" {
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
@@ -181,10 +253,17 @@ async fn interruption_child() {
         }).await.unwrap();
         tokio::time::sleep(Duration::from_millis(25)).await;
         assert!(running.load(Ordering::Acquire), "initial module loading must be visible to Ctrl+C as stoppable");
-    } else if case != "stale_load" && case != "canceled_startup" {
+    } else if case == "teardown" {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !obsolete_started_path.is_file() || !daemon_started_path.is_file() { tokio::time::sleep(Duration::from_millis(5)).await; }
+        }).await.unwrap();
+    } else if case != "stale_load" && case != "canceled_startup" && case != "pending_install_stop" {
         tokio::time::timeout(Duration::from_secs(2), async {
             while !entered_path.is_file() { tokio::time::sleep(Duration::from_millis(5)).await; }
         }).await.unwrap();
+    }
+    if case == "background_dependency_init" {
+        assert_eq!(fs::read_to_string(&entered_path).unwrap(), "dependency:1");
     }
 
     if case == "channel_close" || case == "worker_drop" || case == "wait_cancel" {
@@ -227,9 +306,68 @@ async fn interruption_child() {
         }).await.unwrap();
     }
 
+    if case == "pause_pending_timer" || case == "pause_ready_chain" || case == "pause_sync_segment" {
+        let requested_at = Instant::now();
+        socket.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::json!({
+            "uuid": uuid::Uuid::new_v4(), "type": "PauseScript", "payload": {},
+        }).to_string().into())).await.unwrap();
+        let acknowledged = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if states.borrow().phase == ScriptPhase::Paused { break; }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        }).await.is_ok();
+        if acknowledged {
+            let main_progress_at_ack = fs::read_to_string(&entered_path).unwrap_or_default();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            assert_eq!(fs::read_to_string(&entered_path).unwrap_or_default(), main_progress_at_ack, "main progress continued after Pause acknowledgment");
+            println!("pause {case} acknowledged in {}ms with no main progress", requested_at.elapsed().as_millis());
+            socket.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::json!({
+                "uuid": uuid::Uuid::new_v4(), "type": "ResumeScript", "payload": {},
+            }).to_string().into())).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while states.borrow().phase != ScriptPhase::Running { tokio::time::sleep(Duration::from_millis(1)).await; }
+            }).await.unwrap();
+        } else {
+            println!("pause {case} did not acknowledge before Stop");
+        }
+    }
+
+    if case == "teardown" {
+        socket.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::json!({
+            "uuid": uuid::Uuid::new_v4(), "type": "StopScript", "payload": {},
+        }).to_string().into())).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if !running.load(Ordering::Acquire) && snapshots.borrow().session_id.is_none() && states.borrow().phase == ScriptPhase::Stopped { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }).await.unwrap();
+        let obsolete_session_host_writes = usize::from(obsolete_finished_path.is_file());
+        assert_eq!(obsolete_session_host_writes, 0);
+        assert!(snapshots.borrow().session_id.is_none());
+        let global_value_before_reload = fs::read_to_string(&global_before_reload_path).unwrap();
+        if replacement_path.exists() { fs::remove_file(&replacement_path).unwrap(); }
+        commands.send(ScriptCommand::Load(second_path)).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !replacement_path.is_file() { tokio::time::sleep(Duration::from_millis(5)).await; }
+        }).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let global_value_after_reload = fs::read_to_string(&replacement_path).unwrap();
+        let new_session_states_are_empty = snapshots.borrow().elements.is_empty();
+        assert!(new_session_states_are_empty);
+        assert_eq!(global_value_after_reload, global_value_before_reload);
+        println!("two-runtime teardown invalidated old work");
+        commands.send(ScriptCommand::Exit).await.unwrap();
+        worker.wait().await.unwrap();
+        shutdown.send_replace(true);
+        connection.shutdown().await;
+        return;
+    }
+
     // This packet is handled by the control runtime while QuickJS spins on
     // its own worker. A timer on the spinning worker cannot prove recovery.
-    if case != "self_default" && case != "self_ui" && case != "stale_load" && case != "canceled_startup" {
+    if case != "self_default" && case != "self_ui" && case != "background_self_stop" && case != "stale_load" && case != "canceled_startup" {
         socket.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::json!({
             "uuid": uuid::Uuid::new_v4(), "type": "StopScript", "payload": {},
         }).to_string().into())).await.unwrap();
