@@ -274,6 +274,7 @@ pub(super) fn create_rev<'js>(
     freeze: Function<'js>,
     session: SessionControl,
     screen_ownership: Rc<super::ownership::ScreenOwnershipState>,
+    mutex: Rc<super::mutex::MutexRegistry>,
     ui: Rc<ScriptUiBindings>,
     transfer: Rc<FunctionTransfer>,
     background: Rc<BackgroundRegistry>,
@@ -391,6 +392,20 @@ pub(super) fn create_rev<'js>(
         "screenOwnership",
         Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, label: Opt<Option<String>>| {
             screen_ownership.clone().acquire(ctx, screen_ownership_session.clone(), label.0.flatten())
+        }))?,
+    )?;
+    let mutex_session = session.clone();
+    rev.set(
+        "mutex",
+        Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, channel: String| {
+            let mutex = mutex.clone();
+            let session = mutex_session.clone();
+            async move {
+                if channel.is_empty() {
+                    return Err(Error::new_from_js_message("string", "nonempty mutex channel", "mutex channel names must be nonempty strings"));
+                }
+                mutex.acquire(ctx, session, channel).await
+            }
         }))?,
     )?;
     rev.set(

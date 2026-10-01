@@ -126,6 +126,7 @@ Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before 
 | `rev.press(key: string)` | `void` | Sends one supported key to the game. Input is case-insensitive. |
 | `rev.resize(width: number, height: number)` | `void` | Sets the game client-area dimensions. |
 | `rev.screenOwnership(label?: string)` | `Promise<ScreenOwnership>` | Waits for and acquires this script session's cooperative screen-input ownership. |
+| `rev.mutex(channel: string)` | `Promise<MutexGuard>` | Waits for and acquires a named cooperative mutex shared by the session's main and background runtimes. |
 | `rev.read_clipboard()` | `string` | Reads Windows Unicode text. |
 | `rev.write_clipboard(text: string)` | `void` | Replaces Windows clipboard text. |
 | `rev.read_file(path: string)` | `string \| null` | Synchronously reads UTF-8 text; returns `null` only when missing. |
@@ -284,6 +285,21 @@ export default async function() {
 ```
 
 While an ownership token is alive and unreleased, and the script is active rather than paused, lock mode is forced for that session. Ownership is opt-in, and nested helpers should not reacquire it. `release()` is idempotent, and `Symbol.dispose` performs the same release. Native Rust drop or garbage collection can release a forgotten token, but the timing is not guaranteed. Pausing unlocks player input while retaining the reservation; resuming re-locks it. A holder waiting at `ensureRunning()` retains its token and keeps other ownership callers waiting. Releasing a token preserves any existing manual lock. Stop or reload invalidates ownership and cancels waiters through host cleanup.
+
+### Named mutexes
+
+`rev.mutex(channel)` waits in FIFO order for a non-reentrant mutex named by a nonempty channel string. The registry is scoped to the script session, and the same named channel is shared by the main and background runtimes; different channels proceed independently. Use a `MutexGuard` with explicit resource management:
+
+```typescript
+export default async function() {
+  using _global = await rev.mutex("global-update");
+  const value = Number(rev.global.counter ?? 0);
+  await rev.sleep(10);
+  rev.global.counter = value + 1;
+}
+```
+
+`release()` is idempotent, and `Symbol.dispose` and native Rust drop release the guard as well. Pausing retains a held guard, and stopping or reloading the session cancels queued acquisitions and releases held guards. Every cooperating read-modify-write must use the same channel name.
 
 ### Files, shell, and clipboard
 

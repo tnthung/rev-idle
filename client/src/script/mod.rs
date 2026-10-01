@@ -5,6 +5,7 @@ mod history;
 mod bindings;
 mod session;
 mod ownership;
+mod mutex;
 mod lifecycle;
 mod ui;
 mod control;

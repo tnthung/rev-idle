@@ -3,6 +3,7 @@ use super::{
     control::SessionControl,
     loader::ScriptModules,
     ownership::ScreenOwnershipState,
+    mutex::MutexRegistry,
     transfer::FunctionDescriptor,
     ui::{ScriptUiBindings, ScriptUiState},
 };
@@ -103,6 +104,7 @@ pub(super) struct ScriptBackground {
     connection: WsConnection,
     session: SessionControl,
     ownership: Rc<ScreenOwnershipState>,
+    mutex: Rc<MutexRegistry>,
     context: AsyncContext,
     runtime: AsyncRuntime,
 }
@@ -218,6 +220,7 @@ impl ScriptBackground {
         connection: WsConnection,
         session: SessionControl,
         ownership: Rc<ScreenOwnershipState>,
+        mutex: Rc<MutexRegistry>,
     ) -> Result<Self, String> {
         let runtime = AsyncRuntime::new().map_err(|error| error.to_string())?;
         runtime.set_loader(modules.clone(), modules.clone()).await;
@@ -264,6 +267,11 @@ impl ScriptBackground {
                     ctx.eval::<Symbol, _>("Symbol.dispose")?,
                     ownership_prototype.get::<_, Function>("release")?,
                 )?;
+                let mutex_prototype = Class::<super::mutex::MutexGuard>::prototype(&ctx)?.unwrap();
+                mutex_prototype.set(
+                    ctx.eval::<Symbol, _>("Symbol.dispose")?,
+                    mutex_prototype.get::<_, Function>("release")?,
+                )?;
                 let transfer = Rc::new(super::transfer::FunctionTransfer::new(&ctx)?);
                 let bindings = Rc::new(ScriptUiBindings::new(
                     &ctx,
@@ -299,6 +307,7 @@ impl ScriptBackground {
             connection,
             session,
             ownership,
+            mutex,
             context,
             runtime,
         })
@@ -312,6 +321,7 @@ impl ScriptBackground {
         let session = self.session.clone();
         let keepalive_session = session.clone();
         let ownership = self.ownership.clone();
+        let mutex = self.mutex.clone();
         let bindings = self.bindings.clone();
         let transfer = self.transfer.clone();
         let registry = self.registry.clone();
@@ -327,6 +337,7 @@ impl ScriptBackground {
                     freeze,
                     session,
                     ownership,
+                    mutex,
                     bindings,
                     transfer,
                     registry,

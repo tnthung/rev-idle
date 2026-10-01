@@ -103,6 +103,7 @@ pub(super) struct ScriptSession {
     connection: WsConnection,
     session_control: SessionControl,
     pub(super) screen_ownership: Rc<super::ownership::ScreenOwnershipState>,
+    pub(super) mutex: Rc<super::mutex::MutexRegistry>,
 }
 
 impl Drop for ScriptSession {
@@ -113,6 +114,7 @@ impl Drop for ScriptSession {
         self.transfer.take();
         self.ui.take();
         self.screen_ownership.close();
+        self.mutex.close();
     }
 }
 
@@ -150,6 +152,7 @@ impl ScriptSession {
         let ui = Rc::new(ScriptUiState::new(ui_publisher, session_control.clone()));
         let background_registry = Rc::new(BackgroundRegistry::new(session_control.clone()));
         let screen_ownership = Rc::new(super::ownership::ScreenOwnershipState::default());
+        let mutex = Rc::new(super::mutex::MutexRegistry::default());
         let runtime = AsyncRuntime::new().map_err(|error| error.to_string())?;
         runtime.set_loader(modules.clone(), modules.clone()).await;
         let interrupt_control = session_control.clone();
@@ -200,6 +203,11 @@ impl ScriptSession {
                     ownership_prototype.set(
                         ctx.eval::<Symbol, _>("Symbol.dispose")?,
                         ownership_prototype.get::<_, Function>("release")?,
+                    )?;
+                    let mutex_prototype = Class::<super::mutex::MutexGuard>::prototype(&ctx)?.unwrap();
+                    mutex_prototype.set(
+                        ctx.eval::<Symbol, _>("Symbol.dispose")?,
+                        mutex_prototype.get::<_, Function>("release")?,
                     )?;
 
                     let transfer = Rc::new(FunctionTransfer::new(&ctx)?);
@@ -264,6 +272,7 @@ impl ScriptSession {
             connection.clone(),
             session_control.clone(),
             screen_ownership.clone(),
+            mutex.clone(),
         ).await?;
 
         Ok(Self {
@@ -285,6 +294,7 @@ impl ScriptSession {
             session_control,
             ui: Some(ui),
             screen_ownership,
+            mutex,
         })
     }
 
@@ -305,6 +315,7 @@ impl ScriptSession {
         let transfer = self.transfer.as_ref().expect("script function transfer must exist").clone();
         let background = self.background_registry.clone();
         let screen_ownership = self.screen_ownership.clone();
+        let mutex = self.mutex.clone();
 
         self.context
             .async_with(async move |ctx| {
@@ -319,6 +330,7 @@ impl ScriptSession {
                         freeze,
                         session_control,
                         screen_ownership,
+                        mutex,
                         ui,
                         transfer,
                         background,
@@ -351,6 +363,7 @@ impl ScriptSession {
     pub(super) fn terminate(&self) {
         self.session_control.stop();
         self.screen_ownership.close();
+        self.mutex.close();
     }
 
     #[cfg(test)]
@@ -420,6 +433,7 @@ impl ScriptSession {
         let transfer = self.transfer.as_ref().expect("script function transfer must exist").clone();
         let background = self.background_registry.clone();
         let screen_ownership = self.screen_ownership.clone();
+        let mutex = self.mutex.clone();
         let connection = self.connection.clone();
 
         let result = self.context
@@ -437,6 +451,7 @@ impl ScriptSession {
                         freeze.clone(),
                         session_control,
                         screen_ownership,
+                        mutex,
                         ui,
                         transfer,
                         background,

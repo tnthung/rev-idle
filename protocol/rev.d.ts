@@ -110,6 +110,8 @@ interface Rev {
   resize(width: number, height: number): void;
   /** Acquires cooperative screen-input ownership; the optional label appears when hovering the lock icon. */
   screenOwnership(label?: string): Promise<ScreenOwnership>;
+  /** Acquires a named cooperative mutex shared by this session's runtimes. */
+  mutex(channel: string): Promise<MutexGuard>;
 
   read_clipboard(): string;
   write_clipboard(text: string): void;
@@ -132,6 +134,11 @@ interface Rev {
 
 interface ScreenOwnership extends Disposable {
   /** Releases this ownership token; repeated calls are harmless. */
+  release(): void;
+}
+
+interface MutexGuard extends Disposable {
+  /** Releases this channel token; repeated calls are harmless. */
   release(): void;
 }
 
