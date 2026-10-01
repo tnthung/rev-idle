@@ -49,14 +49,14 @@ test('Copy struct exports a type alias with JSON types and nested collections', 
   expect(click).toBeTypeOf('function');
   await click({ target: { closest() { return null; } } });
   expect(copied).toBe(`export type Example = {
-  amount: string;
+  amount: string; // BigDouble
   child: Child;
   count: number;
   enabled: boolean;
   kind: keyof typeof Kind | null;
   name: string;
   slots: Partial<Record<keyof typeof Kind, Array<number | null>>>;
-  values: Array<string>;
+  values: Array<string>; // BigDouble
 };
 `);
 });

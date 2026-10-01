@@ -715,7 +715,7 @@
             return nodeTypes.has(type.replace(/\//g, '.')) ? type.split(/[./]/).pop() : 'unknown';
           }
           return copyToClipboard('export type ' + nodeId.split(/[./]/).pop() + ' = {\n' + fields.map(e =>
-            '  ' + (/^[A-Za-z_$][\w$]*$/.test(e.property) ? e.property : JSON.stringify(e.property)) + ': ' + typeScriptType(e.valueType) + ';'
+            '  ' + (/^[A-Za-z_$][\w$]*$/.test(e.property) ? e.property : JSON.stringify(e.property)) + ': ' + typeScriptType(e.valueType) + ';' + (/\bBigDouble\b/.test(e.valueType) ? ' // BigDouble' : '')
           ).join('\n') + '\n};\n', el);
         }
         copyToClipboard(el.getAttribute('data-copy'), el);
