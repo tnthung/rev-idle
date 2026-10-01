@@ -45,9 +45,9 @@ interface RevUiElementAttr {
   states?: Record<string, RevJsonValue>;
 }
 
-interface RevUiElement extends RevUiElementAttr {
+interface RevUiElement<S extends Record<string, RevJsonValue> = Record<string, RevJsonValue>> extends RevUiElementAttr {
   hidden: boolean;
-  states: Record<string, RevJsonValue>;
+  states: S;
   setOnClick(callback: RevUiCallback | null): this;
   setOnHover(callback: RevUiCallback | null): this;
   setOnLeave(callback: RevUiCallback | null): this;
