@@ -4,7 +4,7 @@ Detailed development history of the Revolution Idle plugin, Rust client, bridge 
 
 ## Coverage
 
-- Covers all 398 commits from the first commit on **September 1, 2026** through **October 1, 2026**.
+- Covers all 401 commits from the first commit on **September 1, 2026** through **October 1, 2026**.
 - Entries use commit author dates in UTC+08:00 and appear newest first. Related commits are grouped by behavior; merge commits and planning updates are not counted as separate feature deliveries.
 - The repository has no release tags at this snapshot, so these are development dates rather than versioned releases. Commit links identify the supporting changes.
 - Automation scripts are included through September 25, when `scripts/` was removed from version control. Later local script changes are outside this history.
@@ -44,6 +44,11 @@ Detailed development history of the Revolution Idle plugin, Rust client, bridge 
 ### Script declarations
 
 - Added the shared script API declarations to the tracked repository at `protocol/rev.d.ts`, covering `rev`, disposable screen ownership, custom UI, daemons, and console methods. ([34fc4fa](https://github.com/tnthung/rev-idle/commit/34fc4fa))
+- Made `RevUiElement<S>` accept a JSON-compatible type for its `states` property, with `Record<string, RevJsonValue>` as the default. ([faacc66](https://github.com/tnthung/rev-idle/commit/faacc66))
+
+### State reference viewer
+
+- Changed **Copy struct** to generate `export type Name = { ... };` declarations. Updated the tooltip, regenerated the manual, and adjusted the clipboard regression test to expect type aliases. ([241d153](https://github.com/tnthung/rev-idle/commit/241d153))
 
 ## 2026-09-30
 
