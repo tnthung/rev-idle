@@ -130,12 +130,12 @@ async fn interruption_child() {
         "background_dependency_init" => {
             fs::write(directory.join("dependency.js"), "globalThis.dependencyInit = (globalThis.dependencyInit ?? 0) + 1; export const marker = `dependency:${globalThis.dependencyInit}`;")
                 .unwrap();
-            format!("import {{ marker }} from './dependency.js'; export function afterLoad() {{ rev.daemon.dependency = function() {{ rev.write_file({entered}, marker); while (true) {{}} }}; }} export default function() {{}}")
+            format!("import {{ marker }} from './dependency.js'; export function afterLoad() {{ rev.daemon('dependency', function() {{ rev.write_file({entered}, marker); while (true) {{}} }}); }} export default function() {{}}")
         }
-        "daemon_sync" => format!("export function afterLoad() {{ rev.daemon.sync = function() {{ rev.write_file({entered}, 'entered'); while (true) {{}} }}; }} export default function() {{}}"),
-        "daemon_ready" => format!("export function afterLoad() {{ rev.daemon.ready = async function() {{ rev.write_file({entered}, 'entered'); while (true) {{ await Promise.resolve().then(() => {{}}); }} }}; }} export default function() {{}}"),
+        "daemon_sync" => format!("export function afterLoad() {{ rev.daemon('sync', function() {{ rev.write_file({entered}, 'entered'); while (true) {{}} }}); }} export default function() {{}}"),
+        "daemon_ready" => format!("export function afterLoad() {{ rev.daemon('ready', async function() {{ rev.write_file({entered}, 'entered'); while (true) {{ await Promise.resolve().then(() => {{}}); }} }}); }} export default function() {{}}"),
         "callback_ready" => format!("export function afterLoad() {{ rev.ui('button', {{}}); rev.ui.button.setOnClick(function() {{ rev.write_file({entered}, 'entered'); return (async function() {{ while (true) await Promise.resolve(); }})(); }}); }} export default function() {{}}"),
-        "background_self_stop" => format!("export function afterLoad() {{ rev.daemon.selfStop = function() {{ rev.write_file({entered}, 'entered'); rev.stop(); while (true) {{}} }}; }} export default function() {{}}"),
+        "background_self_stop" => format!("export function afterLoad() {{ rev.daemon('selfStop', function() {{ rev.write_file({entered}, 'entered'); rev.stop(); while (true) {{}} }}); }} export default function() {{}}"),
         "pending_install_stop" => {
             fs::write(directory.join("pending.js"), "if (typeof rev !== 'undefined') await new Promise(() => {}); export const marker = 'pending';").unwrap();
             format!("import {{ marker }} from './pending.js'; export function afterLoad() {{ rev.ui('button', {{}}); rev.ui.button.setOnClick(function() {{ rev.write_file({entered}, marker); }}); }} export default function() {{}}")
@@ -143,7 +143,7 @@ async fn interruption_child() {
         "pause_pending_timer" => format!("export default async function() {{ rev.write_file({entered}, 'before'); await rev.sleep(200); rev.write_file({entered}, 'after'); await rev.sleep(60000); }}"),
         "pause_ready_chain" => format!("export default async function() {{ rev.write_file({entered}, 'before'); for (let i = 0; i < 1000000; i++) await Promise.resolve(); rev.write_file({entered}, 'after'); await rev.sleep(60000); }}"),
         "pause_sync_segment" => format!("export default async function() {{ rev.write_file({entered}, 'before'); const until = Date.now() + 1000; while (Date.now() < until) {{}} rev.write_file({entered}, 'after'); await rev.sleep(60000); }}"),
-        "teardown" => format!("export function afterLoad() {{ rev.global.teardownValue = 'before'; rev.write_file({global_before_reload}, String(rev.global.teardownValue)); rev.ui('button', {{}}); rev.ui.button.setOnClick(async function() {{ rev.write_file({obsolete_started}, 'started'); await this.width(); rev.global.teardownValue = 'obsolete'; rev.write_file({obsolete_finished}, 'finished'); }}); rev.daemon.old = async function() {{ rev.write_file({daemon_started}, 'started'); await rev.sleep(60000); }}; }} export default function() {{}}"),
+        "teardown" => format!("export function afterLoad() {{ rev.global.teardownValue = 'before'; rev.write_file({global_before_reload}, String(rev.global.teardownValue)); rev.ui('button', {{}}); rev.ui.button.setOnClick(async function() {{ rev.write_file({obsolete_started}, 'started'); await this.width(); rev.global.teardownValue = 'obsolete'; rev.write_file({obsolete_finished}, 'finished'); }}); rev.daemon('old', async function() {{ rev.write_file({daemon_started}, 'started'); await rev.sleep(60000); }}); }} export default function() {{}}"),
         "stale_load" => format!("export function afterLoad() {{ rev.write_file({entered}, 'obsolete load ran'); }} export default function() {{}}"),
         "canceled_startup" => "console.log('unexpected_module'); export default function() {}".to_owned(),
         "channel_close_load" => "console.log('unexpected_module'); while (true) {} export default function() {}".to_owned(),

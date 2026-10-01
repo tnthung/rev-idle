@@ -141,15 +141,15 @@ async fn script_pause_and_daemon_resume_preserve_invocation_and_ownership() {
     std::fs::write(&path, r#"
         let owner;
         export function afterLoad() {
-            rev.daemon.resume = async function() {
+            rev.daemon('resume', async function() {
                 while (!rev.paused) await rev.sleep(1);
                 rev.pause();
                 while (rev.read_clipboard() !== 'resume') await rev.sleep(1);
                 rev.click(3, Number(rev.paused));
                 rev.resume();
                 rev.resume();
-                delete rev.daemon.resume;
-            };
+                rev.daemon('resume', null);
+            });
         }
         export function beforePause() {
             rev.pause();
@@ -2932,13 +2932,13 @@ async fn two_runtime_pause_detached_timer_and_promise() {
             rev.ui('main', { text: "idle" });
             rev.ui('detached', { text: "waiting" });
             rev.ui('background', { text: "0" });
-            rev.daemon.monitor = async function() {
+            rev.daemon('monitor', async function() {
                 let count = 0;
                 while (true) {
                     rev.ui.background.text = String(++count);
                     await rev.sleep(2);
                 }
-            };
+            });
         }
         let starts = 0;
         export default async function() {

@@ -358,24 +358,30 @@ pub(super) fn create_rev<'js>(
     let daemon_has = Function::new(ctx.clone(), move |name: String| daemon_background.contains_daemon(&name))?;
     let daemon_names = Function::new(ctx.clone(), move || background.daemon_names())?;
     let daemon_factory: Function = ctx.eval(r#"
-        (set, del, has, names) => new Proxy(Object.create(null), {
+        (set, del, has, names) => new Proxy(Object.setPrototypeOf((name, callback) => {
+            if (typeof name !== 'string' || name.length === 0) throw new TypeError('daemon names must be nonempty strings');
+            if (callback === null) {
+                del(name);
+                return;
+            }
+            if (typeof callback !== 'function') throw new TypeError('daemon callback must be a function or null');
+            set(name, callback);
+        }, null), {
             get: (_target, key) => {
                 if (typeof key !== 'string') return undefined;
                 throw new Error(`daemon ${JSON.stringify(key)} cannot be read`);
             },
-            set: (_target, key, value) => {
-                if (typeof key !== 'string') throw new TypeError('daemon names must be strings');
-                if (typeof value !== 'function') throw new TypeError('daemon assignments require a function');
-                set(key, value);
-                return true;
-            },
+            set: () => { throw new TypeError('Register daemons with rev.daemon(name, fn)'); },
             has: (_target, key) => typeof key === 'string' && has(key),
-            deleteProperty: (_target, key) => typeof key === 'string' && del(key),
+            deleteProperty: () => { throw new TypeError('Remove daemons with rev.daemon(name, null)'); },
             ownKeys: () => names(),
             getOwnPropertyDescriptor: (_target, key) => {
                 if (typeof key !== 'string' || !has(key)) return undefined;
                 return { enumerable: true, configurable: true };
             },
+            defineProperty: () => { throw new TypeError('Daemon property descriptors are unsupported'); },
+            setPrototypeOf: () => { throw new TypeError('Daemon registry prototypes are unsupported'); },
+            preventExtensions: () => { throw new TypeError('Daemon registry cannot be frozen'); },
         })
     "#)?;
     let daemon: Object = daemon_factory.call((daemon_set, daemon_delete, daemon_has, daemon_names))?;

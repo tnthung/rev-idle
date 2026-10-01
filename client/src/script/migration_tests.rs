@@ -111,13 +111,13 @@ async fn two_runtime_migrated_demo_monitor_survives_pause() {
           this.states.clicks = this.states.clicks + 1;
           this.text = `click-${this.states.clicks}`;
         });
-        rev.daemon.monitor = async function() {
+        rev.daemon('monitor', async function() {
           let count = 0;
           while (true) {
             rev.ui.monitor.text = `monitor-${++count}`;
             await rev.sleep(1);
           }
-        };
+        });
       }
       export default async function() {
         rev.ui.main.text = "main-started";

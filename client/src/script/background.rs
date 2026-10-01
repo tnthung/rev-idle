@@ -695,16 +695,53 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn daemon_registry_requires_calls_for_registration_and_removal() {
+        let session = ScriptSession::new(r#"
+            export default function() {
+                function assert(condition) { if (!condition) throw new Error('assertion failed'); }
+                function throws(action) { let thrown = false; try { action(); } catch (_) { thrown = true; } assert(thrown); }
+                assert(typeof rev.daemon === 'function');
+                assert(rev.daemon('monitor', function() {}) === undefined);
+                assert('monitor' in rev.daemon && Object.keys(rev.daemon).join() === 'monitor');
+                throws(() => rev.daemon.monitor = function() {});
+                throws(() => delete rev.daemon.monitor);
+                throws(() => delete rev.daemon.absent);
+                throws(() => Object.defineProperty(rev.daemon, 'monitor', { value: function() {} }));
+                assert('monitor' in rev.daemon);
+                for (const value of [undefined, false, 1, '', {}, []]) throws(() => rev.daemon('monitor', value));
+                for (const name of ['', 1, null, Symbol()]) {
+                    throws(() => rev.daemon(name, function() {}));
+                    throws(() => rev.daemon(name, null));
+                }
+                assert('monitor' in rev.daemon && Object.keys(rev.daemon).join() === 'monitor');
+                assert(rev.daemon('monitor', null) === undefined);
+                assert(!('monitor' in rev.daemon) && Object.keys(rev.daemon).length === 0);
+                assert(rev.daemon('monitor', null) === undefined);
+                for (const name of ['name', 'length', 'prototype', '__proto__', 'constructor']) {
+                    rev.daemon(name, function() {});
+                    assert(name in rev.daemon && Object.keys(rev.daemon).join() === name);
+                    rev.daemon(name, null);
+                }
+            }
+        "#).await.unwrap();
+        session.invoke((), HostControls {
+            mouse: Rc::new(RefCell::new(NoopMouse)),
+            window: Rc::new(NoopWindow),
+            actions_paused: crate::app::ActionGate::default(),
+        }).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn two_runtime_daemon_runs_once_with_undefined_receiver() {
         GlobalState.delete("__background_daemon_runs");
         GlobalState.delete("__background_daemon_receiver");
         let session = ScriptSession::new(r#"
             export function afterLoad() {
-                rev.daemon.monitor = function() {
+                rev.daemon('monitor', function() {
                     "use strict";
                     rev.global.__background_daemon_runs = (rev.global.__background_daemon_runs ?? 0) + 1;
                     rev.global.__background_daemon_receiver = this === undefined;
-                };
+                });
             }
             export default function() {}
         "#).await.unwrap();
@@ -746,40 +783,40 @@ mod tests {
                 rev.global.__daemon_retirement_old_release = false;
                 rev.global.__daemon_retirement_child_release = false;
                 rev.global.__daemon_retirement_probe = 0;
-                rev.daemon.worker = async function() {
+                rev.daemon('worker', async function() {
                     rev.global.__daemon_retirement_order = [...rev.global.__daemon_retirement_order, 'old-start'];
                     while (!rev.global.__daemon_retirement_old_release) await rev.sleep(1);
                     rev.global.__daemon_retirement_order = [...rev.global.__daemon_retirement_order, 'old-end'];
                     throw new Error('expected retiring daemon rejection');
-                };
+                });
             }
             export default function() {
                 const phase = rev.global.__daemon_retirement_phase;
                 if (phase === 1) {
-                    delete rev.daemon.worker;
+                    rev.daemon('worker', null);
                     if ('worker' in rev.daemon) throw new Error('deleted daemon still registered');
-                    rev.daemon.worker = function() {
+                    rev.daemon('worker', function() {
                         rev.global.__daemon_retirement_order = [...rev.global.__daemon_retirement_order, 'superseded'];
-                    };
-                    rev.daemon.worker = function() {
+                    });
+                    rev.daemon('worker', function() {
                         rev.global.__daemon_retirement_order = [...rev.global.__daemon_retirement_order, 'latest'];
                         (async function() {
                             while (!rev.global.__daemon_retirement_child_release) await rev.sleep(1);
                             rev.global.__daemon_retirement_order = [...rev.global.__daemon_retirement_order, 'child-end'];
                         })();
-                    };
-                    rev.daemon.probe = async function() {
+                    });
+                    rev.daemon('probe', async function() {
                         for (let tick = 0; tick < 5; tick++) {
                             await rev.sleep(1);
                             rev.global.__daemon_retirement_probe = tick + 1;
                         }
-                    };
+                    });
                 } else if (phase === 2) {
                     rev.global.__daemon_retirement_old_release = true;
                 } else if (phase === 3) {
-                    rev.daemon.worker = function() {
+                    rev.daemon('worker', function() {
                         rev.global.__daemon_retirement_order = [...rev.global.__daemon_retirement_order, 'after'];
-                    };
+                    });
                 } else if (phase === 4) {
                     rev.global.__daemon_retirement_child_release = true;
                 }

@@ -824,7 +824,7 @@ mod tests {
             "#).unwrap();
         });
         background_context.with(|ctx| {
-            ctx.eval::<(), _>(r#"delete ui.main; ui('main', { text: "replacement", states: { count: 1 } });"#).unwrap();
+            ctx.eval::<(), _>(r#"ui('main', null); ui('main', { text: "replacement", states: { count: 1 } });"#).unwrap();
         });
         main_context.with(|ctx| {
             ctx.eval::<(), _>(r#"

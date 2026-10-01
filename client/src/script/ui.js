@@ -257,6 +257,11 @@
 
     const registry = new NativeProxy(setPrototypeOf((name, definition) => {
         if (typeof name !== 'string' || name.length === 0) throw new NativeTypeError('UI names must be nonempty strings');
+        if (definition === null) {
+            ensureLive();
+            host.remove(name);
+            return;
+        }
         return elementProxy(name, host.define(name, prepareDefinition(definition)));
     }, null), {
         get(_, key) {
@@ -272,11 +277,7 @@
             return instance === undefined ? undefined : { configurable: true, enumerable: true, writable: false, value: elementProxy(key, instance) };
         },
         set() { throw new NativeTypeError('Create or update UI elements with rev.ui(name, attributes)'); },
-        deleteProperty(_, key) {
-            ensureLive();
-            if (typeof key === 'string') host.remove(key);
-            return true;
-        },
+        deleteProperty() { throw new NativeTypeError('Remove UI elements with rev.ui(name, null)'); },
         defineProperty() { throw new NativeTypeError('UI property descriptors are unsupported'); },
         setPrototypeOf() { throw new NativeTypeError('UI registry prototypes are unsupported'); },
         preventExtensions() { throw new NativeTypeError('UI registry cannot be frozen'); },

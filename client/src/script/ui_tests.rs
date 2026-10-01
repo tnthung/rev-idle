@@ -395,7 +395,13 @@ fn ui_registry_create_update_delete() {
         assert(Object.keys(ui).join(',') === 'a,b');
         throws(() => ui.a = { text: 'replacement' });
         throws(() => ui.other = {});
-        delete ui.a; assert(ui.a === undefined);
+        throws(() => delete ui.a);
+        throws(() => delete ui.missing);
+        assert(ui.a === old && Object.keys(ui).join(',') === 'a,b');
+        assert(Object.getOwnPropertyDescriptor(ui, 'a').writable === false);
+        assert(ui('a', null) === undefined && ui.a === undefined);
+        const revision = snapshots.length;
+        assert(ui('a', null) === undefined && snapshots.length === revision);
         throws(() => old.text = 'stale');
         assert(ui('a', {}) !== old); assert(Object.keys(ui).join(',') === 'b,a');
         ui('__proto__', { text: 'prototype key' }); ui('constructor', {});
@@ -403,6 +409,7 @@ fn ui_registry_create_update_delete() {
         assert(ui.__proto__.text === 'prototype key' && Object.getPrototypeOf(ui) === null);
         assert(ui.name.text === 'name key' && Object.keys(ui).join(',') === 'b,a,__proto__,constructor,name,length,prototype');
         throws(() => ui('', {})); throws(() => ui(1, {}));
+        throws(() => ui('', null)); throws(() => ui(1, null));
     "#);
 }
 
@@ -464,7 +471,7 @@ async fn ui_dimensions_request_current_revision_and_reject_stale_elements() {
                 const original = rev.ui.a;
                 if (await original.width() !== 123.5 || await original.height() !== 27.25)
                     throw new Error('wrong dimensions');
-                delete rev.ui.a;
+                rev.ui('a', null);
                 async function rejects(read) {
                     try { await read(); } catch (error) {
                         if (error.message.includes('no longer exists')) return;
@@ -477,7 +484,7 @@ async fn ui_dimensions_request_current_revision_and_reject_stale_elements() {
                 await rejects(() => original.height());
                 const pending = rev.ui.a.width();
                 await rev.sleep(0);
-                delete rev.ui.a;
+                rev.ui('a', null);
                 rev.ui('a', { text: 'newer replacement' });
                 await rejects(() => pending);
             }
@@ -721,7 +728,7 @@ fn ui_registry_accepts_styles_in_initial_definition() {
 fn ui_registry_validates_atomically() {
     check(r#"
         ui('a', { text: 'valid' }); const original = ui.a; const count = snapshots.length;
-        for (const value of [null, undefined, [], { unknown: 1 }, { posX: Infinity }, { lenX: { min: 2, max: 1 } },
+        for (const value of [undefined, [], { unknown: 1 }, { posX: Infinity }, { lenX: { min: 2, max: 1 } },
             { border: { thickness: -1 } }, { corner: { radias: 5 } }, { padding: { left: NaN } }, { color: [256,0,0] }]) {
             throws(() => ui('a', value)); assert(ui.a === original && snapshots.length === count);
         }
@@ -776,7 +783,7 @@ fn ui_registry_rejects_stale_proxy_and_nested_mutation() {
         throws(() => Object.defineProperty(ui.a, 'text', { value: 'bypass' }));
         throws(() => Object.setPrototypeOf(ui, {}));
         throws(() => Object.defineProperty(ui, 'a', { value: {} }));
-        const old = ui.a; delete ui.a; throws(() => old.text = 'late');
+        const old = ui.a; ui('a', null); throws(() => old.text = 'late');
     "#);
 }
 
@@ -788,7 +795,7 @@ fn ui_registry_same_value_assignment_is_noop() {
         ui.a.setOnClick(handler);
         const count = snapshots.length, first = snapshots.at(-1)[0];
         ui.a.text = 'x'; ui.a.color = [1,2,3]; ui.a.corner = { topLeft: 0, radius: 5 }; ui.a.setOnClick(handler);
-        delete ui.absent; delete ui.a.padding;
+        ui('absent', null); delete ui.a.padding;
         assert(snapshots.length === count);
         ui.a.text = 'y'; ui.a.text = 'y'; assert(snapshots.length === count + 1);
         assert(snapshots.at(-1)[0].eventsVersion === first.eventsVersion);
@@ -839,7 +846,7 @@ fn ui_setter_replacement_invalidates_old_handler_registration() {
         ui('a', {});
         const old = ui.a;
         old.setOnClick(first);
-        delete ui.a;
+        ui('a', null);
         ui('a', {});
         assert(ui.a !== old);
         assert(ui.a.setOnClick(second) === ui.a);

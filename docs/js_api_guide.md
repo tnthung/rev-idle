@@ -138,8 +138,8 @@ Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before 
 | `rev.resume()` | `void` | Requests resumption of the paused session. |
 | `rev.ensureRunning()` | `Promise<void>` | Resolves while running; waits while paused; rejects with `script session stopped` on termination. |
 | `rev.stop()` | `void` | Terminates the entire session and interrupts JavaScript. |
-| `rev.daemon` | `Record<string, RevDaemon \| undefined>` | Assign a function to register a background daemon; `delete rev.daemon.name` retires it. Reads are for presence checks and do not return the installed function. |
-| `rev.ui` | callable element registry | `rev.ui(name, attrs)` creates or patches session-owned UI; `delete rev.ui.name` removes it. |
+| `rev.daemon(name: string, fn: RevDaemon \| null)` | `void` | Registers or replaces a background daemon; `null` retires it. Use `name in rev.daemon` for presence checks. |
+| `rev.ui` | callable element registry | `rev.ui(name, attrs)` creates or patches session-owned UI; `rev.ui(name, null)` removes it. Named entries are read-only; element fields remain assignable. |
 | `rev.global` | property proxy | Stores process-local JSON values shared by all script sessions. |
 
 ### Custom UI
@@ -172,7 +172,7 @@ export function afterLoad() {
 export default function() {}
 ```
 
-Use `delete rev.ui.button` to remove an element. Calling `rev.ui` for an existing name patches only the supplied fields, preserving its identity, callbacks, and omitted fields. Compound attributes such as `border`, `corner`, `padding`, and `states` replace the whole value when supplied. All supplied attributes are validated before any patch is applied. Whole-registry assignment such as `rev.ui.button = { ... }` throws; use the callable form for creation and updates. Check identity after an `await` before updating a captured element. A write through a deleted proxy throws. Configure callbacks only with `setOnClick`, `setOnHover`, and `setOnLeave`; each returns the same element and accepts `null` to clear one. Callback properties are absent, and definitions cannot supply or override host methods. Equal field writes are no-ops, including structurally equal colors/styles and identical handler functions. Changes publish snapshots asynchronously, independently of the 50 ms default-call delay; unchanged UI is not periodically resent.
+Use `rev.ui("button", null)` to remove an element. Removal returns `undefined` and is a no-op for an absent name. Calling `rev.ui` for an existing name patches only the supplied fields, preserving its identity, callbacks, and omitted fields. Compound attributes such as `border`, `corner`, `padding`, and `states` replace the whole value when supplied. All supplied attributes are validated before any patch is applied. Named entries are read-only: assigning or deleting `rev.ui.button` throws. Element fields remain assignable, for example `rev.ui.button.text = "Ready"`. Check identity after an `await` before updating a captured element. A write through a removed proxy throws. Configure callbacks only with `setOnClick`, `setOnHover`, and `setOnLeave`; each returns the same element and accepts `null` to clear one. Callback properties are absent, and definitions cannot supply or override host methods. Equal field writes are no-ops, including structurally equal colors/styles and identical handler functions. Changes publish snapshots asynchronously, independently of the 50 ms default-call delay; unchanged UI is not periodically resent.
 
 Colors use RGB or RGBA bytes. Lengths are fixed numbers or automatic `{ min, max }` bounds. Padding contributes to automatic size and is included in fixed sizes. Its `thickness` is the fallback for `top`, `right`, `bottom`, and `left`. Border is an external outline: it adds no size or hit area. Corner `radius` is the fallback for each named corner; explicit zero stays square. Replace compound fields as a whole, for example `rev.ui.button.border = { thickness: 1, color: [0, 255, 0] }`; nested writes throw. Text is plain and clipped inside the padded rounded box.
 
@@ -191,12 +191,12 @@ Press F6 while the game is focused to hide or show all script-created UI. Hidden
 UI remains visible and callbacks remain usable while paused. Register a monitor as a daemon when it should keep running; ordinary detached main maintenance waits:
 
 ```javascript
-rev.daemon.monitor = async function() {
+rev.daemon("monitor", async function() {
   while (rev.ui.label) {
     rev.ui.label.text = rev.paused ? "Paused" : "Running";
     await rev.sleep(250);
   }
-}
+});
 
 async function maintenance() {
   while (true) {
@@ -207,13 +207,13 @@ async function maintenance() {
 }
 ```
 
-Start these tasks from `afterLoad` with `.catch(console.error)`. Stop/reload removes all session UI. Disconnect retains visuals but disables interaction until a fresh snapshot arrives. Capture also disables custom interaction. The [original UI design](superpowers/specs/2026-09-28-script-ui-design.md) provides implementation background; this guide describes the current API. `scripts/ui_demo.ts` provides manual checks without automatic game actions.
+Register the daemon from `afterLoad` and start maintenance with `maintenance().catch(console.error)`. Stop/reload removes all session UI. Disconnect retains visuals but disables interaction until a fresh snapshot arrives. Capture also disables custom interaction. The [original UI design](superpowers/specs/2026-09-28-script-ui-design.md) provides implementation background; this guide describes the current API. `scripts/ui_demo.ts` provides manual checks without automatic game actions.
 
 Load [two_runtime_demo.ts](../scripts/two_runtime_demo.ts) for a focused runtime demo: Pause freezes a default invocation and its detached counter while daemon ticks and asynchronous buttons continue. Send requests while paused, then Resume to see the same invocation token handle them. The demo also exercises imported callback code, `setOnClick(null)`, and daemon replacement waiting for the current run to finish. The file's opening comments give the walkthrough; it only updates its own UI.
 
 ### Daemons, states, and transfer limits
 
-`rev.daemon.name = fn` registers or replaces a background function. A daemon runs once after installation and does not restart automatically when it returns or rejects. `delete rev.daemon.name` retires the name; a running invocation may finish, and a replacement waits for its returned promise. Daemon reads are presence checks only. Daemons have `this === undefined`, so use `rev.global` or element `states` for communication. A daemon failure is reported with its name and does not stop the session.
+`rev.daemon("name", fn)` registers or replaces a background function. A daemon runs once after installation and does not restart automatically when it returns or rejects. `rev.daemon("name", null)` retires the name; a running invocation may finish, and a replacement waits for its returned promise. Removing an absent name is a no-op. Assignment and deletion of daemon properties throw. Use `"name" in rev.daemon` for presence checks or `Object.keys(rev.daemon)` to list names; reading a daemon property throws. Daemons have `this === undefined`, so use `rev.global` or element `states` for communication. A daemon failure is reported with its name and does not stop the session.
 
 Element definitions may include JSON-only `states`. Live elements always expose a state map, and callback `this` is the element with that map. State values are copied through the host; nested objects need reassignment after mutation. Patching an existing name preserves its state map unless `states` is supplied, in which case the map is replaced as a whole. Deleting an element and creating it again produces a new element and state map. Use `rev.global` for other JSON communication; functions, promises, class instances, and original lexical closures do not cross runtimes.
 

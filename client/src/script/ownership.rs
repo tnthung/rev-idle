@@ -194,13 +194,13 @@ mod tests {
         let controls: HostControls = (Rc::new(RefCell::new(Mouse(events))) as SharedMouse).into();
         let session = ScriptSession::new(r#"
             export function afterLoad() {
-                rev.daemon.owner = async function() {
+                rev.daemon('owner', async function() {
                     const owner = await rev.screenOwnership();
                     rev.click(10, 1);
                     await rev.sleep(30);
                     owner.release();
                     rev.click(11, 1);
-                };
+                });
             }
             export default async function() {
                 const owner = await rev.screenOwnership();
