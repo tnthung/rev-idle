@@ -2591,7 +2591,7 @@
     html += '<span><b>' + (currentRoutes.length + nodeAliases.length + (isRoot ? 1 : 0)) + '</b> route' + (currentRoutes.length + nodeAliases.length + (isRoot ? 1 : 0) === 1 ? '' : 's') + '</span>';
     html += '<span><b>' + ins.length + '</b> refs in</span>';
     html += '<span title="Best-effort static fields; live instances may differ"><b>' + fields.length + '</b> fields</span>';
-    html += '<button type="button" class="stat-pill" data-copy="" data-copy-struct title="Copy TypeScript interface">Copy struct<span class="copy-hint">copied</span></button>';
+    html += '<button type="button" class="stat-pill" data-copy="" data-copy-struct title="Copy TypeScript type alias">Copy struct<span class="copy-hint">copied</span></button>';
     html += '</div>';
 
     html += '<div class="detail-tabs">';
@@ -2696,9 +2696,9 @@
             if (nodeTypes.get(type.replace(/\//g, '.'))?.variants) return 'keyof typeof ' + type.split(/[./]/).pop();
             return nodeTypes.has(type.replace(/\//g, '.')) ? type.split(/[./]/).pop() : 'unknown';
           }
-          return copyToClipboard('export interface ' + nodeId.split(/[./]/).pop() + ' {\n' + fields.map(e =>
+          return copyToClipboard('export type ' + nodeId.split(/[./]/).pop() + ' = {\n' + fields.map(e =>
             '  ' + (/^[A-Za-z_$][\w$]*$/.test(e.property) ? e.property : JSON.stringify(e.property)) + ': ' + typeScriptType(e.valueType) + ';'
-          ).join('\n') + '\n}\n', el);
+          ).join('\n') + '\n};\n', el);
         }
         copyToClipboard(el.getAttribute('data-copy'), el);
       });

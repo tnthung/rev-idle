@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
-test('Copy struct exports an interface with JSON types and nested collections', async () => {
+test('Copy struct exports a type alias with JSON types and nested collections', async () => {
   const elements = new Map();
   let click;
   let copied;
@@ -48,7 +48,7 @@ test('Copy struct exports an interface with JSON types and nested collections', 
   });
   expect(click).toBeTypeOf('function');
   await click({ target: { closest() { return null; } } });
-  expect(copied).toBe(`export interface Example {
+  expect(copied).toBe(`export type Example = {
   amount: string;
   child: Child;
   count: number;
@@ -57,7 +57,7 @@ test('Copy struct exports an interface with JSON types and nested collections', 
   name: string;
   slots: Partial<Record<keyof typeof Kind, Array<number | null>>>;
   values: Array<string>;
-}
+};
 `);
 });
 
