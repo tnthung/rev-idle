@@ -1,0 +1,152 @@
+
+
+type RevJsonValue = null | boolean | number | string | RevJsonValue[] | { [key: string]: RevJsonValue };
+type RevDaemon = (this: void) => void | Promise<void>;
+
+type RevUiColor = readonly [number, number, number] | readonly [number, number, number, number];
+type RevUiLength = number | Readonly<{ min?: number; max?: number }>;
+type RevUiBorder = Readonly<{ thickness?: number; color?: RevUiColor }>;
+type RevUiCorner = Readonly<{
+  radius?: number;
+  topLeft?: number;
+  topRight?: number;
+  bottomLeft?: number;
+  bottomRight?: number;
+}>;
+type RevUiPadding = Readonly<{
+  thickness?: number;
+  top?: number;
+  right?: number;
+  bottom?: number;
+  left?: number;
+}>;
+
+interface RevUiElementAttr {
+  /** Hides this element without removing it; omitted defaults to false. */
+  hidden?: boolean;
+  /** Exact Unity hierarchy path used as the position anchor; omitted or empty uses the viewport. */
+  basedOn?: string;
+  text?: string;
+  /** Installed system font family name; empty or omitted uses the default font. */
+  font?: string;
+  /** Font size in pixels from 1 through 2,147,483,647; omitted defaults to 14. */
+  size?: number;
+  alignX?: "left" | "center" | "right";
+  alignY?: "top" | "center" | "bottom";
+  posX?: number;
+  posY?: number;
+  lenX?: RevUiLength;
+  lenY?: RevUiLength;
+  color?: RevUiColor;
+  textColor?: RevUiColor;
+  border?: RevUiBorder;
+  corner?: RevUiCorner;
+  padding?: RevUiPadding;
+  states?: Record<string, RevJsonValue>;
+}
+
+interface RevUiElement extends RevUiElementAttr {
+  hidden: boolean;
+  states: Record<string, RevJsonValue>;
+  setOnClick(callback: RevUiCallback | null): this;
+  setOnHover(callback: RevUiCallback | null): this;
+  setOnLeave(callback: RevUiCallback | null): this;
+  /** Provided by the host on live elements. Calculated width in pixels, including padding and excluding border. */
+  width(): Promise<number>;
+  /** Provided by the host on live elements. Calculated height in pixels, including padding and excluding border. */
+  height(): Promise<number>;
+  /** Provided by the host on live elements. Calculated left position in top-left screen pixels. */
+  globalXPos(): Promise<number>;
+  /** Provided by the host on live elements. Calculated top position in top-left screen pixels. */
+  globalYPos(): Promise<number>;
+}
+
+type RevUiCallback = (this: RevUiElement) => void | Promise<void>;
+
+interface Rev {
+  /** Current pause state. Background work and UI callbacks continue while paused. */
+  readonly paused: boolean;
+  /** Requests pause when JavaScript yields to the host; repeated requests are harmless. */
+  pause(): void;
+  /** Requests resume, including from a daemon or UI callback while paused. */
+  resume(): void;
+  /** Waits for resume; rejects when this session stops. */
+  ensureRunning(): Promise<void>;
+  /** Session-owned UI. Call with attributes to create or patch, or null to remove. */
+  ui: {
+    (name: string, attr: null): void;
+    (name: string, attr: RevUiElementAttr): RevUiElement;
+  } & Readonly<Record<string, RevUiElement | undefined>>;
+  /** Session-wide background functions. Call with a function to register or replace, or null to retire. */
+  daemon(name: string, fn: RevDaemon | null): void;
+  /** Reads one state path and unwraps its value. T describes the expected JSON snapshot. */
+  state<T = RevJsonValue>(key: string): Promise<T>;
+  /** Reads multiple paths into a shallow-frozen object keyed by those exact paths. */
+  state<K extends string>(first: K, second: K, ...keys: K[]): Promise<Readonly<Record<K, RevJsonValue>>>;
+  /** Supports a dynamic list of paths. The plugin rejects an empty list. */
+  state(...keys: string[]): Promise<RevJsonValue>;
+
+  /** Invokes a button or checkbox at an exact Unity hierarchy path. */
+  invoke(path: string): Promise<void>;
+  /** Sets an active, editable Unity input field's text and fires its end-edit callback. */
+  input(path: string, text: string): Promise<void>;
+  /** Instantly scrolls active containing Unity scroll views to reveal a UI element, including inactive buffered children. */
+  scrollIntoView(path: string): Promise<void>;
+  /** Dispatches drag/drop between exact Unity slot paths. */
+  transfer(source: string, destination: string): Promise<void>;
+  /** Reads the item data at an exact Unity slot path; returns null when empty. */
+  slot(path: string): Promise<unknown>;
+
+  /** Clicks at client-area coordinates. Coordinates must be finite 32-bit integers. */
+  click(x: number, y: number, button?: "left" | "right" | "middle"): void;
+  /** Sends count clicks with 10 ms between them. Count must be a non-negative integer. */
+  clickn(x: number, y: number, count: number, button?: "left" | "right" | "middle"): Promise<void>;
+  /** Scrolls by a signed integer length; the default axis is vertical. */
+  scroll(x: number, y: number, length: number, axis?: "vertical" | "v" | "horizontal" | "h"): void;
+  drag(x1: number, y1: number, x2: number, y2: number): void;
+  /** Accepts ASCII letters/digits, arrows, enter, escape, space, tab, backspace, and f1-f12; case-insensitive. */
+  press(key: string): void;
+  /** Sets client-area dimensions, both positive finite 32-bit integers. */
+  resize(width: number, height: number): void;
+  /** Acquires cooperative screen-input ownership; the optional label appears when hovering the lock icon. */
+  screenOwnership(label?: string): Promise<ScreenOwnership>;
+
+  read_clipboard(): string;
+  write_clipboard(text: string): void;
+  /** Reads UTF-8 text synchronously; returns null only when the file is missing. */
+  read_file(path: string): string | null;
+  /** Creates or overwrites a file synchronously; does not create parent directories. */
+  write_file(path: string, content: string): void;
+  /** Deletes a file synchronously; returns false if it did not exist. */
+  delete_file(path: string): boolean;
+  /** Runs cmd.exe synchronously and captures both streams. Paths use the client's working directory. */
+  shell(command: string): { stdout: string; stderr: string };
+
+  /** Waits a non-negative integer number of real milliseconds. */
+  sleep(milliseconds: number): Promise<void>;
+  /** Terminates this session, interrupts JavaScript, and skips beforeStop. */
+  stop(): void;
+  /** Process-wide JSON storage. Missing keys read as undefined; assigning undefined stores null. */
+  global: Record<string, RevJsonValue | undefined>;
+}
+
+interface ScreenOwnership extends Disposable {
+  /** Releases this ownership token; repeated calls are harmless. */
+  release(): void;
+}
+
+/** Available inside the entry function and lifecycle hooks; main entry-module initialization runs before rev is installed, while background dependencies receive stable rev during evaluation. */
+declare const rev: Readonly<Rev>;
+
+
+interface Console {
+  /** Writes values separated by spaces to stdout. Errors include their message and stack. */
+  log(...values: unknown[]): void;
+  /** Writes values separated by spaces to stderr. Errors include their message and stack. */
+  error(...values: unknown[]): void;
+  /** Clears the terminal and moves the cursor to the top left. */
+  clear(): void;
+}
+
+/** The script host's console; available during module initialization as well as execution. */
+declare const console: Console;
