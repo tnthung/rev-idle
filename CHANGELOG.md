@@ -4,11 +4,11 @@ Detailed development history of the Revolution Idle plugin, Rust client, bridge 
 
 ## Coverage
 
-- Covers all 395 commits reachable from `293db0c`, from the first commit on **September 1, 2026** through **October 1, 2026**.
+- Covers all 398 commits from the first commit on **September 1, 2026** through **October 1, 2026**.
 - Entries use commit author dates in UTC+08:00 and appear newest first. Related commits are grouped by behavior; merge commits and planning updates are not counted as separate feature deliveries.
 - The repository has no release tags at this snapshot, so these are development dates rather than versioned releases. Commit links identify the supporting changes.
 - Automation scripts are included through September 25, when `scripts/` was removed from version control. Later local script changes are outside this history.
-- This records committed implementation and test coverage, not a claim that every historical change was verified in a running game. See the [plugin guide](plugin/README.md) and [JavaScript API guide](docs/js_api_guide.md) for usage.
+- Dated entries record committed implementation and test coverage, not a claim that every historical change was verified in a running game. See the [plugin guide](plugin/README.md) and [JavaScript API guide](docs/js_api_guide.md) for usage.
 
 ## Major transitions
 
@@ -23,9 +23,14 @@ Detailed development history of the Revolution Idle plugin, Rust client, bridge 
 | September 25 | Scoped screen ownership; automation scripts stopped being tracked here. |
 | September 29 | Script-created UI, cooperative pause, and interruptible Stop. |
 | September 30 | Separate main/background runtimes, script pause/resume, and callable UI updates. |
-| October 1 | Callable daemon registration and removal through null arguments for daemon and UI entries. |
+| October 1 | Callable daemon registration, removal through null arguments for daemon and UI entries, and named mutexes shared across runtimes. |
 
 ## 2026-10-01
+
+### Script synchronization
+
+- Added Rust-backed `rev.mutex(channel): Promise<MutexGuard>` for cooperative exclusive access across a session's main and background runtimes, including updates to `rev.global`. Matching channel names share a FIFO, non-reentrant lock; different channels proceed independently without affecting screen locking. ([87089d5](https://github.com/tnthung/rev-idle/commit/87089d5))
+- Guards support scoped `using` disposal and idempotent `release()`. Pause retains held locks; Stop/reload cancels queued acquisitions and cleans up guards. Added TypeScript declarations, usage documentation, and regression coverage for contention across runtimes, independent channels, disposal after exceptions, and cancellation of waiters. ([87089d5](https://github.com/tnthung/rev-idle/commit/87089d5))
 
 ### Daemon and UI APIs
 
@@ -35,6 +40,10 @@ Detailed development history of the Revolution Idle plugin, Rust client, bridge 
 ### Rust client
 
 - Suppressed the Rust `unused` lint group at the crate level with `#![allow(unused)]`. ([293db0c](https://github.com/tnthung/rev-idle/commit/293db0c))
+
+### Script declarations
+
+- Added the shared script API declarations to the tracked repository at `protocol/rev.d.ts`, covering `rev`, disposable screen ownership, custom UI, daemons, and console methods. ([34fc4fa](https://github.com/tnthung/rev-idle/commit/34fc4fa))
 
 ## 2026-09-30
 
