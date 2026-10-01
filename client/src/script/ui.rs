@@ -22,13 +22,19 @@ struct UiHandler {
     active: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum UiEventKind {
+    Pointer(ScriptUiEventKind),
+    StateUpdate,
+}
+
 struct UiElement {
     name: String,
     instance: Uuid,
     values: Map<String, JsonValue>,
     states: Map<String, JsonValue>,
     events_version: u64,
-    handlers: [Option<UiHandler>; 3],
+    handlers: [Option<UiHandler>; 4],
 }
 
 struct UiStore {
@@ -40,6 +46,7 @@ pub(super) struct ScriptUiState {
     publisher: ScriptUiPublisher,
     session: SessionControl,
     store: RefCell<UiStore>,
+    pub(super) state_updates: RefCell<Vec<Uuid>>,
 }
 
 pub(super) struct ScriptUiBindings {
@@ -51,19 +58,21 @@ fn ui_error(message: impl Into<String>) -> rquickjs::Error {
     rquickjs::Error::new_from_js_message("UI", "value", message.into())
 }
 
-fn event_index(event: ScriptUiEventKind) -> usize {
+fn event_index(event: UiEventKind) -> usize {
     match event {
-        ScriptUiEventKind::Hover => 0,
-        ScriptUiEventKind::Leave => 1,
-        ScriptUiEventKind::Click => 2,
+        UiEventKind::Pointer(ScriptUiEventKind::Hover) => 0,
+        UiEventKind::Pointer(ScriptUiEventKind::Leave) => 1,
+        UiEventKind::Pointer(ScriptUiEventKind::Click) => 2,
+        UiEventKind::StateUpdate => 3,
     }
 }
 
-fn parse_event(value: &str) -> Result<ScriptUiEventKind, String> {
+fn parse_event(value: &str) -> Result<UiEventKind, String> {
     match value {
-        "hover" => Ok(ScriptUiEventKind::Hover),
-        "leave" => Ok(ScriptUiEventKind::Leave),
-        "click" => Ok(ScriptUiEventKind::Click),
+        "hover" => Ok(UiEventKind::Pointer(ScriptUiEventKind::Hover)),
+        "leave" => Ok(UiEventKind::Pointer(ScriptUiEventKind::Leave)),
+        "click" => Ok(UiEventKind::Pointer(ScriptUiEventKind::Click)),
+        "stateUpdate" => Ok(UiEventKind::StateUpdate),
         _ => Err(format!("unknown UI event: {value}")),
     }
 }
@@ -144,7 +153,7 @@ fn validate_compound(field: &str, value: &JsonValue) -> Result<JsonValue, String
 }
 
 fn validate_field(field: &str, value: &JsonValue) -> Result<JsonValue, String> {
-    if matches!(field, "onClick" | "onHover" | "onLeave") {
+    if matches!(field, "onClick" | "onHover" | "onLeave" | "onStateUpdate") {
         return Err(format!("{field} is configured through its setter"));
     }
     if field == "states" {
@@ -253,7 +262,7 @@ fn snapshot_element(element: &UiElement) -> ScriptUiElementState {
     let padding_value = |field: &str| padding.get(field).and_then(JsonValue::as_f64).unwrap_or(padding_thickness);
     let mut events = Vec::new();
     for event in [ScriptUiEventKind::Hover, ScriptUiEventKind::Leave, ScriptUiEventKind::Click] {
-        if element.handlers[event_index(event)].as_ref().is_some_and(|handler| handler.active) {
+        if element.handlers[event_index(UiEventKind::Pointer(event))].as_ref().is_some_and(|handler| handler.active) {
             events.push(event);
         }
     }
@@ -298,6 +307,7 @@ impl ScriptUiState {
             publisher,
             session,
             store: RefCell::new(UiStore { elements: Vec::new() }),
+            state_updates: RefCell::new(Vec::new()),
         };
         state.publisher.replace(state.session_id, Vec::new());
         state
@@ -371,13 +381,20 @@ impl ScriptUiState {
                         changed = true;
                     }
                 }
-                if let Some(states) = states { element.states = states; }
+                if let Some(states) = states {
+                    if element.states != states {
+                        element.states = states;
+                        if let Some(handler) = &element.handlers[event_index(UiEventKind::StateUpdate)] {
+                            self.state_updates.borrow_mut().push(handler.registration);
+                        }
+                    }
+                }
                 (element.instance, changed)
             } else {
                 let instance = Uuid::new_v4();
                 store.elements.push(UiElement {
                     name: name.to_owned(), instance, values, states: states.unwrap_or_default(), events_version: 1,
-                    handlers: [None, None, None],
+                    handlers: [None, None, None, None],
                 });
                 (instance, true)
             }
@@ -386,13 +403,13 @@ impl ScriptUiState {
         Ok(instance)
     }
 
-    pub(super) fn remove(&self, name: &str) -> Result<Option<(Uuid, Vec<ScriptUiEventKind>)>, String> {
+    pub(super) fn remove(&self, name: &str) -> Result<Option<(Uuid, Vec<UiEventKind>)>, String> {
         self.check_live()?;
         let old = {
             let mut store = self.store.borrow_mut();
             let Some(index) = store.elements.iter().position(|element| element.name == name) else { return Ok(None) };
             let element = store.elements.remove(index);
-            (element.instance, [ScriptUiEventKind::Hover, ScriptUiEventKind::Leave, ScriptUiEventKind::Click]
+            (element.instance, [UiEventKind::Pointer(ScriptUiEventKind::Hover), UiEventKind::Pointer(ScriptUiEventKind::Leave), UiEventKind::Pointer(ScriptUiEventKind::Click), UiEventKind::StateUpdate]
                 .into_iter().filter(|event| element.handlers[event_index(*event)].is_some()).collect())
         };
         self.publish();
@@ -408,7 +425,13 @@ impl ScriptUiState {
                 let mut store = self.store.borrow_mut();
                 let index = Self::element_index(&store, name, Some(instance))?;
                 let element = &mut store.elements[index];
-                if element.states == states { false } else { element.states = states; true }
+                if element.states == states { false } else {
+                    element.states = states;
+                    if let Some(handler) = &element.handlers[event_index(UiEventKind::StateUpdate)] {
+                        self.state_updates.borrow_mut().push(handler.registration);
+                    }
+                    true
+                }
             };
             return Ok(changed);
         }
@@ -435,7 +458,13 @@ impl ScriptUiState {
             let index = Self::element_index(&store, name, Some(instance))?;
             let element = &mut store.elements[index];
             if field == "states" {
-                if element.states.is_empty() { false } else { element.states.clear(); true }
+                if element.states.is_empty() { false } else {
+                    element.states.clear();
+                    if let Some(handler) = &element.handlers[event_index(UiEventKind::StateUpdate)] {
+                        self.state_updates.borrow_mut().push(handler.registration);
+                    }
+                    true
+                }
             } else if default_value(field).is_some() {
                 element.values.remove(field).is_some()
             } else {
@@ -469,6 +498,9 @@ impl ScriptUiState {
         let element = &mut store.elements[index];
         if element.states.get(key) == Some(&value) { return Ok(false); }
         element.states.insert(key.to_owned(), value);
+        if let Some(handler) = &element.handlers[event_index(UiEventKind::StateUpdate)] {
+            self.state_updates.borrow_mut().push(handler.registration);
+        }
         Ok(true)
     }
 
@@ -476,39 +508,46 @@ impl ScriptUiState {
         self.check_live()?;
         let mut store = self.store.borrow_mut();
         let index = Self::element_index(&store, name, Some(instance))?;
-        Ok(store.elements[index].states.remove(key).is_some())
+        let element = &mut store.elements[index];
+        if element.states.remove(key).is_none() { return Ok(false); }
+        if let Some(handler) = &element.handlers[event_index(UiEventKind::StateUpdate)] {
+            self.state_updates.borrow_mut().push(handler.registration);
+        }
+        Ok(true)
     }
 
-    pub(super) fn begin_handler_install(&self, name: &str, instance: Uuid, event: ScriptUiEventKind, registration: Uuid) -> Result<(), String> {
+    pub(super) fn begin_handler_install(&self, name: &str, instance: Uuid, event: UiEventKind, registration: Uuid) -> Result<(), String> {
         self.check_live()?;
         {
             let mut store = self.store.borrow_mut();
             let index = Self::element_index(&store, name, Some(instance))?;
             let element = &mut store.elements[index];
-            element.events_version = element.events_version.checked_add(1).ok_or_else(|| "UI event version overflow".to_owned())?;
+            if event != UiEventKind::StateUpdate {
+                element.events_version = element.events_version.checked_add(1).ok_or_else(|| "UI event version overflow".to_owned())?;
+            }
             element.handlers[event_index(event)] = Some(UiHandler { registration, active: false });
         }
-        self.publish();
+        if event != UiEventKind::StateUpdate { self.publish(); }
         Ok(())
     }
 
-    pub(super) fn clear_handler(&self, name: &str, instance: Uuid, event: ScriptUiEventKind) -> Result<Option<Uuid>, String> {
+    pub(super) fn clear_handler(&self, name: &str, instance: Uuid, event: UiEventKind) -> Result<Option<Uuid>, String> {
         self.check_live()?;
         let registration = {
             let mut store = self.store.borrow_mut();
             let index = Self::element_index(&store, name, Some(instance))?;
             let element = &mut store.elements[index];
             let registration = element.handlers[event_index(event)].take().map(|handler| handler.registration);
-            if registration.is_some() {
+            if registration.is_some() && event != UiEventKind::StateUpdate {
                 element.events_version = element.events_version.checked_add(1).ok_or_else(|| "UI event version overflow".to_owned())?;
             }
             registration
         };
-        if registration.is_some() { self.publish(); }
+        if registration.is_some() && event != UiEventKind::StateUpdate { self.publish(); }
         Ok(registration)
     }
 
-    pub(super) fn complete_handler_install(&self, name: &str, instance: Uuid, event: ScriptUiEventKind, registration: Uuid, installed: bool) -> bool {
+    pub(super) fn complete_handler_install(&self, name: &str, instance: Uuid, event: UiEventKind, registration: Uuid, installed: bool) -> bool {
         if self.session.is_stopped() { return false; }
         let current = {
             let mut store = self.store.borrow_mut();
@@ -519,7 +558,7 @@ impl ScriptUiState {
             handler.active = installed;
             true
         };
-        if current && installed { self.publish(); }
+        if current && installed && event != UiEventKind::StateUpdate { self.publish(); }
         current
     }
 
@@ -528,7 +567,7 @@ impl ScriptUiState {
         let store = self.store.borrow();
         let element = store.elements.iter().find(|element| element.name == event.element_id && element.instance == event.instance_id)?;
         if element.events_version != event.events_version { return None; }
-        element.handlers[event_index(event.event)].as_ref().filter(|handler| handler.active).map(|handler| handler.registration)
+        element.handlers[event_index(UiEventKind::Pointer(event.event))].as_ref().filter(|handler| handler.active).map(|handler| handler.registration)
     }
 }
 
@@ -730,10 +769,10 @@ mod tests {
         };
         assert_eq!(state.installed_handler_registration(&event), None);
         let registration = Uuid::new_v4();
-        state.begin_handler_install("same", original, ScriptUiEventKind::Click, registration).unwrap();
+        state.begin_handler_install("same", original, UiEventKind::Pointer(ScriptUiEventKind::Click), registration).unwrap();
         let pending = snapshots.borrow().elements[0].events_version;
         assert!(!state.installed_handler_registration(&ScriptUiEvent { events_version: pending, ..event.clone() }).is_some());
-        assert!(state.complete_handler_install("same", original, ScriptUiEventKind::Click, registration, true));
+        assert!(state.complete_handler_install("same", original, UiEventKind::Pointer(ScriptUiEventKind::Click), registration, true));
         let active = ScriptUiEvent { events_version: snapshots.borrow().elements[0].events_version, ..event.clone() };
         assert_eq!(state.installed_handler_registration(&active), Some(registration));
         assert_eq!(state.define("same", r#"{"text":"after"}"#).unwrap(), original);
@@ -858,7 +897,7 @@ mod tests {
         let state = ScriptUiState::new(publisher, SessionControl::standalone());
         let instance = state.define("button", "{}").unwrap();
         let first = Uuid::new_v4();
-        state.begin_handler_install("button", instance, ScriptUiEventKind::Click, first).unwrap();
+        state.begin_handler_install("button", instance, UiEventKind::Pointer(ScriptUiEventKind::Click), first).unwrap();
         let pending_version = snapshots.borrow().elements[0].events_version;
         let event = ScriptUiEvent {
             session_id: state.session_id(), element_id: "button".to_owned(), instance_id: instance,
@@ -866,26 +905,26 @@ mod tests {
         };
         assert_eq!(state.installed_handler_registration(&event), None);
         let second = Uuid::new_v4();
-        state.begin_handler_install("button", instance, ScriptUiEventKind::Click, second).unwrap();
-        assert!(!state.complete_handler_install("button", instance, ScriptUiEventKind::Click, first, true));
+        state.begin_handler_install("button", instance, UiEventKind::Pointer(ScriptUiEventKind::Click), second).unwrap();
+        assert!(!state.complete_handler_install("button", instance, UiEventKind::Pointer(ScriptUiEventKind::Click), first, true));
         assert_eq!(state.installed_handler_registration(&event), None);
-        assert!(state.complete_handler_install("button", instance, ScriptUiEventKind::Click, second, true));
+        assert!(state.complete_handler_install("button", instance, UiEventKind::Pointer(ScriptUiEventKind::Click), second, true));
         let active = ScriptUiEvent { events_version: snapshots.borrow().elements[0].events_version, ..event.clone() };
         assert_eq!(state.installed_handler_registration(&active), Some(second));
         state.remove("button").unwrap();
         let replacement = state.define("button", "{}").unwrap();
-        assert!(!state.complete_handler_install("button", instance, ScriptUiEventKind::Click, second, true));
+        assert!(!state.complete_handler_install("button", instance, UiEventKind::Pointer(ScriptUiEventKind::Click), second, true));
         assert_eq!(state.installed_handler_registration(&active), None);
         let third = Uuid::new_v4();
-        state.begin_handler_install("button", replacement, ScriptUiEventKind::Click, third).unwrap();
-        assert!(!state.complete_handler_install("button", replacement, ScriptUiEventKind::Click, second, true));
-        assert!(state.complete_handler_install("button", replacement, ScriptUiEventKind::Click, third, false));
+        state.begin_handler_install("button", replacement, UiEventKind::Pointer(ScriptUiEventKind::Click), third).unwrap();
+        assert!(!state.complete_handler_install("button", replacement, UiEventKind::Pointer(ScriptUiEventKind::Click), second, true));
+        assert!(state.complete_handler_install("button", replacement, UiEventKind::Pointer(ScriptUiEventKind::Click), third, false));
         let failed_version = snapshots.borrow().elements[0].events_version;
         assert_eq!(state.installed_handler_registration(&ScriptUiEvent { instance_id: replacement, events_version: failed_version, ..active }), None);
         let fourth = Uuid::new_v4();
-        state.begin_handler_install("button", replacement, ScriptUiEventKind::Click, fourth).unwrap();
-        assert_eq!(state.clear_handler("button", replacement, ScriptUiEventKind::Click).unwrap(), Some(fourth));
-        assert!(!state.complete_handler_install("button", replacement, ScriptUiEventKind::Click, fourth, true));
+        state.begin_handler_install("button", replacement, UiEventKind::Pointer(ScriptUiEventKind::Click), fourth).unwrap();
+        assert_eq!(state.clear_handler("button", replacement, UiEventKind::Pointer(ScriptUiEventKind::Click)).unwrap(), Some(fourth));
+        assert!(!state.complete_handler_install("button", replacement, UiEventKind::Pointer(ScriptUiEventKind::Click), fourth, true));
     }
 
     #[test]

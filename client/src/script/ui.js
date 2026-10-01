@@ -16,7 +16,7 @@
         color: [0, 0, 0, 0], textColor: [255, 255, 255, 255],
         border: { thickness: 0, color: [255, 255, 255] }, corner: { radius: 0 }, padding: { thickness: 0 },
     };
-    const legacyHandlers = { __proto__: null, onClick: true, onHover: true, onLeave: true };
+    const legacyHandlers = { __proto__: null, onClick: true, onHover: true, onLeave: true, onStateUpdate: true };
 
     function readonly(value, seen = new NativeWeakSet()) {
         if (value === null || typeof value !== 'object') return value;
@@ -192,6 +192,7 @@
         eventMethods.setOnClick = method('click');
         eventMethods.setOnHover = method('hover');
         eventMethods.setOnLeave = method('leave');
+        eventMethods.setOnStateUpdate = method('stateUpdate');
         const dimension = kind => async () => {
             ensureLive();
             const value = await host.measure(name, instance, kind);

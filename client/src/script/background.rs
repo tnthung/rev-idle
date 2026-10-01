@@ -5,9 +5,9 @@ use super::{
     ownership::ScreenOwnershipState,
     mutex::MutexRegistry,
     transfer::FunctionDescriptor,
-    ui::{ScriptUiBindings, ScriptUiState},
+    ui::{ScriptUiBindings, ScriptUiState, UiEventKind},
 };
-use crate::bridge::{ScriptUiEvent, ScriptUiEventKind, WsConnection};
+use crate::bridge::{ScriptUiEvent, WsConnection};
 use rquickjs::{
     function::{Rest, This},
     loader::Loader,
@@ -36,7 +36,7 @@ use uuid::Uuid;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum BackgroundTarget {
     Daemon(String),
-    Ui { name: String, instance: Uuid, event: ScriptUiEventKind },
+    Ui { name: String, instance: Uuid, event: UiEventKind },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +75,7 @@ struct BackgroundInstallation {
 
 enum BackgroundInvocationTarget {
     Daemon(String),
+    UiStateUpdate(String),
     Ui {
         event: ScriptUiEvent,
         response: oneshot::Sender<Result<(), String>>,
@@ -525,6 +526,25 @@ impl ScriptBackground {
                     }
                     self.start_daemon(&name).await;
                 }
+                BackgroundInvocationTarget::UiStateUpdate(name) => {
+                    if let Err(error) = result {
+                        eprintln!("[Script background] state update handler for UI element {name:?}: {error}");
+                    }
+                }
+            }
+        }
+
+        let state_updates = std::mem::take(&mut *self.ui.state_updates.borrow_mut());
+        for registration in state_updates {
+            let Some(record) = self.registry.registration(registration) else { continue };
+            match record.status {
+                BackgroundRegistrationStatus::Pending => self.ui.state_updates.borrow_mut().push(registration),
+                BackgroundRegistrationStatus::Active => {
+                    if let BackgroundTarget::Ui { name, instance, event: UiEventKind::StateUpdate } = record.target {
+                        self.start_state_update(registration, name, instance).await;
+                    }
+                }
+                BackgroundRegistrationStatus::Failed => {}
             }
         }
 
@@ -564,6 +584,37 @@ impl ScriptBackground {
                 });
             }
             Err(error) => eprintln!("[Script background] daemon {name}: {error}"),
+        }
+    }
+
+    async fn start_state_update(&self, registration: Uuid, name: String, instance: Uuid) {
+        let Some(function) = self.installed.borrow().get(&registration).cloned() else { return };
+        let bindings = self.bindings.clone();
+        let registry = self.registry.clone();
+        let session = self.session.clone();
+        let element_name = name.clone();
+        let result = self.context.async_with(async move |ctx| {
+            let result: rquickjs::Result<Option<Persistent<Promise<'static>>>> = (|| {
+                if session.is_stopped() || !registry.is_current(registration) { return Ok(None); }
+                let function: Function = function.restore(&ctx)?;
+                let receiver = bindings.element(&ctx, &element_name, instance)?;
+                let value: Value = function.call((This(receiver),))?;
+                let promise: Object = ctx.globals().get("Promise")?;
+                let resolve: Function = promise.get("resolve")?;
+                let promise: Promise = resolve.call((This(promise), value))?;
+                Ok(Some(Persistent::save(&ctx, promise)))
+            })();
+            result.map_err(|error| CaughtError::from_error(&ctx, error).to_string())
+        }).await;
+        match result {
+            Ok(Some(promise)) => {
+                self.invocations.borrow_mut().insert(Uuid::new_v4(), BackgroundInvocation {
+                    promise,
+                    target: BackgroundInvocationTarget::UiStateUpdate(name),
+                });
+            }
+            Ok(None) => {}
+            Err(error) => eprintln!("[Script background] state update handler for UI element {name:?}: {error}"),
         }
     }
 

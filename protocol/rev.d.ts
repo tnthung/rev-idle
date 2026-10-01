@@ -51,6 +51,7 @@ interface RevUiElement<S extends Record<string, RevJsonValue> = Record<string, R
   setOnClick(callback: RevUiCallback | null): this;
   setOnHover(callback: RevUiCallback | null): this;
   setOnLeave(callback: RevUiCallback | null): this;
+  setOnStateUpdate(callback: RevUiCallback | null): this;
   /** Provided by the host on live elements. Calculated width in pixels, including padding and excluding border. */
   width(): Promise<number>;
   /** Provided by the host on live elements. Calculated height in pixels, including padding and excluding border. */

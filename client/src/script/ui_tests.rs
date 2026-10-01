@@ -241,6 +241,159 @@ async fn ui_callback_error_is_isolated() {
     assert!(!session.is_stopped());
 }
 
+#[tokio::test]
+async fn ui_state_update_observes_shallow_changes_from_both_runtimes() {
+    use crate::{bridge::{ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+    let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(Rc::new(RefCell::new(Vec::new()))))) as SharedMouse).into();
+    let publisher = ScriptUiPublisher::default();
+    let snapshots = publisher.subscribe();
+    let session = ScriptSession::new_with_connection_and_control(r#"
+        export async function afterLoad() {
+            rev.global.stateUpdateCount = 0;
+            const element = rev.ui('counter', { states: { count: 0, options: { enabled: false } } });
+            if (typeof element.setOnStateUpdate !== 'function') throw new Error('missing state update setter');
+            if (element.setOnStateUpdate(async function() {
+                if (this !== rev.ui.counter) throw new Error('incorrect callback receiver');
+                await rev.sleep(1);
+                rev.global.stateUpdateCount++;
+                this.text = String(rev.global.stateUpdateCount);
+            }) !== element) throw new Error('setter must return element');
+            element.states.count = 1;
+            element.states.count = 1;
+            element.states.options.enabled = true;
+            if (element.states.options.enabled !== false) throw new Error('nested edit changed stored state');
+            element.states.options = { enabled: false };
+            element.states.options = { enabled: true };
+            delete element.states.missing;
+            delete element.states.count;
+            element.states = { count: 2 };
+            element.states = { count: 2 };
+            rev.ui('counter', { states: { count: 3 } });
+            rev.ui('counter', { states: { count: 3 } });
+            try { rev.ui('counter', { states: { count: 4 }, size: 0 }); } catch (_) {}
+            delete element.states;
+            delete element.states;
+            if (rev.global.stateUpdateCount !== 0) throw new Error('callback ran synchronously');
+            while (rev.global.stateUpdateCount < 6) await rev.sleep(1);
+            rev.daemon('update', function() { rev.ui.counter.states.background = true; });
+            while (rev.global.stateUpdateCount < 7) await rev.sleep(1);
+            await rev.sleep(20);
+            if (rev.global.stateUpdateCount !== 7) throw new Error('unexpected state update count: ' + rev.global.stateUpdateCount);
+        }
+        export default function() {}
+    "#, "state_update.js", WsConnection::disconnected_for_test(), SessionControl::standalone(), publisher).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            _ = session.drive_background(controls.clone()) => panic!("background service stopped during state updates"),
+            result = session.run_after_load(controls) => result.unwrap(),
+        }
+    }).await.unwrap();
+    assert_eq!(snapshots.borrow().elements[0].text, "7");
+    assert!(snapshots.borrow().elements[0].events.is_empty());
+}
+
+#[tokio::test]
+async fn ui_state_update_discards_cleared_replaced_and_removed_handlers() {
+    use crate::{bridge::{ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+    let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(Rc::new(RefCell::new(Vec::new()))))) as SharedMouse).into();
+    let publisher = ScriptUiPublisher::default();
+    let snapshots = publisher.subscribe();
+    let session = ScriptSession::new_with_connection_and_control(r#"
+        export async function afterLoad() {
+            rev.global.stateLifecycleUnexpected = 0;
+            rev.global.stateLifecycleCount = 0;
+            const element = rev.ui('counter', {});
+            if (typeof element.setOnStateUpdate !== 'function') throw new Error('missing state update setter');
+            const obsolete = function() { rev.global.stateLifecycleUnexpected++; };
+            element.setOnStateUpdate(obsolete);
+            element.states.count = 1;
+            element.setOnStateUpdate(null);
+            element.states.count = 2;
+            element.setOnStateUpdate(obsolete);
+            element.states.count = 3;
+            const current = function() { rev.global.stateLifecycleCount++; this.text = 'updated'; };
+            element.setOnStateUpdate(current);
+            element.states.count = 4;
+            element.setOnStateUpdate(current);
+            while (rev.global.stateLifecycleCount < 1) await rev.sleep(1);
+            element.states.count = 5;
+            rev.ui('counter', null);
+            rev.ui('counter', { text: 'replacement' }).setOnStateUpdate(function() {
+                rev.global.stateLifecycleCount++;
+                this.text = 'replacement updated';
+            });
+            rev.ui.counter.states.count = 6;
+            while (rev.global.stateLifecycleCount < 2) await rev.sleep(1);
+            rev.ui.counter.setOnStateUpdate(null);
+            rev.ui.counter.states.count = 7;
+            await rev.sleep(20);
+            if (rev.global.stateLifecycleUnexpected !== 0 || rev.global.stateLifecycleCount !== 2) throw new Error('obsolete state handler ran');
+        }
+        export default function() {}
+    "#, "state_update_lifecycle.js", WsConnection::disconnected_for_test(), SessionControl::standalone(), publisher).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            _ = session.drive_background(controls.clone()) => panic!("background service stopped during state updates"),
+            result = session.run_after_load(controls) => result.unwrap(),
+        }
+    }).await.unwrap();
+    assert_eq!(snapshots.borrow().elements[0].text, "replacement updated");
+}
+
+#[tokio::test]
+async fn ui_state_update_runs_while_paused_and_isolates_errors() {
+    use crate::{bridge::{ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+    let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(Rc::new(RefCell::new(Vec::new()))))) as SharedMouse).into();
+    let publisher = ScriptUiPublisher::default();
+    let snapshots = publisher.subscribe();
+    let session = ScriptSession::new_with_connection_and_control(r#"
+        export function afterLoad() {
+            rev.ui('sync', {}).setOnStateUpdate(function() {
+                this.text = 'ran';
+                throw new Error('sync state update failure');
+            });
+            rev.ui('async', {}).setOnStateUpdate(async function() {
+                await rev.sleep(1);
+                this.text = 'ran';
+                throw new Error('async state update failure');
+            });
+            rev.ui('good', {}).setOnStateUpdate(async function() {
+                await rev.sleep(1);
+                if (this.states.count === 1) {
+                    this.states.count = 2;
+                } else {
+                    this.setOnStateUpdate(null);
+                    this.states.count = 3;
+                    this.text = 'done';
+                }
+            });
+            rev.ui.sync.states.count = 1;
+            rev.ui.async.states.count = 1;
+            rev.ui.good.states.count = 1;
+        }
+        export default function() {}
+    "#, "state_update_errors.js", WsConnection::disconnected_for_test(), SessionControl::standalone(), publisher).await.unwrap();
+    session.run_after_load(controls.clone()).await.unwrap();
+    session.acknowledge_pause(true);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            _ = session.drive_background(controls) => panic!("background service stopped during state updates"),
+            _ = async {
+                while snapshots.borrow().elements.iter().any(|element| element.text.is_empty()) {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            } => {}
+        }
+    }).await.unwrap();
+    assert_eq!(snapshots.borrow().elements.iter().map(|element| element.text.as_str()).collect::<Vec<_>>(), ["ran", "ran", "done"]);
+    assert!(!session.is_stopped());
+    assert!(session.is_paused());
+}
+
 #[test]
 fn ui_registry_native_roots_drop_before_runtime() {
     let runtime = Runtime::new().unwrap();
@@ -418,7 +571,7 @@ fn ui_registry_updates_attributes_atomically() {
     check(r#"
         const callback = function() {};
         const original = ui('a', { text: 'before', padding: { left: 4, right: 5 }, states: { count: 2 } })
-            .setOnClick(callback).setOnHover(callback).setOnLeave(callback);
+            .setOnClick(callback).setOnHover(callback).setOnLeave(callback).setOnStateUpdate(callback);
         assert(original === ui.a && original.setOnClick(callback) === original);
         const states = original.states, first = snapshots.at(-1)[0], count = snapshots.length;
         throws(() => ui('a', { text: 'invalid', size: 0, states: {} }));
@@ -431,7 +584,7 @@ fn ui_registry_updates_attributes_atomically() {
         assert(states.enabled === true && states.count === undefined && snapshots.length === count + 1);
         ui('a', {});
         assert(original.text === 'after' && states.enabled === true && snapshots.length === count + 1);
-        assert(original.setOnClick(null).setOnHover(null).setOnLeave(null) === original);
+        assert(original.setOnClick(null).setOnHover(null).setOnLeave(null).setOnStateUpdate(null) === original);
     "#);
 }
 
@@ -830,12 +983,21 @@ fn ui_registry_border_corner_padding_defaults_and_overrides() {
 fn ui_callback_setters_are_the_only_handler_surface() {
     check(r#"
         ui('a', { text: 'safe' });
-        assert(ui.a.onClick === undefined && ui.a.onHover === undefined && ui.a.onLeave === undefined);
-        assert(!('onClick' in ui.a) && !('onHover' in ui.a) && !('onLeave' in ui.a));
+        assert(ui.a.onClick === undefined && ui.a.onHover === undefined && ui.a.onLeave === undefined && ui.a.onStateUpdate === undefined);
+        assert(!('onClick' in ui.a) && !('onHover' in ui.a) && !('onLeave' in ui.a) && !('onStateUpdate' in ui.a));
         assert(ui.a.setOnClick(() => {}) === ui.a);
         assert(ui.a.setOnClick(null) === ui.a);
         throws(() => ui.a.setOnClick(undefined));
         throws(() => ui('a', { onClick() {} }));
+        const revision = snapshots.length;
+        assert(ui.a.setOnStateUpdate(() => {}) === ui.a);
+        assert(ui.a.setOnStateUpdate(null) === ui.a);
+        assert(snapshots.length === revision);
+        throws(() => ui.a.setOnStateUpdate(undefined));
+        throws(() => ui.a.setOnStateUpdate(1));
+        throws(() => ui.a.setOnStateUpdate = () => {});
+        throws(() => ui('a', { onStateUpdate() {} }));
+        throws(() => ui('a', { setOnStateUpdate() {} }));
     "#);
 }
 
