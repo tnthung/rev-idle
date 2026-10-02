@@ -21,7 +21,9 @@ type RevUiPadding = Readonly<{
   left?: number;
 }>;
 
-interface RevUiElementAttr {
+type RevUiBaseStates = Record<string, RevJsonValue>;
+
+type RevUiElementAttr<S extends RevUiBaseStates | undefined> = {
   /** Hides this element without removing it; omitted defaults to false. */
   hidden?: boolean;
   /** Exact Unity hierarchy path used as the position anchor; omitted or empty uses the viewport. */
@@ -42,16 +44,15 @@ interface RevUiElementAttr {
   border?: RevUiBorder;
   corner?: RevUiCorner;
   padding?: RevUiPadding;
-  states?: Record<string, RevJsonValue>;
-}
+} & (S extends RevUiBaseStates ? { states: S } : {});
 
-interface RevUiElement<S extends Record<string, RevJsonValue> = Record<string, RevJsonValue>> extends RevUiElementAttr {
+type RevUiElement<S extends RevUiBaseStates | undefined = RevUiBaseStates> = RevUiElementAttr<S> & {
   hidden: boolean;
   states: S;
-  setOnClick(callback: RevUiCallback | null): this;
-  setOnHover(callback: RevUiCallback | null): this;
-  setOnLeave(callback: RevUiCallback | null): this;
-  setOnStateUpdate(callback: RevUiCallback | null): this;
+  setOnClick(callback: RevUiCallback<S> | null): RevUiElement<S>;
+  setOnHover(callback: RevUiCallback<S> | null): RevUiElement<S>;
+  setOnLeave(callback: RevUiCallback<S> | null): RevUiElement<S>;
+  setOnStateUpdate(callback: RevUiCallback<S> | null): RevUiElement<S>;
   /** Provided by the host on live elements. Calculated width in pixels, including padding and excluding border. */
   width(): Promise<number>;
   /** Provided by the host on live elements. Calculated height in pixels, including padding and excluding border. */
@@ -60,9 +61,19 @@ interface RevUiElement<S extends Record<string, RevJsonValue> = Record<string, R
   globalXPos(): Promise<number>;
   /** Provided by the host on live elements. Calculated top position in top-left screen pixels. */
   globalYPos(): Promise<number>;
-}
+};
 
-type RevUiCallback = (this: RevUiElement) => void | Promise<void>;
+type RevUiCallback<S extends RevUiBaseStates | undefined = RevUiBaseStates> = (this: RevUiElement<S>) => void | Promise<void>;
+
+/** Module-local UI state map. Stateful entries require complete states on every attribute call. */
+type RevWithUi<Ui extends Record<string, RevUiBaseStates | undefined>> = Omit<Rev, "ui"> & {
+  ui: {
+    (name: keyof Ui & string, attr: null): void;
+    <K extends keyof Ui & string>(name: K, attr: RevUiElementAttr<Ui[K]>): RevUiElement<Ui[K]>;
+  } & {
+    readonly [K in keyof Ui]: RevUiElement<Ui[K]> | undefined;
+  };
+};
 
 interface Rev {
   /** Current pause state. Background work and UI callbacks continue while paused. */
@@ -76,7 +87,10 @@ interface Rev {
   /** Session-owned UI. Call with attributes to create or patch, or null to remove. */
   ui: {
     (name: string, attr: null): void;
-    (name: string, attr: RevUiElementAttr): RevUiElement;
+    (
+      name: string,
+      attr: Omit<RevUiElementAttr<RevUiBaseStates>, "states"> & { states?: RevUiBaseStates },
+    ): RevUiElement;
   } & Readonly<Record<string, RevUiElement | undefined>>;
   /** Session-wide background functions. Call with a function to register or replace, or null to retire. */
   daemon(name: string, fn: RevDaemon | null): void;
