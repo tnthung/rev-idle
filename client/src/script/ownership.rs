@@ -103,6 +103,13 @@ pub(super) struct ScreenOwnership {
 
 #[rquickjs::methods]
 impl ScreenOwnership {
+    pub fn rename(&self, label: String) {
+        if self.permit.is_some() && !self.state.semaphore.is_closed() {
+            *self.state.label.borrow_mut() = Some(label);
+            self.state.update_lock();
+        }
+    }
+
     pub fn release(&mut self) {
         if let Some(permit) = self.permit.take() {
             self.state.owned.set(false);
@@ -244,6 +251,50 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn screen_ownership_rename_updates_label_without_releasing_ownership() {
+        static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
+        let lock_state = LockState { enabled: &LOCK_ENABLED };
+        let (state_updates, state_rx) = watch::channel(StateUpdate::new(true, true, false, false, false));
+        let runtime = AsyncRuntime::new().unwrap();
+        let context = AsyncContext::full(&runtime).await.unwrap();
+        let state = Rc::new(ScreenOwnershipState::default());
+        let session = SessionControl::standalone();
+        state.attach(lock_state, state_updates);
+
+        context.async_with(async |ctx| {
+            ctx.globals().set("owner", state.clone().acquire(ctx.clone(), session.clone(), Some("First".into())).await.unwrap()).unwrap();
+            assert!(ctx.eval::<bool, _>("typeof Object.getPrototypeOf(owner).rename === 'function'").unwrap(), "ownership prototype must expose rename");
+            assert!(ctx.eval::<bool, _>("owner.rename('Second') === undefined").unwrap());
+            assert!(lock_state.is_enabled());
+            assert_eq!(state_rx.borrow().lock_label.as_deref(), Some("Second"));
+
+            let waiting = state.clone().acquire(ctx.clone(), session.clone(), Some("Next".into()));
+            tokio::pin!(waiting);
+            tokio::select! {
+                biased;
+                _ = &mut waiting => panic!("rename released ownership"),
+                _ = tokio::task::yield_now() => {}
+            }
+            state.set_paused(true);
+            ctx.eval::<(), _>("owner.rename('Paused')").unwrap();
+            assert!(!lock_state.is_enabled());
+            assert_eq!(state_rx.borrow().lock_label, None);
+            state.set_paused(false);
+            assert!(lock_state.is_enabled());
+            assert_eq!(state_rx.borrow().lock_label.as_deref(), Some("Paused"));
+
+            ctx.eval::<(), _>("owner.release(); owner.rename('Released')").unwrap();
+            assert!(!lock_state.is_enabled());
+            assert_eq!(state_rx.borrow().lock_label, None);
+            let next = tokio::time::timeout(Duration::from_secs(1), waiting).await.unwrap().unwrap();
+            ctx.eval::<(), _>("owner.rename('Stale')").unwrap();
+            assert!(lock_state.is_enabled());
+            assert_eq!(state_rx.borrow().lock_label.as_deref(), Some("Next"));
+            next.borrow_mut().release();
+        }).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn screen_ownership_gc_releases_a_cycle_without_clearing_manual_lock() {
         static LOCK_ENABLED: AtomicBool = AtomicBool::new(false);
         let lock_state = LockState { enabled: &LOCK_ENABLED };
@@ -307,6 +358,9 @@ mod tests {
             let replacement = Rc::new(ScreenOwnershipState::default());
             replacement.attach(lock_state, state_updates);
             let next = replacement.clone().acquire(ctx.clone(), session.clone(), Some("Replacement".into())).await.unwrap();
+            owner.borrow().rename("Stale".into());
+            assert!(lock_state.is_enabled());
+            assert_eq!(state_rx.borrow().lock_label.as_deref(), Some("Replacement"));
             owner.borrow_mut().release();
             assert!(lock_state.is_enabled());
             assert_eq!(state_rx.borrow().lock_label.as_deref(), Some("Replacement"));

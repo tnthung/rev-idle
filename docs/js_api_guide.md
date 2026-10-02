@@ -288,11 +288,14 @@ The promise resolves after the callbacks run. Check the state to see the value a
 import { Action } from "./lib/action.ts";
 
 export default async function() {
-  using so = await rev.screenOwnership("Infinity upgrades");
+  using so = await rev.screenOwnership("Opening main screen");
   await Action.main();
+  so.rename("Infinity upgrades");
   await Action.infinity();
 }
 ```
+
+`so.rename(label: string)` synchronously updates the token's label while retaining ownership. It returns `void` and does nothing after release or session stop. While paused, the new label is retained and appears when ownership re-locks on resume.
 
 While an ownership token is alive and unreleased, and the script is active rather than paused, lock mode is forced for that session. Ownership is opt-in, and nested helpers should not reacquire it. `release()` is idempotent, and `Symbol.dispose` performs the same release. Native Rust drop or garbage collection can release a forgotten token, but the timing is not guaranteed. Pausing unlocks player input while retaining the reservation; resuming re-locks it. A holder waiting at `ensureRunning()` retains its token and keeps other ownership callers waiting. Releasing a token preserves any existing manual lock. Stop or reload invalidates ownership and cancels waiters through host cleanup.
 

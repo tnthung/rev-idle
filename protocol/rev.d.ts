@@ -148,6 +148,8 @@ interface Rev {
 }
 
 interface ScreenOwnership extends Disposable {
+  /** Updates this token's label without releasing ownership; ignored after release or session stop. */
+  rename(label: string): void;
   /** Releases this ownership token; repeated calls are harmless. */
   release(): void;
 }
