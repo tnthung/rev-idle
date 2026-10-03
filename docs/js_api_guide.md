@@ -545,26 +545,30 @@ import {
 
 ### `BigNum`
 
-`BigNum` stores a normalized scientific string in public field `value`. The constructor accepts another `BigNum`, a number, a scientific/plain numeric string, or a bigint. Unsupported types and invalid strings throw.
+`BigNum` stores a normalized fixed-point mantissa as a private `bigint`, scaled by `10^15`, and a private `bigint` scientific exponent. The constructor accepts another `BigNum`, a number, a scientific/plain numeric string, or a bigint. Unsupported types and invalid strings throw. Values retain one integer mantissa digit and up to 15 fractional digits; excess digits are truncated toward zero.
 
 | Member | Contract |
 | --- | --- |
 | `BigNum.ZERO` | Shared zero instance. Treat it as read-only. |
+| `BigNum.ONE` | Shared one instance. Treat it as read-only. |
 | `mantissa` | Numeric mantissa getter. |
 | `exponent` | `BigInt` exponent getter. |
-| `sign` | `-1` when the stored string starts with `-`, otherwise `1`. |
+| `sign()` | Returns `-1`, `0`, or `1`. |
 | `isZero` | Whether the mantissa is zero. |
-| `isNegative` | Whether the stored string starts with `-`. |
-| `normalize()` | Normalizes in place, truncates fractional precision after 15 digits, and returns this object (or `BigNum.ZERO` for zero). |
-| `compareTo(other)` | Negative/zero/positive comparison result. Expects `BigNum`. |
-| `negate()` | Returns a new sign-flipped value. |
-| `add(other)` | Returns a new sum. Expects `BigNum`; differences above 15 exponents discard the smaller term. |
-| `subtract(other)` | Returns a new difference with the same 15-exponent cutoff. |
-| `multiply(other)` | Returns a new product. |
-| `divide(other)` | Returns a new quotient; dividing by zero throws. |
-| `toString()` | Returns `value`. |
+| `isNeg`, `isPos` | Whether the value is negative or nonnegative, respectively. |
+| `cmp(other)` | Returns `-1`, `0`, or `1`. Accepts `BigNum`, number, or bigint. |
+| `lt`, `lte`, `gt`, `gte`, `eq`, `neq` | Boolean comparisons with the same operand types as `cmp`. |
+| `neg()`, `abs()` | Return a new sign-flipped or absolute value. |
+| `add(other)`, `sub(other)` | Return a new sum or difference. Accept the same operand types as `cmp`; exponent gaps above 15 discard the smaller term. |
+| `mul(other)`, `div(other)` | Return a new product or quotient. Accept the same operand types as `cmp`; dividing by zero throws. |
+| `min(other)`, `max(other)` | Return a copy of the smaller or larger value. |
+| `BigNum.min(...values)`, `BigNum.max(...values)`, `BigNum.sum(...values)` | Select the minimum/maximum or sum `BigNum` values. Require at least one value. |
+| `toString(manLen?)` | Returns the normalized scientific string, optionally truncating or padding the mantissa to the specified character count. |
+| `toNumber()` | Converts the complete scientific string to a JavaScript number; large values can overflow to infinity. |
+| `toInt()` | Floors the stored decimal value before converting to a JavaScript number. |
+| `toBigInt()` | Floors the stored decimal value directly to a bigint. |
 
-`BigNum` is a lightweight script helper, not an exact arbitrary-precision decimal implementation. Mantissa arithmetic uses JavaScript `Number`; exponents use `BigInt`.
+Mantissa arithmetic and comparisons use integer operations. Precision is bounded to 16 significant decimal digits, and division truncates excess digits. Number inputs already carry JavaScript's floating-point precision limits; use strings or bigints when the supplied digits must be preserved. The numeric `mantissa`, `toNumber()`, and `toInt()` results remain subject to JavaScript number precision; `toBigInt()` preserves the integer represented by the stored decimal value.
 
 ## Errors and cancellation
 
