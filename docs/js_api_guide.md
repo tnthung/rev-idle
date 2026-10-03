@@ -228,7 +228,7 @@ rev.ui.counter.states.count = 1;
 
 Load [state_update_demo.ts](../scripts/state_update_demo.ts) to try direct writes, deletion, whole-map replacement, equal-value writes, nested reassignment, and disabling notifications. The demo only updates its own UI; its buttons also work while paused.
 
-Transferred daemons and callbacks replay their defining module's retained static imports in the background runtime. References to locals outside the transferred function are ordinary missing-name errors when reached. Callback installation is asynchronous and can fail naturally; the original main function is never invoked as a fallback.
+Transferred daemons and callbacks replay their defining module's retained static imports and exported bindings in the background runtime. Exported bindings are imported from the same retained defining-module snapshot, while nonexported outer locals remain ordinary missing-name errors when reached. The defining module's top-level code evaluates normally in the background runtime, whose state is isolated from the main runtime. Callback installation is asynchronous and can fail naturally; the original main function is never invoked as a fallback.
 
 ### State
 
