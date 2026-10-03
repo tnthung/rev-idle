@@ -702,10 +702,17 @@ async fn ui_global_position_getters_preserve_dimensions_when_mount_is_inaccessib
         r#"
             export default async function() {
                 rev.ui('a', { basedOn: 'scene:7/Panel[0]' });
-                if (await rev.ui.a.globalXPos() !== 321.5 || await rev.ui.a.globalYPos() !== 654.25)
+                try { await rev.ui.a.globalXPos(1); throw new Error('invalid relativeTo accepted'); }
+                catch (error) { if (!error.message.includes('relativeTo must be a string')) throw error; }
+                if ((await rev.ui.a.globalXPos()).join() !== '321.5,-1475' ||
+                    (await rev.ui.a.globalYPos('')).join() !== '654.25,-398.5' ||
+                    (await rev.ui.a.globalXPos('scene:7/Reference[0]')).join() !== '20,-230' ||
+                    (await rev.ui.a.globalYPos('scene:7/Reference[0]')).join() !== '30,-170')
                     throw new Error('wrong global position');
+                try { await rev.ui.a.globalXPos('scene:missing'); throw new Error('inaccessible relativeTo accepted'); }
+                catch (error) { if (!error.message.includes('relativeTo target is inaccessible')) throw error; }
                 try { await rev.ui.a.globalXPos(); throw new Error('inaccessible position accepted'); }
-                catch (error) { if (!error.message.includes('basedOn target is inaccessible')) throw error; }
+                catch (error) { if (!error.message.includes('basedOn or relativeTo target is inaccessible')) throw error; }
                 if (await rev.ui.a.width() !== 123.5 || await rev.ui.a.height() !== 27.25)
                     throw new Error('dimensions rejected with inaccessible position');
             }
@@ -714,20 +721,34 @@ async fn ui_global_position_getters_preserve_dimensions_when_mount_is_inaccessib
     ).await.unwrap();
     let mut socket = server.await.unwrap();
     let peer = async {
-        for index in 0..5 {
+        for index in 0..8 {
             let message = tokio::time::timeout(Duration::from_secs(2), socket.next()).await.unwrap().unwrap().unwrap();
             let envelope: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
             assert_eq!(envelope["type"], "ScriptUiMeasureReq");
             let snapshot = snapshots.borrow();
             assert_eq!(envelope["payload"]["sessionId"], snapshot.session_id.unwrap().to_string());
             assert_eq!(envelope["payload"]["revision"], snapshot.revision);
+            assert_eq!(envelope["payload"]["relativeTo"], match index {
+                0 | 1 => "",
+                2 | 3 => "scene:7/Reference[0]",
+                4 => "scene:missing",
+                _ => "",
+            });
             assert_eq!(envelope["payload"]["instanceId"], snapshot.elements[0].instance_id.to_string());
             drop(snapshot);
             socket.send(Message::Text(serde_json::json!({
                 "uuid": envelope["uuid"], "type": "ScriptUiMeasureRes", "payload": {
                     "width": 123.5, "height": 27.25,
-                    "globalX": if index == 0 { serde_json::json!(321.5) } else { serde_json::Value::Null },
-                    "globalY": if index == 1 { serde_json::json!(654.25) } else { serde_json::Value::Null },
+                    "globalX": match index {
+                        0 => serde_json::json!([321.5, -1475.0]),
+                        2 => serde_json::json!([20.0, -230.0]),
+                        _ => serde_json::Value::Null,
+                    },
+                    "globalY": match index {
+                        1 => serde_json::json!([654.25, -398.5]),
+                        3 => serde_json::json!([30.0, -170.0]),
+                        _ => serde_json::Value::Null,
+                    },
                 },
             }).to_string().into())).await.unwrap();
         }

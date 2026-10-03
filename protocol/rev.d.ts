@@ -57,10 +57,10 @@ type RevUiElement<S extends RevUiBaseStates | undefined = RevUiBaseStates> = Rev
   width(): Promise<number>;
   /** Provided by the host on live elements. Calculated height in pixels, including padding and excluding border. */
   height(): Promise<number>;
-  /** Provided by the host on live elements. Calculated left position in top-left screen pixels. */
-  globalXPos(): Promise<number>;
-  /** Provided by the host on live elements. Calculated top position in top-left screen pixels. */
-  globalYPos(): Promise<number>;
+  /** Provided by the host on live elements. Pixel offsets from the left/right edges of relativeTo, or the viewport when omitted or empty. */
+  globalXPos(relativeTo?: string): Promise<[major: number, minor: number]>;
+  /** Provided by the host on live elements. Pixel offsets from the top/bottom edges of relativeTo, or the viewport when omitted or empty. */
+  globalYPos(relativeTo?: string): Promise<[major: number, minor: number]>;
 };
 
 type RevUiCallback<S extends RevUiBaseStates | undefined = RevUiBaseStates> = (this: RevUiElement<S>) => void | Promise<void>;

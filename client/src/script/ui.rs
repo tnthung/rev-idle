@@ -646,7 +646,7 @@ impl ScriptUiBindings {
         let measure_state = state.clone();
         let measure_session = session.clone();
         let measurements = state.publisher.subscribe();
-        host.set("measure", Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, name: String, instance: String, kind: String| {
+        host.set("measure", Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, name: String, instance: String, kind: String, relative_to: String| {
             let connection = connection.clone();
             let state = measure_state.clone();
             let session = measure_session.clone();
@@ -655,7 +655,7 @@ impl ScriptUiBindings {
                 reject_if_stopped(&ctx, &session)?;
                 let instance = Uuid::parse_str(&instance).map_err(|error| Exception::throw_message(&ctx, &error.to_string()))?;
                 state.checked(&name, instance).map_err(|error| Exception::throw_message(&ctx, &error))?;
-                let measured = connection.request(ScriptUiMeasureReq { session_id: state.session_id(), revision, element_id: name.clone(), instance_id: instance })
+                let measured = connection.request(ScriptUiMeasureReq { session_id: state.session_id(), revision, element_id: name.clone(), instance_id: instance, relative_to })
                     .await
                     .map_err(|error| bridge_error(&ctx, error.to_string()))?;
                 reject_if_stopped(&ctx, &session)?;

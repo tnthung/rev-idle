@@ -121,6 +121,8 @@ pub(crate) struct ScriptUiMeasureReq {
     pub(crate) revision: u64,
     pub(crate) element_id: String,
     pub(crate) instance_id: Uuid,
+    #[serde(default)]
+    pub(crate) relative_to: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -129,9 +131,9 @@ pub(crate) struct ScriptUiMeasureRes {
     pub(crate) width: f64,
     pub(crate) height: f64,
     #[serde(default)]
-    pub(crate) global_x: Option<f64>,
+    pub(crate) global_x: Option<[f64; 2]>,
     #[serde(default)]
-    pub(crate) global_y: Option<f64>,
+    pub(crate) global_y: Option<[f64; 2]>,
 }
 
 impl Packet for ScriptUiMeasureReq {
@@ -419,8 +421,8 @@ mod tests {
         let measure: ScriptUiMeasureReq = serde_json::from_value(fixture["ScriptUiMeasureReq"].clone()).unwrap();
         assert_eq!(serde_json::to_value(measure).unwrap(), fixture["ScriptUiMeasureReq"]);
         let measured: ScriptUiMeasureRes = serde_json::from_value(fixture["ScriptUiMeasureRes"].clone()).unwrap();
-        assert_eq!(measured.global_x, Some(321.5));
-        assert_eq!(measured.global_y, Some(654.25));
+        assert_eq!(measured.global_x, Some([321.5, -100.5]));
+        assert_eq!(measured.global_y, Some([654.25, -200.75]));
         assert_eq!(serde_json::to_value(measured).unwrap(), fixture["ScriptUiMeasureRes"]);
         for key in ["ScriptUiPointer", "ScriptUiPointerUp"] {
             let pointer: ScriptUiPointer = serde_json::from_value(fixture[key].clone()).unwrap();

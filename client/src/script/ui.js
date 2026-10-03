@@ -193,10 +193,12 @@
         eventMethods.setOnHover = method('hover');
         eventMethods.setOnLeave = method('leave');
         eventMethods.setOnStateUpdate = method('stateUpdate');
-        const dimension = kind => async () => {
+        const dimension = kind => async relativeTo => {
             ensureLive();
-            const value = await host.measure(name, instance, kind);
-            if ((kind === 'globalX' || kind === 'globalY') && value === null) throw new NativeError('UI element basedOn target is inaccessible');
+            const position = kind === 'globalX' || kind === 'globalY';
+            if (position && relativeTo !== undefined && typeof relativeTo !== 'string') throw new NativeTypeError('relativeTo must be a string');
+            const value = await host.measure(name, instance, kind, position ? relativeTo ?? '' : '');
+            if (position && value === null) throw new NativeError('UI element basedOn or relativeTo target is inaccessible');
             return value;
         };
         const dimensions = {

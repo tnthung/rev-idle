@@ -645,7 +645,7 @@ static void BridgePacketPayloadsMatchSharedFixture()
         ("ScriptUiMeasureReq", new ScriptUiMeasureReq(
             Guid.Parse("11111111-1111-4111-8111-111111111111"), 7, "button",
             Guid.Parse("22222222-2222-4222-8222-222222222222"))),
-        ("ScriptUiMeasureRes", new ScriptUiMeasureRes(123.5, 27.25, 321.5, 654.25)),
+        ("ScriptUiMeasureRes", new ScriptUiMeasureRes(123.5, 27.25, new[] { 321.5, -100.5 }, new[] { 654.25, -200.75 })),
         ("ScriptUiPointer", new ScriptUiPointer(
             Guid.Parse("11111111-1111-4111-8111-111111111111"), 3, "down", 110, 965, 1920, 1080)),
         ("ScriptUiPointerUp", new ScriptUiPointer(

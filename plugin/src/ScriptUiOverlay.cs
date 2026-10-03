@@ -487,7 +487,10 @@ internal sealed class ScriptUiOverlay : IDisposable
             return null;
         if (!_byInstance.TryGetValue(request.InstanceId, out ElementView? view) || view.StateId != request.ElementId)
             return null;
-        return new ScriptUiMeasureRes(view.Layout.Box.width, view.Layout.Box.height, view.Accessible ? view.Layout.Box.xMin : null, view.Accessible ? view.Layout.Box.yMin : null);
+        ScriptUiRect? reference = string.IsNullOrEmpty(request.RelativeTo) ? new ScriptUiRect(0, 0, _viewportWidth, _viewportHeight) : TryGetMountedAnchor(request.RelativeTo);
+        return new ScriptUiMeasureRes(view.Layout.Box.width, view.Layout.Box.height,
+            view.Accessible && reference is ScriptUiRect relative ? new[] { (double)(view.Layout.Box.xMin - relative.xMin), (double)(view.Layout.Box.xMax - relative.xMax) } : null,
+            view.Accessible && reference is ScriptUiRect relativeY ? new[] { (double)(view.Layout.Box.yMin - relativeY.yMin), (double)(view.Layout.Box.yMax - relativeY.yMax) } : null);
     }
 
     internal bool HandlePointer(ScriptUiPointer pointer)
