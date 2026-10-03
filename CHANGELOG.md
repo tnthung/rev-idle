@@ -4,7 +4,7 @@ Detailed development history of the Revolution Idle plugin, Rust client, bridge 
 
 ## Coverage
 
-- Covers all 401 commits from the first commit on **September 1, 2026** through **October 1, 2026**.
+- Covers all 409 commits from the first commit on **September 1, 2026** through **October 3, 2026**.
 - Entries use commit author dates in UTC+08:00 and appear newest first. Related commits are grouped by behavior; merge commits and planning updates are not counted as separate feature deliveries.
 - The repository has no release tags at this snapshot, so these are development dates rather than versioned releases. Commit links identify the supporting changes.
 - Automation scripts are included through September 25, when `scripts/` was removed from version control. Later local script changes are outside this history.
@@ -24,6 +24,33 @@ Detailed development history of the Revolution Idle plugin, Rust client, bridge 
 | September 29 | Script-created UI, cooperative pause, and interruptible Stop. |
 | September 30 | Separate main/background runtimes, script pause/resume, and callable UI updates. |
 | October 1 | Callable daemon registration, removal through null arguments for daemon and UI entries, and named mutexes shared across runtimes. |
+| October 2 | Asynchronous UI state-change callbacks and generic UI state declarations. |
+| October 3 | Renamable screen-ownership labels, relative UI edge measurements, and same-file exports for transferred callbacks. |
+
+## 2026-10-03
+
+### Script execution
+
+- Added automatic imports of same-file exported bindings for transferred daemons and UI callbacks, preserving original local names and export aliases alongside retained static imports. Imports use the defining module's retained source snapshot, including after source edits. The defining module evaluates in the isolated background runtime; nonexported outer locals remain unavailable. Added regression coverage for exported functions, classes, enums, aliases, nested transfer, and daemon/UI callbacks registered from another module, with accompanying behavior documentation. ([e8184e3](https://github.com/tnthung/rev-idle/commit/e8184e3), [9a6d6e3](https://github.com/tnthung/rev-idle/commit/9a6d6e3))
+
+### UI positioning
+
+- Changed `globalXPos(relativeTo?)` and `globalYPos(relativeTo?)` to return `[major, minor]` offsets for both element edges, relative to an optional Unity hierarchy path. Omitting the path or passing an empty string uses the viewport. Inaccessible anchors or reference targets reject position requests while width/height remain readable. Updated bridge packets, declarations, fixtures, and client/plugin regression coverage. ([0910c53](https://github.com/tnthung/rev-idle/commit/0910c53))
+
+### Screen ownership
+
+- Added synchronous `ScreenOwnership.rename(label)` to update a live token's label without releasing ownership. Renaming a released token or a stopped session is a no-op; labels are retained through pause and shown when ownership locks again. Added declarations, usage documentation, and regression coverage for ownership retention, pause/resume, and stale tokens. ([b7c9b51](https://github.com/tnthung/rev-idle/commit/b7c9b51))
+
+## 2026-10-02
+
+### UI state callbacks
+
+- Added chainable `setOnStateUpdate(callback | null)` for asynchronous background notifications after changed direct state-key writes/deletes or whole-map replacement, including `rev.ui` state patches. Equal writes, deleting absent keys, element creation, and callback registration do not invoke it. Nested mutations require reassignment. ([f762a76](https://github.com/tnthung/rev-idle/commit/f762a76))
+- Callbacks read the current state through `this.states`, continue while paused, and may overlap after an `await`. Clearing/replacing a handler or removing its element discards queued calls while running invocations may finish. Added regression coverage for shallow changes from both runtimes, handler lifecycle, paused execution, and isolated errors. ([f762a76](https://github.com/tnthung/rev-idle/commit/f762a76))
+
+### Script declarations
+
+- Refined `RevUiBaseStates`, `RevUiElementAttr`, `RevUiElement`, and `RevUiCallback` generics so attributes, elements, callback receivers, and chainable setters preserve the same state type. Stateful attributes require complete state maps, and `RevWithUi` provides a module-local typed UI registry. ([cfaf06a](https://github.com/tnthung/rev-idle/commit/cfaf06a))
 
 ## 2026-10-01
 
@@ -49,6 +76,7 @@ Detailed development history of the Revolution Idle plugin, Rust client, bridge 
 ### State reference viewer
 
 - Changed **Copy struct** to generate `export type Name = { ... };` declarations. Updated the tooltip, regenerated the manual, and adjusted the clipboard regression test to expect type aliases. ([241d153](https://github.com/tnthung/rev-idle/commit/241d153))
+- Added `// BigDouble` annotations to copied fields whose source type contains `BigDouble`, including collections. BigDouble values still map to JSON strings; regenerated the viewer and updated clipboard regression coverage. ([f112d2c](https://github.com/tnthung/rev-idle/commit/f112d2c))
 
 ## 2026-09-30
 
