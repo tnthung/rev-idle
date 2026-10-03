@@ -99,7 +99,15 @@ fn two_runtime_transfer_replays_imports_and_keeps_dynamic_imports_fresh() {
         const localOnly = 9;
         export function imported() { return K.Answer + new Box().value + helper(); }
         export function missing() { return localOnly; }
-        export function nested() { return () => helper(); }
+        export function nested() { return () => sameFile(); }
+        export enum LocalKind { Answer = 7 }
+        export class LocalBox { value = 4; }
+        const aliasedValue = 2;
+        const { destructured } = { destructured: 3 };
+        export { helper as localHelper, aliasedValue as "renamed-value", destructured as renamedDestructured };
+        export function sameFile() {
+            return aliasedValue + destructured + new LocalBox().value + LocalKind.Answer + helper();
+        }
         export async function fresh() { return (await import('./dependency.ts')).helper(); }
         export const method = { run() { return helper(); } }.run;
         export const asynchronous = async () => helper();
@@ -112,13 +120,15 @@ fn two_runtime_transfer_replays_imports_and_keeps_dynamic_imports_fresh() {
         let (module, ready) = modules.clone().load(&ctx, &entry.to_string_lossy(), None).unwrap().eval().unwrap();
         ready.finish::<()>().unwrap();
         assert_eq!(module.get::<_, Function>("imported").unwrap().call::<_, i32>(()).unwrap(), 42);
+        assert_eq!(module.get::<_, Function>("sameFile").unwrap().call::<_, i32>(()).unwrap(), 17);
         assert_eq!(ctx.globals().get::<_, i32>("importCount").unwrap(), 1);
-        ["imported", "missing", "nested", "fresh", "method", "asynchronous"].map(|name| {
+        ["imported", "missing", "nested", "sameFile", "fresh", "method", "asynchronous"].map(|name| {
             (name, transfer.capture(&ctx, module.get(name).unwrap()).unwrap())
         })
     });
     std::fs::write(&dependency, "export function helper() { return 2; }").unwrap();
     std::fs::write(&barrel, "throw new Error('edited barrel must not replace the retained graph');").unwrap();
+    std::fs::write(&entry, "throw new Error('edited entry must not replace the retained graph');").unwrap();
     let background = Runtime::new().unwrap();
     background.set_loader(modules.clone(), modules.clone());
     let background_context = Context::full(&background).unwrap();
@@ -137,8 +147,9 @@ fn two_runtime_transfer_replays_imports_and_keeps_dynamic_imports_fresh() {
                     let id = modules.transfer_module(uuid::Uuid::new_v4(), &nested).unwrap();
                     let (module, ready) = modules.clone().load(&ctx, &id, None).unwrap().eval().unwrap();
                     ready.finish::<()>().unwrap();
-                    assert_eq!(module.get::<_, Function>("default").unwrap().call::<_, i32>(()).unwrap(), 1);
+                    assert_eq!(module.get::<_, Function>("default").unwrap().call::<_, i32>(()).unwrap(), 17);
                 }
+                "sameFile" => assert_eq!(function.call::<_, i32>(()).unwrap(), 17),
                 "fresh" => assert_eq!(function.call::<_, Promise>(()).unwrap().finish::<i32>().unwrap(), 2),
                 "method" => assert_eq!(function.call::<_, i32>(()).unwrap(), 1),
                 "asynchronous" => assert_eq!(function.call::<_, Promise>(()).unwrap().finish::<i32>().unwrap(), 1),
@@ -151,5 +162,6 @@ fn two_runtime_transfer_replays_imports_and_keeps_dynamic_imports_fresh() {
     });
     std::fs::remove_file(dependency).unwrap();
     std::fs::remove_file(barrel).unwrap();
+    std::fs::remove_file(entry).unwrap();
     std::fs::remove_dir(root).unwrap();
 }

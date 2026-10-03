@@ -838,6 +838,88 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn transferred_callbacks_from_imported_module_run_in_background() {
+        use crate::bridge::{ScriptUiEvent, ScriptUiEventKind, ScriptUiPublisher};
+        let root = std::env::temp_dir().join(format!("rev-idle-background-transfer-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("dependency.js"), "export const value = 42; export function monitor() { rev.global.__background_imported_value = value; } export function clicked() { this.text = String(value); }").unwrap();
+        GlobalState.delete("__background_imported_value");
+        let publisher = ScriptUiPublisher::default();
+        let snapshots = publisher.subscribe();
+        let session = ScriptSession::new_with_connection_and_control(
+            r#"import { monitor, clicked } from './dependency.js';
+                export function afterLoad() {
+                    rev.daemon('monitor', monitor);
+                    rev.ui('button', { text: 'ready' });
+                    rev.ui.button.setOnClick(clicked);
+                }
+                export default function() {}"#,
+            &root.join("entry.js").to_string_lossy(),
+            WsConnection::disconnected_for_test(),
+            SessionControl::standalone(),
+            publisher,
+        )
+        .await
+        .unwrap();
+        let controls = HostControls {
+            mouse: Rc::new(RefCell::new(NoopMouse)),
+            window: Rc::new(NoopWindow),
+            actions_paused: crate::app::ActionGate::default(),
+        };
+        let mut background = Box::pin(session.drive_background(controls.clone()));
+        session.run_after_load(controls.clone()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if GlobalState.get("__background_imported_value") == Some(serde_json::json!(42)) {
+                    break;
+                }
+                tokio::select! {
+                    _ = &mut background => panic!("background service stopped unexpectedly"),
+                    _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                }
+            }
+        }).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if snapshots.borrow().elements[0].events.iter().any(|event| matches!(event, ScriptUiEventKind::Click)) {
+                    break;
+                }
+                tokio::select! {
+                    _ = &mut background => panic!("background service stopped unexpectedly"),
+                    _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                }
+            }
+        }).await.unwrap();
+        let snapshot = snapshots.borrow().clone();
+        tokio::select! {
+            _ = &mut background => panic!("background service stopped unexpectedly"),
+            result = session.dispatch_ui_event(ScriptUiEvent {
+                session_id: snapshot.session_id.unwrap(),
+                element_id: "button".to_owned(),
+                instance_id: snapshot.elements[0].instance_id,
+                events_version: snapshot.elements[0].events_version,
+                event: ScriptUiEventKind::Click,
+            }, controls.clone()) => result.unwrap(),
+        }
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if snapshots.borrow().elements[0].text == "42" {
+                    break;
+                }
+                tokio::select! {
+                    _ = &mut background => panic!("background service stopped unexpectedly"),
+                    _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                }
+            }
+        }).await.unwrap();
+        session.terminate();
+        tokio::time::timeout(Duration::from_secs(1), background).await.unwrap();
+        GlobalState.delete("__background_imported_value");
+        std::fs::remove_file(root.join("dependency.js")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn two_runtime_daemon_retirement_keeps_latest_replacement_and_releases_after_rejection() {
         let session = ScriptSession::new(r#"
             export function afterLoad() {

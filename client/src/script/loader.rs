@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     hash::{Hash, Hasher},
     path::{Component, Path, PathBuf},
     rc::Rc,
@@ -196,6 +196,48 @@ impl ScriptModules {
                 ..CodegenOptions::default()
             })
             .build(&program);
+        let generated_record = Parser::new(&allocator, &generated.code, SourceType::mjs()).parse();
+        let mut local_names = generated_record
+            .module_record
+            .import_entries
+            .iter()
+            .map(|entry| entry.local_name.name.to_string())
+            .collect::<HashSet<_>>();
+        let private_token = format!("{STATIC_IMPORT_PREFIX}{}", Uuid::new_v4());
+        let mut exported_bindings = Vec::new();
+        for entry in generated_record.module_record.local_export_entries {
+            let Some(local_name) = entry.local_name.name() else {
+                continue;
+            };
+            let local_name = local_name.to_string();
+            if !local_names.insert(local_name.clone()) {
+                continue;
+            }
+            let Some(export_name) = (match entry.export_name {
+                oxc::syntax::module_record::ExportExportName::Name(name) => Some(name.name.to_string()),
+                oxc::syntax::module_record::ExportExportName::Default(_) => Some("default".to_owned()),
+                oxc::syntax::module_record::ExportExportName::Null => None,
+            }) else {
+                continue;
+            };
+            exported_bindings.push(format!(
+                "{} as {local_name}",
+                serde_json::to_string(&export_name).map_err(|error| error.to_string())?
+            ));
+        }
+        if !exported_bindings.is_empty() {
+            declarations.push(format!(
+                "import {{ {} }} from {};",
+                exported_bindings.join(", "),
+                serde_json::to_string(&private_token).map_err(|error| error.to_string())?
+            ));
+            edges.push(StaticEdge {
+                owner_module_id: name.to_owned(),
+                original_specifier: String::new(),
+                token: private_token,
+                resolved_id: Some(name.to_owned()),
+            });
+        }
         self.modules.borrow_mut().insert(
             name.to_owned(),
             CompiledModule {
