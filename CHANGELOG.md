@@ -4,7 +4,7 @@ Detailed development history of the Revolution Idle plugin, Rust client, bridge 
 
 ## Coverage
 
-- Covers all 409 commits from the first commit on **September 1, 2026** through **October 3, 2026**.
+- Covers all 414 commits from the first commit on **September 1, 2026** through **October 4, 2026**.
 - Entries use commit author dates in UTC+08:00 and appear newest first. Related commits are grouped by behavior; merge commits and planning updates are not counted as separate feature deliveries.
 - The repository has no release tags at this snapshot, so these are development dates rather than versioned releases. Commit links identify the supporting changes.
 - Automation scripts are included through September 25, when `scripts/` was removed from version control. Later local script changes are outside this history.
@@ -26,6 +26,23 @@ Detailed development history of the Revolution Idle plugin, Rust client, bridge 
 | October 1 | Callable daemon registration, removal through null arguments for daemon and UI entries, and named mutexes shared across runtimes. |
 | October 2 | Asynchronous UI state-change callbacks and generic UI state declarations. |
 | October 3 | Renamable screen-ownership labels, relative UI edge measurements, and same-file exports for transferred callbacks. |
+| October 4 | Native BigNum values throughout the script API, callable BigNum construction, and explicit UI state-update callbacks. |
+
+## 2026-10-04
+
+### Native BigNum values
+
+- Added Rust-backed `BigNum` globally in both QuickJS runtimes, available before module evaluation without an import. Arithmetic uses an integer mantissa with 16 significant decimal digits and an arbitrary-size integer exponent; excess precision is truncated toward zero. Added arithmetic, comparisons, conversions, shared `ZERO`/`ONE` constants, and a configurable per-runtime `NEGLIGIBLE_THRESHOLD`. Updated the numeric API documentation and added native regression coverage. ([4f18147](https://github.com/tnthung/rev-idle/commit/4f18147), [9dbf4e8](https://github.com/tnthung/rev-idle/commit/9dbf4e8))
+- Changed `rev.state()` and `rev.slot()` to return native `BigNum` instances for game `BigDouble` values, including nested fields and collection entries. Bridge responses carry explicit type metadata so ordinary numeric-looking strings remain strings. Shared globals and UI state reconstruct native instances in the receiving runtime; ordinary JSON serialization still produces scientific strings. Replaced `RevJsonValue` with `RevValue` and added bridge, serialization, and cross-runtime regression coverage. ([4f18147](https://github.com/tnthung/rev-idle/commit/4f18147))
+- Added TypeScript call signatures and regression coverage for both `BigNum(value)` and `new BigNum(value)`, including `.map(BigNum)`. Omitting the value or passing `undefined` now constructs zero; extra callback arguments are ignored. ([9af40ba](https://github.com/tnthung/rev-idle/commit/9af40ba))
+
+### State reference viewer
+
+- Changed **Copy struct** to emit `BigNum` for `BigDouble` fields and collection elements, replacing the previous `string` type and `// BigDouble` annotation. Regenerated the state reference and updated clipboard regression coverage. ([4f18147](https://github.com/tnthung/rev-idle/commit/4f18147))
+
+### UI state callbacks
+
+- Added chainable `element.update()` to queue a background state-update callback even when the state has not changed. It returns the same element and does nothing when no handler is registered. Updated declarations, usage documentation, and regression coverage. ([949a660](https://github.com/tnthung/rev-idle/commit/949a660))
 
 ## 2026-10-03
 
