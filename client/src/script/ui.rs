@@ -199,10 +199,10 @@ fn validate_field(field: &str, value: &JsonValue) -> Result<JsonValue, String> {
     }
 }
 
-fn split_states(value: &JsonValue, big_nums: &[Vec<String>], colors: &[Vec<String>], has_states_prefix: bool) -> Result<BTreeMap<String, EncodedValue>, String> {
+fn split_states(value: &JsonValue, big_nums: &[Vec<String>], colors: &[Vec<String>], rects: &[Vec<String>], has_states_prefix: bool) -> Result<BTreeMap<String, EncodedValue>, String> {
     let fields = value.as_object().ok_or_else(|| "states must be an object".to_owned())?;
-    let mut states = fields.iter().map(|(key, value)| (key.clone(), EncodedValue { value: value.clone(), big_nums: Vec::new(), colors: Vec::new() })).collect::<BTreeMap<_, _>>();
-    for (paths, color) in [(big_nums, false), (colors, true)] {
+    let mut states = fields.iter().map(|(key, value)| (key.clone(), EncodedValue { value: value.clone(), big_nums: Vec::new(), colors: Vec::new(), rects: Vec::new() })).collect::<BTreeMap<_, _>>();
+    for (paths, kind) in [(big_nums, "bigNum"), (colors, "color"), (rects, "rect")] {
         for path in paths {
             let (key, offset) = if has_states_prefix {
                 if path.first().map(String::as_str) != Some("states") { return Err("Invalid native metadata in UI attributes".to_owned()); }
@@ -211,7 +211,8 @@ fn split_states(value: &JsonValue, big_nums: &[Vec<String>], colors: &[Vec<Strin
                 (path.first().ok_or_else(|| "Invalid native value path".to_owned())?, 1)
             };
             let state = states.get_mut(key).ok_or_else(|| "Native value path does not resolve to a state".to_owned())?;
-            if color { state.colors.push(path[offset..].to_vec()); }
+            if kind == "rect" { state.rects.push(path[offset..].to_vec()); }
+            else if kind == "color" { state.colors.push(path[offset..].to_vec()); }
             else { state.big_nums.push(path[offset..].to_vec()); }
         }
     }
@@ -220,7 +221,7 @@ fn split_states(value: &JsonValue, big_nums: &[Vec<String>], colors: &[Vec<Strin
 
 fn validate_definition(json: &str) -> Result<(Map<String, JsonValue>, BTreeMap<String, EncodedValue>, bool), String> {
     let encoded: EncodedValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
-    if encoded.big_nums.iter().chain(&encoded.colors).any(|path| path.first().map(String::as_str) != Some("states")) {
+    if encoded.big_nums.iter().chain(&encoded.colors).chain(&encoded.rects).any(|path| path.first().map(String::as_str) != Some("states")) {
         return Err("Native values are not valid UI attributes".to_owned());
     }
     let value = encoded.value;
@@ -233,7 +234,7 @@ fn validate_definition(json: &str) -> Result<(Map<String, JsonValue>, BTreeMap<S
     for (field, value) in fields {
         if field == "states" {
             has_states = true;
-            states = split_states(value, &encoded.big_nums, &encoded.colors, true)?;
+            states = split_states(value, &encoded.big_nums, &encoded.colors, &encoded.rects, true)?;
         } else {
             values.insert(field.clone(), validate_field(field, value)?);
         }
@@ -388,9 +389,10 @@ impl ScriptUiState {
             let mut states = Map::new();
             let mut big_nums = Vec::new();
             let mut colors = Vec::new();
+            let mut rects = Vec::new();
             for (key, encoded) in &element.states {
                 states.insert(key.clone(), encoded.value.clone());
-                for (paths, result) in [(&encoded.big_nums, &mut big_nums), (&encoded.colors, &mut colors)] {
+                for (paths, result) in [(&encoded.big_nums, &mut big_nums), (&encoded.colors, &mut colors), (&encoded.rects, &mut rects)] {
                     for path in paths {
                         let mut full_path = vec!["states".to_owned(), key.clone()];
                         full_path.extend(path.iter().cloned());
@@ -398,7 +400,7 @@ impl ScriptUiState {
                     }
                 }
             }
-            EncodedValue { value: serde_json::json!({ "values": element.values, "states": states }), big_nums, colors }
+            EncodedValue { value: serde_json::json!({ "values": element.values, "states": states }), big_nums, colors, rects }
         };
         serde_json::to_string(&encoded)
             .map_err(|error| error.to_string())
@@ -457,7 +459,7 @@ impl ScriptUiState {
         self.check_live()?;
         let encoded: EncodedValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
         if field == "states" {
-            let states = split_states(&encoded.value, &encoded.big_nums, &encoded.colors, false)?;
+            let states = split_states(&encoded.value, &encoded.big_nums, &encoded.colors, &encoded.rects, false)?;
             let changed = {
                 let mut store = self.store.borrow_mut();
                 let index = Self::element_index(&store, name, Some(instance))?;
@@ -472,7 +474,7 @@ impl ScriptUiState {
             };
             return Ok(changed);
         }
-        if !encoded.big_nums.is_empty() || !encoded.colors.is_empty() {
+        if !encoded.big_nums.is_empty() || !encoded.colors.is_empty() || !encoded.rects.is_empty() {
             return Err("Native values are not valid UI attributes".to_owned());
         }
         let value = validate_field(field, &encoded.value)?;
@@ -720,6 +722,15 @@ impl ScriptUiBindings {
                     "height" => measured.height.into_js(&ctx)?,
                     "globalX" => match measured.global_x { Some(value) => value.into_js(&ctx)?, None => Value::new_null(ctx.clone()) },
                     "globalY" => match measured.global_y { Some(value) => value.into_js(&ctx)?, None => Value::new_null(ctx.clone()) },
+                    "rect" => match (measured.global_x, measured.global_y) {
+                        (Some([left, right]), Some([top, bottom])) => {
+                            if [top, left, right, bottom].iter().any(|value| !value.is_finite()) {
+                                return Err(Exception::throw_message(&ctx, "invalid UI position"));
+                            }
+                            super::rect::Rect { top, left, right, bottom, width: measured.width, height: measured.height }.into_js(&ctx)?
+                        }
+                        _ => Value::new_null(ctx.clone()),
+                    },
                     _ => return Err(Exception::throw_message(&ctx, "invalid UI measurement")),
                 })
             }

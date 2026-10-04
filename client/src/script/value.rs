@@ -1,4 +1,4 @@
-use rquickjs::{Class, Ctx, Exception, Function, Object, Value};
+use rquickjs::{function::Rest, Class, Ctx, Exception, Function, Object, Value};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -9,6 +9,8 @@ pub(super) struct EncodedValue {
     pub(super) big_nums: Vec<Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) colors: Vec<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) rects: Vec<Vec<String>>,
 }
 
 #[cfg(test)]
@@ -125,10 +127,47 @@ mod tests {
             assert!(ctx.eval::<bool, _>("codec.decode(stored).color.equals(color)").catch(&ctx).unwrap());
         });
     }
+
+    #[test]
+    fn typed_rects_preserve_fields_and_reject_invalid_metadata() {
+        let runtime = rquickjs::Runtime::new().unwrap();
+        let context = rquickjs::Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            super::super::rect::install(&ctx).unwrap();
+            ctx.globals().set("codec", super::codec(&ctx).unwrap()).unwrap();
+            ctx.eval::<(), _>(r#"
+                const rect = new Rect();
+                Object.assign(rect, { top: 1.25, left: 2.5, right: -3.75, bottom: -4.5, width: 5.25, height: 6.5 });
+                const plain = rect.toJSON();
+                const copy = codec.decode(codec.encode({ rect, nested: [rect], plain, rects: [[]] }));
+                if (!(copy.rect instanceof Rect) || !(copy.nested[0] instanceof Rect)) throw Error('native rect lost');
+                if (JSON.stringify(copy.rect) !== JSON.stringify(rect) || copy.plain instanceof Rect) throw Error('rect fields changed');
+                copy.rect.top = 10;
+                if (rect.top !== 1.25 || copy.nested[0].top !== 1.25) throw Error('rect copies share storage');
+                if (JSON.stringify(copy.rects) !== '[[]]') throw Error('ordinary metadata key changed');
+                if (!(codec.decode(codec.encode(rect)) instanceof Rect)) throw Error('root rect lost');
+                if (!(codec.decode(codec.encode({ toJSON() { return rect; } })) instanceof Rect)) throw Error('toJSON rect lost');
+                for (const envelope of [
+                    { value: plain, rects: null }, { value: plain, rects: [[], []] },
+                    { value: {}, rects: [[]] }, { value: { ...plain, top: '1' }, rects: [[]] },
+                    { value: { ...plain, bottom: null }, rects: [[]] },
+                    { value: plain, rects: [['missing']] }, { value: [plain], rects: [['00']] },
+                ]) {
+                    let threw = false;
+                    try { codec.decode(JSON.stringify(envelope)); } catch { threw = true; }
+                    if (!threw) throw Error('invalid Rect metadata accepted');
+                }
+                rect.width = Infinity;
+                let threw = false;
+                try { codec.encode(rect); } catch { threw = true; }
+                if (!threw) throw Error('nonfinite Rect storage accepted');
+            "#).catch(&ctx).unwrap();
+        });
+    }
 }
 
 pub(super) fn codec<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
-    ctx.eval::<Function, _>(include_str!("value.js"))?.call((
+    ctx.eval::<Function, _>(include_str!("value.js"))?.call((Rest(vec![
         Function::new(ctx.clone(), |value: Value<'js>| {
             value.as_object().is_some_and(|object| object.instance_of::<super::bignum::BigNum>())
         })?,
@@ -145,5 +184,21 @@ pub(super) fn codec<'js>(ctx: &Ctx<'js>) -> rquickjs::Result<Object<'js>> {
             let channels = channels.try_into().map_err(|_| Exception::throw_type(&ctx, "Expected four Color channels"))?;
             Class::instance(ctx, super::color::Color::from_channels(channels)?)
         })?,
-    ))
+        Function::new(ctx.clone(), |value: Value<'js>| {
+            value.as_object().is_some_and(|object| object.instance_of::<super::rect::Rect>())
+        })?,
+        Function::new(ctx.clone(), |ctx: Ctx<'js>, value: Class<'js, super::rect::Rect>| {
+            let rect = value.borrow();
+            if [rect.top, rect.left, rect.right, rect.bottom, rect.width, rect.height].iter().any(|value| !value.is_finite()) {
+                return Err(Exception::throw_type(&ctx, "Stored Rect fields must be finite numbers"));
+            }
+            rect.to_json(ctx)
+        })?,
+        Function::new(ctx.clone(), |ctx: Ctx<'js>, fields: Object<'js>| {
+            Class::instance(ctx, super::rect::Rect {
+                top: fields.get("top")?, left: fields.get("left")?, right: fields.get("right")?,
+                bottom: fields.get("bottom")?, width: fields.get("width")?, height: fields.get("height")?,
+            })
+        })?,
+    ]),))
 }

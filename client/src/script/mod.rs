@@ -8,6 +8,7 @@ mod ownership;
 mod mutex;
 mod bignum;
 mod color;
+mod rect;
 mod value;
 mod lifecycle;
 mod ui;

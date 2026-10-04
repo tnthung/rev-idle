@@ -44,7 +44,7 @@
     const encode = codec.encode;
 
     function checkObject(value, field, allowed) {
-        if (value === null || typeof value !== 'object' || isArray(value)) throw new NativeTypeError(`Invalid ${field}`);
+        if (value === null || typeof value !== 'object' || isArray(value) || codec.isNative(value)) throw new NativeTypeError(`Invalid ${field}`);
         const result = create(null), fields = ownKeys(value);
         for (let i = 0; i < fields.length; i++) {
             const key = fields[i];
@@ -196,7 +196,7 @@
         };
         const dimension = kind => async relativeTo => {
             ensureLive();
-            const position = kind === 'globalX' || kind === 'globalY';
+            const position = kind === 'globalX' || kind === 'globalY' || kind === 'rect';
             if (position && relativeTo !== undefined && typeof relativeTo !== 'string') throw new NativeTypeError('relativeTo must be a string');
             const value = await host.measure(name, instance, kind, position ? relativeTo ?? '' : '');
             if (position && value === null) throw new NativeError('UI element basedOn or relativeTo target is inaccessible');
@@ -207,6 +207,7 @@
             height: dimension('height'),
             globalXPos: dimension('globalX'),
             globalYPos: dimension('globalY'),
+            getRect: dimension('rect'),
         };
         const proxy = new NativeProxy(create(null), {
             get(_, field) {

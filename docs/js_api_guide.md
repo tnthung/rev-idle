@@ -141,7 +141,7 @@ Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before 
 | `rev.stop()` | `void` | Terminates the entire session and interrupts JavaScript. |
 | `rev.daemon(name: string, fn: RevDaemon \| null)` | `void` | Registers or replaces a background daemon; `null` retires it. Use `name in rev.daemon` for presence checks. |
 | `rev.ui` | callable element registry | `rev.ui(name, attrs)` creates or patches session-owned UI; `rev.ui(name, null)` removes it. Named entries are read-only; element fields remain assignable. |
-| `rev.global` | property proxy | Stores process-local values, including BigNum and Color, shared by all script sessions. |
+| `rev.global` | property proxy | Stores process-local values, including BigNum, Color, and Rect, shared by all script sessions. |
 
 ### Custom UI
 
@@ -181,7 +181,7 @@ Use `alignX: "left" | "center" | "right"` and `alignY: "top" | "center" | "botto
 
 Set `font` to an installed system font family name, for example `font: "Consolas"` or `rev.ui.label.font = "Arial"`. Names are case-insensitive. Empty, omitted, or deleted `font` uses the default overlay font; unavailable fonts fall back with a warning. Set `size` to an integer pixel size from `1` through `2,147,483,647`; omitted or deleted `size` defaults to `14`. Font and size changes recalculate automatic width and height.
 
-Use `await rev.ui.label.width()` and `await rev.ui.label.height()` to read the calculated box size in pixels, including padding and excluding border. Position reads return `[major, minor]` in pixels: `globalXPos(relativeTo?)` returns `[elementLeft - referenceLeft, elementRight - referenceRight]`, and `globalYPos(relativeTo?)` returns `[elementTop - referenceTop, elementBottom - referenceBottom]`. Supply an exact Unity hierarchy path as `relativeTo` to measure against that RectTransform's screen-space rectangle; omitted or empty uses the viewport. Minor offsets are negative when the element's right/bottom edge is inside the reference rectangle, matching negative `posX`/`posY` positioning. For example, an element 50 pixels wide starting 20 pixels from the left of a 300-pixel-wide reference returns `[20, -230]`. Each call waits for Unity to apply the changes made before the call; later changes may also be included. Reads work while paused or hidden by F6. They reject if the element is deleted before the read completes, the session stops, or the bridge disconnects or times out. Position reads also reject while `basedOn` or the supplied `relativeTo` is inaccessible; width and height remain available. These host-provided methods are required on live elements and are absent only from definition attributes; guard a possibly missing registry read or use `!` after a presence check.
+Use `await rev.ui.label.width()` and `await rev.ui.label.height()` to read the calculated box size in pixels, including padding and excluding border. Position reads return `[major, minor]` in pixels: `globalXPos(relativeTo?)` returns `[elementLeft - referenceLeft, elementRight - referenceRight]`, and `globalYPos(relativeTo?)` returns `[elementTop - referenceTop, elementBottom - referenceBottom]`. `getRect(relativeTo?)` returns a native `Rect` with `top`, `left`, `right`, `bottom`, `width`, and `height` from one measurement. Its edges use the same offsets as the position tuples. Supply an exact Unity hierarchy path as `relativeTo` to measure against that RectTransform's screen-space rectangle; omitted or empty uses the viewport. Minor offsets are negative when the element's right/bottom edge is inside the reference rectangle, matching negative `posX`/`posY` positioning. For example, an element 50 pixels wide starting 20 pixels from the left of a 300-pixel-wide reference returns `[20, -230]`. Each call waits for Unity to apply the changes made before the call; later changes may also be included. Reads work while paused or hidden by F6. They reject if the element is deleted before the read completes, the session stops, or the bridge disconnects or times out. Position and rectangle reads also reject while `basedOn` or the supplied `relativeTo` is inaccessible; width and height remain available. These host-provided methods are required on live elements and are absent only from definition attributes; guard a possibly missing registry read or use `!` after a presence check.
 
 Set `hidden` to `true` to hide one element without deleting it. Hidden elements keep accepting script updates and retain their calculated `width()` and `height()`, but do not receive pointer events. Other elements are not repositioned automatically; scripts can inspect `hidden` and manage dependent positions explicitly. Omitted or deleted `hidden` defaults to `false`.
 
@@ -216,7 +216,7 @@ Load [two_runtime_demo.ts](../scripts/two_runtime_demo.ts) for a focused runtime
 
 `rev.daemon("name", fn)` registers or replaces a background function. A daemon runs once after installation and does not restart automatically when it returns or rejects. `rev.daemon("name", null)` retires the name; a running invocation may finish, and a replacement waits for its returned promise. Removing an absent name is a no-op. Assignment and deletion of daemon properties throw. Use `"name" in rev.daemon` for presence checks or `Object.keys(rev.daemon)` to list names; reading a daemon property throws. Daemons have `this === undefined`, so use `rev.global` or element `states` for communication. A daemon failure is reported with its name and does not stop the session.
 
-Element definitions may include `states` containing JSON values and native `BigNum` or `Color` instances. Live elements always expose a state map, and callback `this` is the element with that map. State values are copied through the host; nested objects need reassignment after mutation. Patching an existing name preserves its state map unless `states` is supplied, in which case the map is replaced as a whole. Deleting an element and creating it again produces a new element and state map. Use `rev.global` for other shared values. Native `BigNum` and `Color` instances are reconstructed in the receiving runtime; functions, promises, other class prototypes, and original lexical closures do not cross runtimes.
+Element definitions may include `states` containing JSON values and native `BigNum`, `Color`, or `Rect` instances. Live elements always expose a state map, and callback `this` is the element with that map. State values are copied through the host; nested objects need reassignment after mutation. Patching an existing name preserves its state map unless `states` is supplied, in which case the map is replaced as a whole. Deleting an element and creating it again produces a new element and state map. Use `rev.global` for other shared values. Native `BigNum`, `Color`, and `Rect` instances are reconstructed in the receiving runtime; functions, promises, other class prototypes, and original lexical closures do not cross runtimes.
 
 `setOnStateUpdate(fn)` queues one background callback for each changed direct state assignment or deletion, including replacing or clearing the whole map and patching `states` through `rev.ui(name, attrs)`. Structurally equal writes and deleting absent keys do nothing. Call `element.update()` to queue one callback regardless of state changes; it returns the same element for chaining and does nothing when no state update handler is registered. Creating an element or registering the callback does not invoke it. Changes from either runtime are queued even while the handler is installing. Each invocation reads the current state through `this.states`; rapid changes can therefore produce several calls that see the same latest values. Callbacks may overlap after an `await`, and writing a changed state inside the callback queues another call. Clearing or replacing the handler, or removing the element, discards its queued calls; invocations already running may finish. Errors are reported without stopping the session.
 
@@ -338,7 +338,7 @@ console.log(rev.global.runs, Object.keys(rev.global));
 delete rev.global.runs;
 ```
 
-Reads return a fresh value, with native `BigNum` and `Color` instances reconstructed at any depth. Missing keys return `undefined`. Writes preserve JSON values and native instances; assigning `undefined` stores `null`. Cycles and `BigInt` cannot be stored, and other prototypes or methods are not preserved. The `in` operator, `Object.keys`, and `delete` work. Assign a nested object back after editing it.
+Reads return a fresh value, with native `BigNum`, `Color`, and `Rect` instances reconstructed at any depth. Missing keys return `undefined`. Writes preserve JSON values and native instances; assigning `undefined` stores `null`. Cycles and `BigInt` cannot be stored, and other prototypes or methods are not preserved. The `in` operator, `Object.keys`, and `delete` work. Assign a nested object back after editing it.
 
 ## `console`
 
@@ -602,6 +602,16 @@ rev.global.panelColor = border;
 | `toHex(includeAlpha = false)`, `toCss(format = "rgb")`, `toString()` | Format a color. CSS formats are `rgb`, `hsl`, `hwb`, and `hex`; `toString()` includes hex alpha when translucent. |
 
 Use `toRgb()` for UI color attributes. Ordinary JSON serialization produces a rounded RGBA array; `rev.global` and UI `states` preserve native instances and unrounded channels.
+
+### `Rect`
+
+`Rect` is a Rust-backed QuickJS class available globally in both runtimes. `new Rect()` initializes its six writable numeric fields to zero. `getRect()` returns an independent measurement snapshot; changing its fields does not move or resize the UI element. Ordinary JSON serialization produces an object with those six fields. `rev.global` and UI `states` preserve native instances and require finite field values.
+
+```ts
+const panel = rev.ui("panel", { text: "Ready" });
+const rect = await panel.getRect();
+console.log(rect.top, rect.left, rect.right, rect.bottom, rect.width, rect.height);
+```
 
 ## Errors and cancellation
 

@@ -263,6 +263,7 @@ impl ScriptBackground {
                 ctx.globals().set("console", console)?;
                 super::bignum::install(&ctx)?;
                 super::color::install(&ctx)?;
+                super::rect::install(&ctx)?;
                 let codec = super::value::codec(&ctx)?;
                 let freeze: Function = ctx.eval("Object.freeze")?;
                 let ownership_prototype = Class::<super::ownership::ScreenOwnership>::prototype(&ctx)?.unwrap();
@@ -845,13 +846,17 @@ mod tests {
         let session = ScriptSession::new(r#"
             const initial = new BigNum('1e300');
             const color = Color.fromRgb(100.5, 40.25, 20.75, 127.5);
+            const rect = new Rect();
+            rect.top = 10.25; rect.right = -30.5;
             export function afterLoad() {
-                rev.global.__native_bignum_exchange = { amount: initial, text: '1e300', color };
+                rev.global.__native_bignum_exchange = { amount: initial, text: '1e300', color, rect };
                 rev.daemon('nativeBigNum', function() {
                     const value = rev.global.__native_bignum_exchange;
                     if (!(value.amount instanceof BigNum) || value.text !== '1e300') throw Error('background value');
                     if (!(value.color instanceof Color) || !value.color.equals(Color.fromRgb(100.5, 40.25, 20.75, 127.5))) throw Error('background color');
-                    rev.global.__native_bignum_exchange = { amount: value.amount.mul(2), text: value.text, color: value.color.brightness(2) };
+                    if (!(value.rect instanceof Rect) || value.rect.top !== 10.25 || value.rect.right !== -30.5) throw Error('background rect');
+                    value.rect.top = 20.5;
+                    rev.global.__native_bignum_exchange = { amount: value.amount.mul(2), text: value.text, color: value.color.brightness(2), rect: value.rect };
                     rev.global.__native_bignum_done = true;
                 });
             }
@@ -860,6 +865,7 @@ mod tests {
                 if (!(value.amount instanceof BigNum) || !value.amount.eq(new BigNum('2e300'))) throw Error('main value');
                 if (value.text !== '1e300') throw Error('string changed');
                 if (!(value.color instanceof Color) || !value.color.equals(Color.fromRgb(201, 80.5, 41.5, 127.5))) throw Error('main color');
+                if (!(value.rect instanceof Rect) || value.rect.top !== 20.5 || value.rect.right !== -30.5 || rect.top !== 10.25) throw Error('main rect');
                 delete rev.global.__native_bignum_exchange;
                 delete rev.global.__native_bignum_done;
             }

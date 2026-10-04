@@ -589,6 +589,7 @@ fn check(source: &str) {
     context.with(|ctx| {
         crate::script::bignum::install(&ctx).unwrap();
         crate::script::color::install(&ctx).unwrap();
+        crate::script::rect::install(&ctx).unwrap();
         let transfer = std::rc::Rc::new(crate::script::transfer::FunctionTransfer::new(&ctx).unwrap());
         let codec = crate::script::value::codec(&ctx).unwrap();
         let keep_transfer = transfer.clone();
@@ -676,13 +677,77 @@ fn ui_dimensions_are_readonly_methods_not_definition_fields() {
         ui('a', { text: 'measure me' });
         assert(typeof ui.a.width === 'function' && typeof ui.a.height === 'function');
         assert(typeof ui.a.globalXPos === 'function' && typeof ui.a.globalYPos === 'function');
+        assert(typeof ui.a.getRect === 'function' && 'getRect' in ui.a);
         assert(ui.a.width === ui.a.width && 'width' in ui.a && 'height' in ui.a);
         assert(Object.keys(ui.a).join() === 'text,states');
         throws(() => ui.a.width = () => 10);
         throws(() => delete ui.a.height);
+        throws(() => ui.a.getRect = () => ({}));
+        throws(() => delete ui.a.getRect);
         throws(() => ui('b', { width: () => 10 }));
+        throws(() => ui('b', { getRect: () => ({}) }));
         assert(snapshots.at(-1).length === 1);
     "#);
+}
+
+#[tokio::test]
+async fn ui_get_rect_returns_one_native_snapshot_and_rejects_inaccessible_targets() {
+    use crate::script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession};
+    use futures_util::{SinkExt, StreamExt};
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(Rc::new(RefCell::new(Vec::new()))))) as SharedMouse).into();
+    controls.actions_paused.set_paused(true);
+    let (address, server) = crate::bridge::test_support::raw_server().await;
+    let connection = crate::bridge::WsConnection::connect_for_test(address, Duration::from_millis(10), Duration::from_secs(1));
+    let publisher = crate::bridge::ScriptUiPublisher::default();
+    let snapshots = publisher.subscribe();
+    let session = ScriptSession::new_with_connection_and_control(r#"
+        const empty = new Rect();
+        if ([empty.top, empty.left, empty.right, empty.bottom, empty.width, empty.height].some(value => value !== 0)) throw Error('Rect defaults');
+        export default async function() {
+            const element = rev.ui('a', { hidden: true });
+            try { await element.getRect(1); throw Error('invalid relativeTo accepted'); }
+            catch (error) { if (!error.message.includes('relativeTo must be a string')) throw error; }
+            const first = await element.getRect();
+            if (!(first instanceof Rect) || JSON.stringify(first) !== '{"top":654.25,"left":321.5,"right":-1475,"bottom":-398.5,"width":123.5,"height":27.25}') throw Error('viewport rect');
+            first.top = 10; first.left = 20; first.right = -30; first.bottom = -40; first.width = 50; first.height = 60;
+            if (JSON.stringify(first) !== '{"top":10,"left":20,"right":-30,"bottom":-40,"width":50,"height":60}') throw Error('Rect fields are not writable');
+            const second = await element.getRect('');
+            if (second === first || second.top !== 654.25 || second.width !== 123.5) throw Error('measurement is not a snapshot');
+            const relative = await element.getRect('scene:7/Reference[0]');
+            if (!(relative instanceof Rect) || JSON.stringify(relative) !== '{"top":30,"left":20,"right":-230,"bottom":-170,"width":50,"height":50}') throw Error('relative rect');
+            for (const path of ['scene:missing', '']) {
+                try { await element.getRect(path); throw Error('inaccessible target accepted'); }
+                catch (error) { if (!error.message.includes('basedOn or relativeTo target is inaccessible')) throw error; }
+            }
+        }
+    "#, "ui-get-rect.js", connection.clone(), SessionControl::standalone(), publisher).await.unwrap();
+    let mut socket = server.await.unwrap();
+    let peer = async {
+        for index in 0..5 {
+            let message = tokio::time::timeout(Duration::from_secs(2), socket.next()).await.unwrap().unwrap().unwrap();
+            let envelope: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+            assert_eq!(envelope["type"], "ScriptUiMeasureReq");
+            let snapshot = snapshots.borrow();
+            assert_eq!(envelope["payload"]["sessionId"], snapshot.session_id.unwrap().to_string());
+            assert_eq!(envelope["payload"]["revision"], snapshot.revision);
+            assert_eq!(envelope["payload"]["instanceId"], snapshot.elements[0].instance_id.to_string());
+            assert_eq!(envelope["payload"]["relativeTo"], match index { 2 => "scene:7/Reference[0]", 3 => "scene:missing", _ => "" });
+            drop(snapshot);
+            socket.send(Message::Text(serde_json::json!({
+                "uuid": envelope["uuid"], "type": "ScriptUiMeasureRes", "payload": {
+                    "width": if index == 2 { 50.0 } else { 123.5 }, "height": if index == 2 { 50.0 } else { 27.25 },
+                    "globalX": match index { 2 => serde_json::json!([20.0, -230.0]), 3 => serde_json::Value::Null, _ => serde_json::json!([321.5, -1475.0]) },
+                    "globalY": match index { 2 => serde_json::json!([30.0, -170.0]), 4 => serde_json::Value::Null, _ => serde_json::json!([654.25, -398.5]) },
+                },
+            }).to_string().into())).await.unwrap();
+        }
+    };
+    let (result, ()) = tokio::join!(session.invoke((), controls), peer);
+    result.unwrap();
+    connection.shutdown().await;
 }
 
 #[tokio::test]
@@ -1078,6 +1143,28 @@ fn ui_registry_native_bignum_state_reads_replacements_and_callback_surface() {
         assert(collision.states.states.eq(new BigNum('5.5')));
         collision.states = { states: new BigNum('6.5') };
         assert(collision.states.states.eq(new BigNum('6.5')));
+    "#);
+}
+
+#[test]
+fn ui_registry_native_rect_state_reads_and_replacements() {
+    check(r#"
+        const rect = new Rect();
+        rect.top = 1.25; rect.right = -30.5;
+        const element = ui('a', { states: { value: rect } });
+        assert(element.states.value instanceof Rect && element.states.value.top === 1.25);
+        assert(Object.getOwnPropertyDescriptor(element.states, 'value').value.right === -30.5);
+        const copy = element.states.value;
+        copy.top = 2.5;
+        assert(element.states.value.top === 1.25);
+        element.states.value = copy;
+        assert(element.states.value.top === 2.5);
+        ui('a', { states: { nested: [rect, BigNum.ONE] } });
+        assert(element.states.nested[0] instanceof Rect && element.states.nested[1].eq(1));
+        element.states = { value: copy };
+        assert(element.states.value instanceof Rect && element.states.value.top === 2.5);
+        throws(() => ui('invalid', { padding: rect }));
+        throws(() => element.padding = rect);
     "#);
 }
 

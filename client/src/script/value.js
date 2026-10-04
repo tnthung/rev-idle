@@ -1,4 +1,4 @@
-(function (isBigNum, decimal, createBigNum, isColor, channels, createColor) {
+(function (isBigNum, decimal, createBigNum, isColor, channels, createColor, isRect, rectFields, createRect) {
     const { parse, stringify } = JSON;
     const { keys, create, hasOwn } = Object;
     const { isArray } = Array;
@@ -12,9 +12,9 @@
     const NativeWeakSet = WeakSet, NativeSet = Set, NativeTypeError = TypeError;
 
     return {
-        isNative: value => isBigNum(value) || isColor(value),
+        isNative: value => isBigNum(value) || isColor(value) || isRect(value),
         encode(value) {
-            const bigNums = [], colors = [], seen = new NativeWeakSet();
+            const bigNums = [], colors = [], rects = [], seen = new NativeWeakSet();
             function visit(value, path, key) {
                 if (isBigNum(value)) {
                     bigNums.push(path);
@@ -23,6 +23,10 @@
                 if (isColor(value)) {
                     colors.push(path);
                     return channels(value);
+                }
+                if (isRect(value)) {
+                    rects.push(path);
+                    return rectFields(value);
                 }
                 if (value !== null && (typeof value === 'object' || typeof value === 'bigint')) {
                     const toJSON = value.toJSON;
@@ -35,6 +39,10 @@
                 if (isColor(value)) {
                     colors.push(path);
                     return channels(value);
+                }
+                if (isRect(value)) {
+                    rects.push(path);
+                    return rectFields(value);
                 }
                 if (value === null || typeof value !== 'object') return value;
                 switch (apply(tag, value, [])) {
@@ -59,22 +67,23 @@
             }
             const json = stringify(visit(value === undefined ? null : value, [], ''));
             if (json === undefined) throw new NativeTypeError('Value is not JSON serializable');
-            for (const paths of [bigNums, colors]) {
+            for (const paths of [bigNums, colors, rects]) {
                 apply(sort, paths, [(left, right) => {
                     const a = stringify(left), b = stringify(right);
                     return a < b ? -1 : a > b ? 1 : 0;
                 }]);
             }
-            return stringify({ value: parse(json), bigNums, colors });
+            return stringify({ value: parse(json), bigNums, colors, rects });
         },
         decode(json) {
             const envelope = parse(json);
             if (envelope === null || typeof envelope !== 'object' || !hasOwn(envelope, 'value')
                 || (envelope.bigNums !== undefined && !isArray(envelope.bigNums))
-                || (envelope.colors !== undefined && !isArray(envelope.colors)))
+                || (envelope.colors !== undefined && !isArray(envelope.colors))
+                || (envelope.rects !== undefined && !isArray(envelope.rects)))
                 throw new NativeTypeError('Invalid typed value envelope');
             const seen = new NativeSet();
-            for (const [paths, color] of [[envelope.bigNums ?? [], false], [envelope.colors ?? [], true]]) {
+            for (const [paths, kind] of [[envelope.bigNums ?? [], 'bigNum'], [envelope.colors ?? [], 'color'], [envelope.rects ?? [], 'rect']]) {
                 for (const path of paths) {
                     if (!isArray(path) || path.some(part => typeof part !== 'string') || seen.has(stringify(path)))
                         throw new NativeTypeError('Invalid or duplicate native value path');
@@ -87,7 +96,13 @@
                             throw new NativeTypeError('Native value path does not resolve to a value');
                         field = part;
                     }
-                    if (color) {
+                    if (kind === 'rect') {
+                        const value = parent[field];
+                        if (value === null || typeof value !== 'object' || isArray(value)
+                            || ['top', 'left', 'right', 'bottom', 'width', 'height'].some(key => !hasOwn(value, key) || typeof value[key] !== 'number' || !isFinite(value[key])))
+                            throw new NativeTypeError('Rect path must identify six numeric fields');
+                        parent[field] = createRect(value);
+                    } else if (kind === 'color') {
                         if (!isArray(parent[field]) || parent[field].length !== 4
                             || parent[field].some(channel => typeof channel !== 'number' || !isFinite(channel) || channel < 0 || channel > 255))
                             throw new NativeTypeError('Color path must identify RGBA channels');

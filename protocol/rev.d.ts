@@ -1,6 +1,6 @@
 
 
-type RevValue = null | boolean | number | string | BigNum | Color | RevValue[] | { [key: string]: RevValue };
+type RevValue = null | boolean | number | string | BigNum | Color | Rect | RevValue[] | { [key: string]: RevValue };
 type RevDaemon = (this: void) => void | Promise<void>;
 
 /** Host-provided scientific decimal with 16 significant digits, truncated toward zero. */
@@ -125,6 +125,20 @@ declare class Color {
   toJSON(): [number, number, number, number];
 }
 
+/** Host-provided mutable rectangle snapshot in pixels. New instances have all fields set to zero. */
+declare class Rect {
+  constructor();
+  top: number;
+  left: number;
+  /** Signed offset from the reference's right edge; negative inside the reference. */
+  right: number;
+  /** Signed offset from the reference's bottom edge; negative inside the reference. */
+  bottom: number;
+  width: number;
+  height: number;
+  toJSON(): { top: number; left: number; right: number; bottom: number; width: number; height: number };
+}
+
 type RevUiColor = readonly [number, number, number] | readonly [number, number, number, number];
 type RevUiLength = number | Readonly<{ min?: number; max?: number }>;
 type RevUiBorder = Readonly<{ thickness?: number; color?: RevUiColor }>;
@@ -185,6 +199,8 @@ type RevUiElement<S extends RevUiBaseStates | undefined = RevUiBaseStates> = Rev
   globalXPos(relativeTo?: string): Promise<[major: number, minor: number]>;
   /** Provided by the host on live elements. Pixel offsets from the top/bottom edges of relativeTo, or the viewport when omitted or empty. */
   globalYPos(relativeTo?: string): Promise<[major: number, minor: number]>;
+  /** Measures all six rectangle fields in one snapshot, relative to an exact Unity hierarchy path or the viewport when omitted or empty. Rejects when basedOn or relativeTo is inaccessible. */
+  getRect(relativeTo?: string): Promise<Rect>;
 };
 
 type RevUiCallback<S extends RevUiBaseStates | undefined = RevUiBaseStates> = (this: RevUiElement<S>) => void | Promise<void>;
