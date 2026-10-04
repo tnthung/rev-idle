@@ -328,8 +328,8 @@ impl BigNum {
 #[rquickjs::methods]
 impl BigNum {
     #[qjs(constructor)]
-    pub fn new<'js>(ctx: Ctx<'js>, value: Value<'js>) -> Result<Self> {
-        Self::from_js_value(&ctx, value)
+    pub fn new<'js>(ctx: Ctx<'js>, value: Opt<Value<'js>>) -> Result<Self> {
+        Self::from_js_value(&ctx, value.0.filter(|value| !value.is_undefined()).unwrap_or_else(|| Value::new_int(ctx.clone(), 0)))
     }
 
     #[qjs(get, rename = "mantissa")]
@@ -635,6 +635,36 @@ mod tests {
                 })()"#,
             ).unwrap();
             assert_eq!(threshold, "e15:9223372036854775808");
+        });
+    }
+
+    #[test]
+    fn javascript_constructor_is_callable_and_accepts_map_arguments() {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            install(&ctx).unwrap();
+            assert!(ctx.eval::<bool, _>(r#"(() => {
+                const values = [1, '2', 3n, new BigNum(4)].map(BigNum);
+                return values.every(value => value instanceof BigNum && value.constructor === BigNum)
+                    && BigNum.sum(...values).toBigInt() === 10n
+                    && BigNum('1.13e2').toBigInt() === 113n
+                    && new BigNum('1.13e2').toBigInt() === 113n
+                    && BigNum(BigNum.ONE) !== BigNum.ONE;
+            })()"#).unwrap());
+        });
+    }
+
+    #[test]
+    fn javascript_constructor_defaults_to_zero() {
+        let runtime = Runtime::new().unwrap();
+        let context = Context::full(&runtime).unwrap();
+        context.with(|ctx| {
+            install(&ctx).unwrap();
+            assert!(ctx.eval::<bool, _>(r#"(() => {
+                return BigNum().isZero && new BigNum().isZero
+                    && BigNum(undefined).isZero && new BigNum(undefined).isZero;
+            })()"#).unwrap());
         });
     }
 

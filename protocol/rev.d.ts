@@ -34,7 +34,8 @@ interface BigNum {
 }
 
 interface BigNumConstructor {
-  new(value: number | string | bigint | BigNum): BigNum;
+  (value?: number | string | bigint | BigNum): BigNum;
+  new(value?: number | string | bigint | BigNum): BigNum;
   NEGLIGIBLE_THRESHOLD: number;
   readonly ZERO: BigNum;
   readonly ONE: BigNum;

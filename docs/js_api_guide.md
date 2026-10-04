@@ -548,6 +548,8 @@ import {
 
 `BigNum` is a Rust-backed QuickJS class available globally before module evaluation in both runtimes. It stores a normalized integer mantissa scaled by `10^15` and an arbitrary-size integer scientific exponent in Rust. The constructor accepts another `BigNum`, a number, a scientific/plain numeric string, or a bigint. Unsupported types and invalid strings throw. Values retain one integer mantissa digit and up to 15 fractional digits; excess digits are truncated toward zero.
 
+Both `BigNum(value)` and `new BigNum(value)` return native instances. Omitting the value or passing `undefined` creates zero. Extra arguments are ignored, so `[1, "2", 3n].map(BigNum)` creates an array of `BigNum` instances directly.
+
 | Member | Contract |
 | --- | --- |
 | `BigNum.ZERO` | Shared zero instance. Treat it as read-only. |
