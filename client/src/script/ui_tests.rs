@@ -338,21 +338,22 @@ async fn ui_update_triggers_callbacks_without_state_changes() {
 }
 
 #[tokio::test]
-async fn ui_native_numbers_preserve_callback_types_and_value_equality() {
+async fn ui_native_values_preserve_callback_types_and_value_equality() {
     use crate::{bridge::{ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
     use std::{cell::RefCell, rc::Rc, time::Duration};
     let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(Rc::new(RefCell::new(Vec::new()))))) as SharedMouse).into();
     let session = ScriptSession::new_with_connection_and_control(r#"
         export async function afterLoad() {
             rev.global.__nativeUiUpdates = 0;
-            const element = rev.ui('native', { states: { amount: { a: '1e3', b: BigNum.ONE } } });
+            const element = rev.ui('native', { states: { amount: { a: '1e3', b: BigNum.ONE, color: [1, 2, 3, 4] } } });
             element.setOnStateUpdate(function() {
                 if (!(this.states.amount.a instanceof BigNum) || !this.states.amount.a.eq(1000)) throw Error('native callback state lost');
+                if (!(this.states.amount.color instanceof Color) || !this.states.amount.color.equals(Color.fromRgb(1.25, 2.5, 3.75, 4))) throw Error('native callback color lost');
                 rev.global.__nativeUiUpdates++;
             });
-            element.states.amount = { a: new BigNum(1000), b: BigNum.ONE };
-            element.states.amount = { b: BigNum.ONE, a: new BigNum(1000) };
-            element.states = { amount: { a: new BigNum(1000), b: BigNum.ONE } };
+            element.states.amount = { a: new BigNum(1000), b: BigNum.ONE, color: Color.fromRgb(1.25, 2.5, 3.75, 4) };
+            element.states.amount = { color: Color.fromRgb(1.25, 2.5, 3.75, 4), b: BigNum.ONE, a: new BigNum(1000) };
+            element.states = { amount: { a: new BigNum(1000), b: BigNum.ONE, color: Color.fromRgb(1.25, 2.5, 3.75, 4) } };
             while (rev.global.__nativeUiUpdates < 1) await rev.sleep(1);
             await rev.sleep(20);
             if (rev.global.__nativeUiUpdates !== 1) throw Error('native equality changed');
@@ -587,6 +588,7 @@ fn check(source: &str) {
     let background = std::rc::Rc::new(crate::script::background::BackgroundRegistry::new(session.clone()));
     context.with(|ctx| {
         crate::script::bignum::install(&ctx).unwrap();
+        crate::script::color::install(&ctx).unwrap();
         let transfer = std::rc::Rc::new(crate::script::transfer::FunctionTransfer::new(&ctx).unwrap());
         let codec = crate::script::value::codec(&ctx).unwrap();
         let keep_transfer = transfer.clone();
@@ -1076,6 +1078,27 @@ fn ui_registry_native_bignum_state_reads_replacements_and_callback_surface() {
         assert(collision.states.states.eq(new BigNum('5.5')));
         collision.states = { states: new BigNum('6.5') };
         assert(collision.states.states.eq(new BigNum('6.5')));
+    "#);
+}
+
+#[test]
+fn ui_registry_native_color_state_reads_replacements_and_callback_surface() {
+    check(r#"
+        const first = Color.fromRgb(1.25, 2.5, 3.75, 4);
+        const element = ui('a', { states: { value: first } });
+        assert(element.states.value instanceof Color && element.states.value.equals(first));
+        assert(Object.getOwnPropertyDescriptor(element.states, 'value').value.equals(first));
+        element.states.value = first.brightness(2);
+        assert(element.states.value.equals(Color.fromRgb(2.5, 5, 7.5, 4)));
+        ui('a', { states: { nested: [first, BigNum.ONE] } });
+        assert(element.states.nested[0].equals(first) && element.states.nested[1].eq(1));
+        const collision = ui('collision', { states: { states: first } });
+        collision.states.states = first.brightness(2);
+        assert(collision.states.states.equals(Color.fromRgb(2.5, 5, 7.5, 4)));
+        collision.states = { states: first };
+        assert(collision.states.states.equals(first));
+        element.color = first.toRgb();
+        assert(element.color.join() === '1,3,4,4');
     "#);
 }
 

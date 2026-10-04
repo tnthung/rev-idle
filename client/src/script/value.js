@@ -1,7 +1,8 @@
-(function (isBigNum, decimal, createBigNum) {
+(function (isBigNum, decimal, createBigNum, isColor, channels, createColor) {
     const { parse, stringify } = JSON;
     const { keys, create, hasOwn } = Object;
     const { isArray } = Array;
+    const { isFinite } = Number;
     const sort = Array.prototype.sort;
     const { apply } = Reflect;
     const tag = Object.prototype.toString;
@@ -11,13 +12,17 @@
     const NativeWeakSet = WeakSet, NativeSet = Set, NativeTypeError = TypeError;
 
     return {
-        isBigNum,
+        isNative: value => isBigNum(value) || isColor(value),
         encode(value) {
-            const bigNums = [], seen = new NativeWeakSet();
+            const bigNums = [], colors = [], seen = new NativeWeakSet();
             function visit(value, path, key) {
                 if (isBigNum(value)) {
                     bigNums.push(path);
                     return decimal(value);
+                }
+                if (isColor(value)) {
+                    colors.push(path);
+                    return channels(value);
                 }
                 if (value !== null && (typeof value === 'object' || typeof value === 'bigint')) {
                     const toJSON = value.toJSON;
@@ -26,6 +31,10 @@
                 if (isBigNum(value)) {
                     bigNums.push(path);
                     return decimal(value);
+                }
+                if (isColor(value)) {
+                    colors.push(path);
+                    return channels(value);
                 }
                 if (value === null || typeof value !== 'object') return value;
                 switch (apply(tag, value, [])) {
@@ -50,32 +59,44 @@
             }
             const json = stringify(visit(value === undefined ? null : value, [], ''));
             if (json === undefined) throw new NativeTypeError('Value is not JSON serializable');
-            apply(sort, bigNums, [(left, right) => {
-                const a = stringify(left), b = stringify(right);
-                return a < b ? -1 : a > b ? 1 : 0;
-            }]);
-            return stringify({ value: parse(json), bigNums });
+            for (const paths of [bigNums, colors]) {
+                apply(sort, paths, [(left, right) => {
+                    const a = stringify(left), b = stringify(right);
+                    return a < b ? -1 : a > b ? 1 : 0;
+                }]);
+            }
+            return stringify({ value: parse(json), bigNums, colors });
         },
         decode(json) {
             const envelope = parse(json);
             if (envelope === null || typeof envelope !== 'object' || !hasOwn(envelope, 'value')
-                || (envelope.bigNums !== undefined && !isArray(envelope.bigNums)))
+                || (envelope.bigNums !== undefined && !isArray(envelope.bigNums))
+                || (envelope.colors !== undefined && !isArray(envelope.colors)))
                 throw new NativeTypeError('Invalid typed value envelope');
-            const paths = envelope.bigNums ?? [], seen = new NativeSet();
-            for (const path of paths) {
-                if (!isArray(path) || path.some(part => typeof part !== 'string') || seen.has(stringify(path)))
-                    throw new NativeTypeError('Invalid or duplicate BigNum path');
-                seen.add(stringify(path));
-                let parent = envelope, field = 'value';
-                for (const part of path) {
-                    parent = parent[field];
-                    if (parent === null || typeof parent !== 'object' || !hasOwn(parent, part)
-                        || (isArray(parent) && !/^(0|[1-9][0-9]*)$/.test(part)))
-                        throw new NativeTypeError('BigNum path does not resolve to a value');
-                    field = part;
+            const seen = new NativeSet();
+            for (const [paths, color] of [[envelope.bigNums ?? [], false], [envelope.colors ?? [], true]]) {
+                for (const path of paths) {
+                    if (!isArray(path) || path.some(part => typeof part !== 'string') || seen.has(stringify(path)))
+                        throw new NativeTypeError('Invalid or duplicate native value path');
+                    seen.add(stringify(path));
+                    let parent = envelope, field = 'value';
+                    for (const part of path) {
+                        parent = parent[field];
+                        if (parent === null || typeof parent !== 'object' || !hasOwn(parent, part)
+                            || (isArray(parent) && !/^(0|[1-9][0-9]*)$/.test(part)))
+                            throw new NativeTypeError('Native value path does not resolve to a value');
+                        field = part;
+                    }
+                    if (color) {
+                        if (!isArray(parent[field]) || parent[field].length !== 4
+                            || parent[field].some(channel => typeof channel !== 'number' || !isFinite(channel) || channel < 0 || channel > 255))
+                            throw new NativeTypeError('Color path must identify RGBA channels');
+                        parent[field] = createColor(parent[field]);
+                    } else {
+                        if (typeof parent[field] !== 'string') throw new NativeTypeError('BigNum path must identify a string');
+                        parent[field] = createBigNum(parent[field]);
+                    }
                 }
-                if (typeof parent[field] !== 'string') throw new NativeTypeError('BigNum path must identify a string');
-                parent[field] = createBigNum(parent[field]);
             }
             return envelope.value;
         },

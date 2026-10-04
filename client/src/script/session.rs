@@ -197,6 +197,7 @@ impl ScriptSession {
                     )?;
                     ctx.globals().set("console", console)?;
                     super::bignum::install(&ctx)?;
+                    super::color::install(&ctx)?;
 
                     let codec = super::value::codec(&ctx)?;
                     let freeze: Function = ctx.eval("Object.freeze")?;

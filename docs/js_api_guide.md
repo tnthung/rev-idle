@@ -141,7 +141,7 @@ Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before 
 | `rev.stop()` | `void` | Terminates the entire session and interrupts JavaScript. |
 | `rev.daemon(name: string, fn: RevDaemon \| null)` | `void` | Registers or replaces a background daemon; `null` retires it. Use `name in rev.daemon` for presence checks. |
 | `rev.ui` | callable element registry | `rev.ui(name, attrs)` creates or patches session-owned UI; `rev.ui(name, null)` removes it. Named entries are read-only; element fields remain assignable. |
-| `rev.global` | property proxy | Stores process-local values, including BigNum, shared by all script sessions. |
+| `rev.global` | property proxy | Stores process-local values, including BigNum and Color, shared by all script sessions. |
 
 ### Custom UI
 
@@ -216,7 +216,7 @@ Load [two_runtime_demo.ts](../scripts/two_runtime_demo.ts) for a focused runtime
 
 `rev.daemon("name", fn)` registers or replaces a background function. A daemon runs once after installation and does not restart automatically when it returns or rejects. `rev.daemon("name", null)` retires the name; a running invocation may finish, and a replacement waits for its returned promise. Removing an absent name is a no-op. Assignment and deletion of daemon properties throw. Use `"name" in rev.daemon` for presence checks or `Object.keys(rev.daemon)` to list names; reading a daemon property throws. Daemons have `this === undefined`, so use `rev.global` or element `states` for communication. A daemon failure is reported with its name and does not stop the session.
 
-Element definitions may include `states` containing JSON values and native `BigNum` instances. Live elements always expose a state map, and callback `this` is the element with that map. State values are copied through the host; nested objects need reassignment after mutation. Patching an existing name preserves its state map unless `states` is supplied, in which case the map is replaced as a whole. Deleting an element and creating it again produces a new element and state map. Use `rev.global` for other shared values. Native `BigNum` instances are reconstructed in the receiving runtime; functions, promises, other class prototypes, and original lexical closures do not cross runtimes.
+Element definitions may include `states` containing JSON values and native `BigNum` or `Color` instances. Live elements always expose a state map, and callback `this` is the element with that map. State values are copied through the host; nested objects need reassignment after mutation. Patching an existing name preserves its state map unless `states` is supplied, in which case the map is replaced as a whole. Deleting an element and creating it again produces a new element and state map. Use `rev.global` for other shared values. Native `BigNum` and `Color` instances are reconstructed in the receiving runtime; functions, promises, other class prototypes, and original lexical closures do not cross runtimes.
 
 `setOnStateUpdate(fn)` queues one background callback for each changed direct state assignment or deletion, including replacing or clearing the whole map and patching `states` through `rev.ui(name, attrs)`. Structurally equal writes and deleting absent keys do nothing. Call `element.update()` to queue one callback regardless of state changes; it returns the same element for chaining and does nothing when no state update handler is registered. Creating an element or registering the callback does not invoke it. Changes from either runtime are queued even while the handler is installing. Each invocation reads the current state through `this.states`; rapid changes can therefore produce several calls that see the same latest values. Callbacks may overlap after an `await`, and writing a changed state inside the callback queues another call. Clearing or replacing the handler, or removing the element, discards its queued calls; invocations already running may finish. Errors are reported without stopping the session.
 
@@ -338,7 +338,7 @@ console.log(rev.global.runs, Object.keys(rev.global));
 delete rev.global.runs;
 ```
 
-Reads return a fresh value, with native `BigNum` instances reconstructed at any depth. Missing keys return `undefined`. Writes preserve JSON values and native `BigNum` instances; assigning `undefined` stores `null`. Cycles and `BigInt` cannot be stored, and other prototypes or methods are not preserved. The `in` operator, `Object.keys`, and `delete` work. Assign a nested object back after editing it.
+Reads return a fresh value, with native `BigNum` and `Color` instances reconstructed at any depth. Missing keys return `undefined`. Writes preserve JSON values and native instances; assigning `undefined` stores `null`. Cycles and `BigInt` cannot be stored, and other prototypes or methods are not preserved. The `in` operator, `Object.keys`, and `delete` work. Assign a nested object back after editing it.
 
 ## `console`
 
@@ -574,6 +574,34 @@ Both `BigNum(value)` and `new BigNum(value)` return native instances. Omitting t
 | `toBigInt()` | Floors the stored decimal value directly to a bigint. |
 
 Mantissa arithmetic and comparisons use integer operations. Precision is bounded to 16 significant decimal digits, and division truncates excess digits. Number inputs already carry JavaScript's floating-point precision limits; use strings or bigints when the supplied digits must be preserved. The numeric `mantissa`, `toNumber()`, and `toInt()` results remain subject to JavaScript number precision; `toBigInt()` preserves the integer represented by the stored decimal value.
+
+### `Color`
+
+`Color` is an immutable Rust-backed QuickJS class available globally before module evaluation in both runtimes, with no import. Create colors through its static factories. RGB/RGBA components use bytes (`0..255`); normalized RGB, linear RGB, HSL, HSV, HWB, CMYK, and opacity use `0..1`, with hue in degrees. Finite channels are clamped, hue wraps at 360, and invalid inputs throw. Fractional channels are retained internally; adjustment and blending methods return new colors.
+
+```ts
+const border = Color.fromRgb([80, 140, 220]).brightness(0.7).opacity(0.8);
+rev.ui("panel", { border: { thickness: 2, color: border.toRgb() } });
+rev.global.panelColor = border;
+```
+
+| Member | Contract |
+| --- | --- |
+| `Color.fromRgb`, `fromNormalizedRgb`, `fromLinearRgb`, `fromHsl`, `fromHsv`, `fromHwb`, `fromCmyk` | Accept separate components or a tuple, with optional alpha defaulting to opaque. CMYK uses a simple device conversion without a printer profile. |
+| `Color.fromHex(hex)` | Accepts 3, 4, 6, or 8 hex digits, with an optional `#`. |
+| `Color.fromCss(css)` | Parses hex, `transparent`, RGB/RGBA, HSL/HSLA, and HWB, including supported comma and space syntax and hue units. |
+| `brightness`, `contrast`, `gamma`, `rotateHue`, `saturation`, `lighten`, `darken` | Adjust channels, contrast, gamma, hue, or HSL saturation/lightness. |
+| `opacity(value)`, `fade(factor)` | Set normalized opacity or scale existing alpha. |
+| `mix`, `tint`, `shade`, `invert`, `grayscale`, `sepia` | Interpolate RGBA channels or apply a color effect. |
+| `blend(source, mode = "normal", amount = 1)`, `over(background)` | Blend with source-over alpha compositing. Modes are declared by `ColorBlendMode`. |
+| `luminance()`, `contrastRatio(other)`, `textColor()` | Compute relative sRGB luminance/contrast or choose black or white text. Composite alpha with `over()` first when needed. |
+| `equals(other, tolerance = 0)` | Compare all four unrounded byte channels. |
+| `complement`, `analogous`, `triadic`, `tetradic`, `splitComplementary` | Generate hue-based color harmonies. |
+| `toRgb()`, `toRbg()`, `toJSON()` | Return rounded RGBA bytes. `toRbg()` is a compatibility alias. |
+| `toNormalizedRgb`, `toLinearRgb`, `toHsl`, `toHsv`, `toHwb`, `toCmyk` | Return component tuples with normalized alpha. |
+| `toHex(includeAlpha = false)`, `toCss(format = "rgb")`, `toString()` | Format a color. CSS formats are `rgb`, `hsl`, `hwb`, and `hex`; `toString()` includes hex alpha when translucent. |
+
+Use `toRgb()` for UI color attributes. Ordinary JSON serialization produces a rounded RGBA array; `rev.global` and UI `states` preserve native instances and unrounded channels.
 
 ## Errors and cancellation
 

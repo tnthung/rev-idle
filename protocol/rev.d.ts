@@ -1,6 +1,6 @@
 
 
-type RevValue = null | boolean | number | string | BigNum | RevValue[] | { [key: string]: RevValue };
+type RevValue = null | boolean | number | string | BigNum | Color | RevValue[] | { [key: string]: RevValue };
 type RevDaemon = (this: void) => void | Promise<void>;
 
 /** Host-provided scientific decimal with 16 significant digits, truncated toward zero. */
@@ -44,6 +44,86 @@ interface BigNumConstructor {
   sum(...values: BigNum[]): BigNum;
 }
 declare var BigNum: BigNumConstructor;
+
+type ColorBlendMode = "normal" | "multiply" | "screen" | "overlay" | "darken" | "lighten"
+  | "color-dodge" | "color-burn" | "hard-light" | "soft-light" | "difference" | "exclusion";
+
+/**
+ * Host-provided immutable sRGB color. RGB/RGBA channels use 0..255; other components and alpha use 0..1.
+ * HSL, HSV, and HWB hue uses degrees and wraps at 360. Finite channels are clamped.
+ * Numeric factories accept separate components or a tuple; conversions retain alpha.
+ */
+declare class Color {
+  private constructor();
+  static fromRgb(rgb: readonly [number, number, number, number?]): Color;
+  static fromRgb(r: number, g: number, b: number, a?: number): Color;
+  static fromNormalizedRgb(rgb: readonly [number, number, number, number?]): Color;
+  static fromNormalizedRgb(r: number, g: number, b: number, a?: number): Color;
+  static fromLinearRgb(rgb: readonly [number, number, number, number?]): Color;
+  static fromLinearRgb(r: number, g: number, b: number, a?: number): Color;
+  static fromHsl(hsl: readonly [number, number, number, number?]): Color;
+  static fromHsl(h: number, s: number, l: number, a?: number): Color;
+  static fromHsv(hsv: readonly [number, number, number, number?]): Color;
+  static fromHsv(h: number, s: number, v: number, a?: number): Color;
+  static fromHwb(hwb: readonly [number, number, number, number?]): Color;
+  static fromHwb(h: number, w: number, b: number, a?: number): Color;
+  /** Simple device CMYK conversion; no printer profile is applied. */
+  static fromCmyk(cmyk: readonly [number, number, number, number, number?]): Color;
+  static fromCmyk(c: number, m: number, y: number, k: number, a?: number): Color;
+  static fromHex(hex: string): Color;
+  /** Parse hex, transparent, rgb()/rgba(), hsl()/hsla(), or hwb(). */
+  static fromCss(css: string): Color;
+  /** Scale RGB channels while preserving alpha. */
+  brightness(factor: number): Color;
+  /** Scale channel distance from middle gray; 1 keeps the original contrast. */
+  contrast(factor: number): Color;
+  /** Apply a positive gamma; values above 1 brighten the color. */
+  gamma(value: number): Color;
+  rotateHue(degrees: number): Color;
+  /** Scale HSL saturation; 0 removes saturation and 1 keeps it. */
+  saturation(factor: number): Color;
+  /** Add to HSL lightness, using a 0..1 amount. */
+  lighten(amount?: number): Color;
+  darken(amount?: number): Color;
+  /** Set opacity from 0 (transparent) to 1 (opaque). */
+  opacity(value: number): Color;
+  /** Scale the existing alpha. */
+  fade(factor: number): Color;
+  /** Interpolate RGBA channels; amount 0 keeps this color and 1 selects the other. */
+  mix(other: Color, amount?: number): Color;
+  tint(amount?: number): Color;
+  shade(amount?: number): Color;
+  invert(amount?: number): Color;
+  /** Convert to gray with the same relative luminance. */
+  grayscale(amount?: number): Color;
+  sepia(amount?: number): Color;
+  /** Blend a source over this color, including alpha compositing. */
+  blend(source: Color, mode?: ColorBlendMode, amount?: number): Color;
+  over(background: Color): Color;
+  /** Relative sRGB luminance; composite with over() first to account for alpha. */
+  luminance(): number;
+  contrastRatio(other: Color): number;
+  /** Choose the black or white text color with greater contrast. */
+  textColor(): Color;
+  equals(other: Color, tolerance?: number): boolean;
+  complement(): Color;
+  analogous(angle?: number): [Color, Color, Color];
+  triadic(): [Color, Color, Color];
+  tetradic(): [Color, Color, Color, Color];
+  splitComplementary(angle?: number): [Color, Color, Color];
+  toRgb(): [number, number, number, number];
+  toRbg(): [number, number, number, number];
+  toNormalizedRgb(): [number, number, number, number];
+  toLinearRgb(): [number, number, number, number];
+  toHsv(): [number, number, number, number];
+  toHsl(): [number, number, number, number];
+  toHwb(): [number, number, number, number];
+  toCmyk(): [number, number, number, number, number];
+  toHex(includeAlpha?: boolean): string;
+  toCss(format?: "rgb" | "hsl" | "hwb" | "hex"): string;
+  toString(): string;
+  toJSON(): [number, number, number, number];
+}
 
 type RevUiColor = readonly [number, number, number] | readonly [number, number, number, number];
 type RevUiLength = number | Readonly<{ min?: number; max?: number }>;
@@ -187,7 +267,7 @@ interface Rev {
   sleep(milliseconds: number): Promise<void>;
   /** Terminates this session, interrupts JavaScript, and skips beforeStop. */
   stop(): void;
-  /** Process-wide value storage, preserving BigNum instances. Missing keys read as undefined; assigning undefined stores null. */
+  /** Process-wide value storage, preserving BigNum and Color instances. Missing keys read as undefined; assigning undefined stores null. */
   global: Record<string, RevValue | undefined>;
 }
 

@@ -199,26 +199,29 @@ fn validate_field(field: &str, value: &JsonValue) -> Result<JsonValue, String> {
     }
 }
 
-fn split_states(value: &JsonValue, paths: &[Vec<String>], has_states_prefix: bool) -> Result<BTreeMap<String, EncodedValue>, String> {
+fn split_states(value: &JsonValue, big_nums: &[Vec<String>], colors: &[Vec<String>], has_states_prefix: bool) -> Result<BTreeMap<String, EncodedValue>, String> {
     let fields = value.as_object().ok_or_else(|| "states must be an object".to_owned())?;
-    let mut states = fields.iter().map(|(key, value)| (key.clone(), EncodedValue { value: value.clone(), big_nums: Vec::new() })).collect::<BTreeMap<_, _>>();
-    for path in paths {
-        let (key, offset) = if has_states_prefix {
-            if path.first().map(String::as_str) != Some("states") { return Err("Invalid native metadata in UI attributes".to_owned()); }
-            (path.get(1).ok_or_else(|| "Invalid BigNum path".to_owned())?, 2)
-        } else {
-            (path.first().ok_or_else(|| "Invalid BigNum path".to_owned())?, 1)
-        };
-        let state = states.get_mut(key).ok_or_else(|| "BigNum path does not resolve to a state".to_owned())?;
-        state.big_nums.push(path[offset..].to_vec());
+    let mut states = fields.iter().map(|(key, value)| (key.clone(), EncodedValue { value: value.clone(), big_nums: Vec::new(), colors: Vec::new() })).collect::<BTreeMap<_, _>>();
+    for (paths, color) in [(big_nums, false), (colors, true)] {
+        for path in paths {
+            let (key, offset) = if has_states_prefix {
+                if path.first().map(String::as_str) != Some("states") { return Err("Invalid native metadata in UI attributes".to_owned()); }
+                (path.get(1).ok_or_else(|| "Invalid native value path".to_owned())?, 2)
+            } else {
+                (path.first().ok_or_else(|| "Invalid native value path".to_owned())?, 1)
+            };
+            let state = states.get_mut(key).ok_or_else(|| "Native value path does not resolve to a state".to_owned())?;
+            if color { state.colors.push(path[offset..].to_vec()); }
+            else { state.big_nums.push(path[offset..].to_vec()); }
+        }
     }
     Ok(states)
 }
 
 fn validate_definition(json: &str) -> Result<(Map<String, JsonValue>, BTreeMap<String, EncodedValue>, bool), String> {
     let encoded: EncodedValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
-    if encoded.big_nums.iter().any(|path| path.first().map(String::as_str) != Some("states")) {
-        return Err("Native BigNum values are not valid UI attributes".to_owned());
+    if encoded.big_nums.iter().chain(&encoded.colors).any(|path| path.first().map(String::as_str) != Some("states")) {
+        return Err("Native values are not valid UI attributes".to_owned());
     }
     let value = encoded.value;
     let fields = value
@@ -230,7 +233,7 @@ fn validate_definition(json: &str) -> Result<(Map<String, JsonValue>, BTreeMap<S
     for (field, value) in fields {
         if field == "states" {
             has_states = true;
-            states = split_states(value, &encoded.big_nums, true)?;
+            states = split_states(value, &encoded.big_nums, &encoded.colors, true)?;
         } else {
             values.insert(field.clone(), validate_field(field, value)?);
         }
@@ -384,15 +387,18 @@ impl ScriptUiState {
             let element = &store.elements[Self::element_index(&store, name, Some(instance))?];
             let mut states = Map::new();
             let mut big_nums = Vec::new();
+            let mut colors = Vec::new();
             for (key, encoded) in &element.states {
                 states.insert(key.clone(), encoded.value.clone());
-                for path in &encoded.big_nums {
-                    let mut full_path = vec!["states".to_owned(), key.clone()];
-                    full_path.extend(path.iter().cloned());
-                    big_nums.push(full_path);
+                for (paths, result) in [(&encoded.big_nums, &mut big_nums), (&encoded.colors, &mut colors)] {
+                    for path in paths {
+                        let mut full_path = vec!["states".to_owned(), key.clone()];
+                        full_path.extend(path.iter().cloned());
+                        result.push(full_path);
+                    }
                 }
             }
-            EncodedValue { value: serde_json::json!({ "values": element.values, "states": states }), big_nums }
+            EncodedValue { value: serde_json::json!({ "values": element.values, "states": states }), big_nums, colors }
         };
         serde_json::to_string(&encoded)
             .map_err(|error| error.to_string())
@@ -451,7 +457,7 @@ impl ScriptUiState {
         self.check_live()?;
         let encoded: EncodedValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
         if field == "states" {
-            let states = split_states(&encoded.value, &encoded.big_nums, false)?;
+            let states = split_states(&encoded.value, &encoded.big_nums, &encoded.colors, false)?;
             let changed = {
                 let mut store = self.store.borrow_mut();
                 let index = Self::element_index(&store, name, Some(instance))?;
@@ -466,8 +472,8 @@ impl ScriptUiState {
             };
             return Ok(changed);
         }
-        if !encoded.big_nums.is_empty() {
-            return Err("Native BigNum values are not valid UI attributes".to_owned());
+        if !encoded.big_nums.is_empty() || !encoded.colors.is_empty() {
+            return Err("Native values are not valid UI attributes".to_owned());
         }
         let value = validate_field(field, &encoded.value)?;
         let changed = {
@@ -1009,7 +1015,7 @@ mod tests {
                     handlerStatus: registration => statuses.get(registration),
                     handlerClear: () => {{}},
                 }};
-                const ui = ({}) (host, {{ isBigNum: () => false, encode: value => JSON.stringify({{ value }}), decode: json => JSON.parse(json).value }}).registry;
+                const ui = ({}) (host, {{ isNative: () => false, encode: value => JSON.stringify({{ value }}), decode: json => JSON.parse(json).value }}).registry;
                 ui('button', {{}});
                 const callback = function() {{}};
                 if (ui.button.setOnClick(callback) !== ui.button) throw new Error('setter did not return the element');

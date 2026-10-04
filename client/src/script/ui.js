@@ -18,7 +18,7 @@
     const legacyHandlers = { __proto__: null, onClick: true, onHover: true, onLeave: true, onStateUpdate: true };
 
     function readonly(value, seen = new NativeWeakSet()) {
-        if (codec.isBigNum(value)) return value;
+        if (codec.isNative(value)) return value;
         if (value === null || typeof value !== 'object') return value;
         if (seen.has(value)) throw new NativeTypeError('UI value is not JSON serializable');
         seen.add(value);

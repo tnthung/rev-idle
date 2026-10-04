@@ -7,6 +7,7 @@ mod session;
 mod ownership;
 mod mutex;
 mod bignum;
+mod color;
 mod value;
 mod lifecycle;
 mod ui;
@@ -18,6 +19,9 @@ pub(crate) use worker::ScriptWorker;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod color_tests;
 
 #[cfg(test)]
 mod worker_tests;
