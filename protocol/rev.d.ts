@@ -53,6 +53,8 @@ type RevUiElement<S extends RevUiBaseStates | undefined = RevUiBaseStates> = Rev
   setOnHover(callback: RevUiCallback<S> | null): RevUiElement<S>;
   setOnLeave(callback: RevUiCallback<S> | null): RevUiElement<S>;
   setOnStateUpdate(callback: RevUiCallback<S> | null): RevUiElement<S>;
+  /** Queues a state update callback even when states are unchanged; returns this element. */
+  update(): RevUiElement<S>;
   /** Provided by the host on live elements. Calculated width in pixels, including padding and excluding border. */
   width(): Promise<number>;
   /** Provided by the host on live elements. Calculated height in pixels, including padding and excluding border. */

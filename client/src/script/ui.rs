@@ -643,6 +643,17 @@ impl ScriptUiBindings {
             let instance = Uuid::parse_str(&instance).map_err(|error| ui_error(error.to_string()))?;
             host_state.delete_state(&name, instance, &key).map(|_| ()).map_err(ui_error)
         })?)?;
+        let host_state = state.clone();
+        host.set("update", Function::new(ctx.clone(), move |name: String, instance: String| {
+            host_state.check_live().map_err(ui_error)?;
+            let store = host_state.store.borrow();
+            if let Some(handler) = &store.elements[ScriptUiState::element_index(
+                &store, &name, Some(Uuid::parse_str(&instance).map_err(|error| ui_error(error.to_string()))?),
+            ).map_err(ui_error)?].handlers[event_index(UiEventKind::StateUpdate)] {
+                host_state.state_updates.borrow_mut().push(handler.registration);
+            }
+            Ok::<(), rquickjs::Error>(())
+        })?)?;
         let measure_state = state.clone();
         let measure_session = session.clone();
         let measurements = state.publisher.subscribe();

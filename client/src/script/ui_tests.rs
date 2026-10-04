@@ -294,6 +294,50 @@ async fn ui_state_update_observes_shallow_changes_from_both_runtimes() {
 }
 
 #[tokio::test]
+async fn ui_update_triggers_callbacks_without_state_changes() {
+    use crate::{bridge::{ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+    let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(Rc::new(RefCell::new(Vec::new()))))) as SharedMouse).into();
+    let publisher = ScriptUiPublisher::default();
+    let snapshots = publisher.subscribe();
+    let session = ScriptSession::new_with_connection_and_control(r#"
+        export async function afterLoad() {
+            rev.global.forcedStateUpdateCount = 0;
+            const element = rev.ui('counter', { states: { count: 7 } });
+            if (typeof element.update !== 'function') throw new Error('missing update method');
+            if (element.update() !== element) throw new Error('update must return element');
+            element.setOnStateUpdate(async function() {
+                if (this !== rev.ui.counter || this.states.count !== 7) throw new Error('incorrect callback receiver or state');
+                await rev.sleep(1);
+                rev.global.forcedStateUpdateCount++;
+                this.text = String(rev.global.forcedStateUpdateCount);
+            }).update().update();
+            if (rev.global.forcedStateUpdateCount !== 0) throw new Error('callback ran synchronously');
+            while (rev.global.forcedStateUpdateCount < 2) await rev.sleep(1);
+            rev.daemon('update', function() { rev.ui.counter.update(); });
+            while (rev.global.forcedStateUpdateCount < 3) await rev.sleep(1);
+            element.setOnStateUpdate(null).update();
+            await rev.sleep(20);
+            if (rev.global.forcedStateUpdateCount !== 3) throw new Error('unexpected update count');
+            const update = element.update;
+            rev.ui('counter', null);
+            rev.ui('counter', { text: 'replacement' });
+            let rejected = false;
+            try { update(); } catch (_) { rejected = true; }
+            if (!rejected) throw new Error('stale update method accepted');
+        }
+        export default function() {}
+    "#, "forced_state_update.js", WsConnection::disconnected_for_test(), SessionControl::standalone(), publisher).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            _ = session.drive_background(controls.clone()) => panic!("background service stopped during forced state updates"),
+            result = session.run_after_load(controls) => result.unwrap(),
+        }
+    }).await.unwrap();
+    assert_eq!(snapshots.borrow().elements[0].text, "replacement");
+}
+
+#[tokio::test]
 async fn ui_state_update_discards_cleared_replaced_and_removed_handlers() {
     use crate::{bridge::{ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
     use std::{cell::RefCell, rc::Rc, time::Duration};

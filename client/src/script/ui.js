@@ -193,6 +193,11 @@
         eventMethods.setOnHover = method('hover');
         eventMethods.setOnLeave = method('leave');
         eventMethods.setOnStateUpdate = method('stateUpdate');
+        eventMethods.update = () => {
+            ensureLive();
+            host.update(name, instance);
+            return proxy;
+        };
         const dimension = kind => async relativeTo => {
             ensureLive();
             const position = kind === 'globalX' || kind === 'globalY';
