@@ -7,7 +7,7 @@ Reachable gameplay types: **140**. Properties: **1559**.
 
 There is no implicit or default root. Every path is case-sensitive public property names separated by `.`, and the first segment must always name one of the root keys below -- `gameData` included, the same as any `*Controller` root. Numeric segments index arrays/lists; dictionary segments resolve string, integer, or enum keys. Collections are documented below each property. A keyless request is rejected; selected requests return a flat object keyed by the requested path.
 
-JSON follows the serializer policy: BigDouble and large integers are strings; safe integers, finite floating-point values, booleans, strings, enums, dates, arrays/lists, dictionaries, and gameplay objects use their native JSON forms. Non-finite floating-point values are `"NaN"`, `"Infinity"`, or `"-Infinity"`; repeated collection objects serialize as `null` to preserve indexes.
+Game BigDouble fields return native `BigNum` instances in scripts; Copy struct uses that type. See the [script value contract](../docs/js_api_guide.md#state). On the wire, BigDouble uses scientific strings with explicit type paths. Large integers are decimal strings; safe integers, finite floating-point values, booleans, strings, enums, dates, arrays/lists, dictionaries, and gameplay objects use their native JSON forms. Non-finite floating-point values are `"NaN"`, `"Infinity"`, or `"-Infinity"`; repeated collection objects serialize as `null` to preserve indexes.
 
 ## Nested object references
 

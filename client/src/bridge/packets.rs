@@ -156,6 +156,8 @@ pub(crate) struct StateReq {
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct StateRes {
     pub(crate) value: Value,
+    #[serde(rename = "bigNums", default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) big_nums: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -219,6 +221,8 @@ pub(crate) struct SlotReq {
 #[derive(Debug, Deserialize, Serialize)]
 pub(crate) struct SlotRes {
     pub(crate) value: Value,
+    #[serde(rename = "bigNums", default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) big_nums: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -456,6 +460,7 @@ mod tests {
             (
                 StateRes::TYPE,
                 serde_json::to_value(StateRes {
+                    big_nums: vec![vec!["score".to_owned()]],
                     value: serde_json::json!({
                         "score": "1e3",
                         "enabled": true,
@@ -516,7 +521,7 @@ mod tests {
                 SlotReq::TYPE,
                 serde_json::to_value(SlotReq { path: "scene:1/Canvas[0]/Inventory/3".to_owned() }).unwrap(),
             ),
-            (SlotRes::TYPE, serde_json::to_value(SlotRes { value: serde_json::json!({ "level": 12 }) }).unwrap()),
+            (SlotRes::TYPE, serde_json::to_value(SlotRes { big_nums: Vec::new(), value: serde_json::json!({ "level": 12 }) }).unwrap()),
             (
                 ClickCommand::TYPE,
                 serde_json::to_value(ClickCommand { x: 1200, y: 80, width: 1920, height: 1080 }).unwrap(),

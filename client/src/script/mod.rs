@@ -6,6 +6,8 @@ mod bindings;
 mod session;
 mod ownership;
 mod mutex;
+mod bignum;
+mod value;
 mod lifecycle;
 mod ui;
 mod control;

@@ -3,6 +3,7 @@ use super::{
     bindings::{bridge_error, reject_if_stopped},
     control::SessionControl,
     transfer::FunctionTransfer,
+    value::EncodedValue,
 };
 use crate::bridge::{
     ScriptUiBorderState, ScriptUiCornerState, ScriptUiElementState, ScriptUiEvent,
@@ -13,7 +14,7 @@ use rquickjs::{
     function::Async, Ctx, Exception, Function, IntoJs, Object, Persistent, Value,
 };
 use serde_json::{Map, Value as JsonValue};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -32,7 +33,7 @@ struct UiElement {
     name: String,
     instance: Uuid,
     values: Map<String, JsonValue>,
-    states: Map<String, JsonValue>,
+    states: BTreeMap<String, EncodedValue>,
     events_version: u64,
     handlers: [Option<UiHandler>; 4],
 }
@@ -198,21 +199,43 @@ fn validate_field(field: &str, value: &JsonValue) -> Result<JsonValue, String> {
     }
 }
 
-fn validate_definition(json: &str) -> Result<(Map<String, JsonValue>, Option<Map<String, JsonValue>>), String> {
-    let value: JsonValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
+fn split_states(value: &JsonValue, paths: &[Vec<String>], has_states_prefix: bool) -> Result<BTreeMap<String, EncodedValue>, String> {
+    let fields = value.as_object().ok_or_else(|| "states must be an object".to_owned())?;
+    let mut states = fields.iter().map(|(key, value)| (key.clone(), EncodedValue { value: value.clone(), big_nums: Vec::new() })).collect::<BTreeMap<_, _>>();
+    for path in paths {
+        let (key, offset) = if has_states_prefix {
+            if path.first().map(String::as_str) != Some("states") { return Err("Invalid native metadata in UI attributes".to_owned()); }
+            (path.get(1).ok_or_else(|| "Invalid BigNum path".to_owned())?, 2)
+        } else {
+            (path.first().ok_or_else(|| "Invalid BigNum path".to_owned())?, 1)
+        };
+        let state = states.get_mut(key).ok_or_else(|| "BigNum path does not resolve to a state".to_owned())?;
+        state.big_nums.push(path[offset..].to_vec());
+    }
+    Ok(states)
+}
+
+fn validate_definition(json: &str) -> Result<(Map<String, JsonValue>, BTreeMap<String, EncodedValue>, bool), String> {
+    let encoded: EncodedValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    if encoded.big_nums.iter().any(|path| path.first().map(String::as_str) != Some("states")) {
+        return Err("Native BigNum values are not valid UI attributes".to_owned());
+    }
+    let value = encoded.value;
     let fields = value
         .as_object()
         .ok_or_else(|| "UI definition must be an object".to_owned())?;
     let mut values = Map::new();
-    let mut states = None;
+    let mut states = BTreeMap::new();
+    let mut has_states = false;
     for (field, value) in fields {
         if field == "states" {
-            states = Some(validate_field(field, value)?.as_object().unwrap().clone());
+            has_states = true;
+            states = split_states(value, &encoded.big_nums, true)?;
         } else {
             values.insert(field.clone(), validate_field(field, value)?);
         }
     }
-    Ok((values, states))
+    Ok((values, states, has_states))
 }
 
 fn value_number(values: &Map<String, JsonValue>, field: &str, default: f64) -> f64 {
@@ -356,12 +379,22 @@ impl ScriptUiState {
     }
 
     pub(super) fn record_json(&self, name: &str, instance: Uuid) -> Result<String, String> {
-        let (values, states) = {
+        let encoded = {
             let store = self.store.borrow();
             let element = &store.elements[Self::element_index(&store, name, Some(instance))?];
-            (element.values.clone(), element.states.clone())
+            let mut states = Map::new();
+            let mut big_nums = Vec::new();
+            for (key, encoded) in &element.states {
+                states.insert(key.clone(), encoded.value.clone());
+                for path in &encoded.big_nums {
+                    let mut full_path = vec!["states".to_owned(), key.clone()];
+                    full_path.extend(path.iter().cloned());
+                    big_nums.push(full_path);
+                }
+            }
+            EncodedValue { value: serde_json::json!({ "values": element.values, "states": states }), big_nums }
         };
-        serde_json::to_string(&serde_json::json!({ "values": values, "states": states }))
+        serde_json::to_string(&encoded)
             .map_err(|error| error.to_string())
     }
 
@@ -370,7 +403,7 @@ impl ScriptUiState {
         if name.is_empty() {
             return Err("UI names must be nonempty strings".to_owned());
         }
-        let (values, states) = validate_definition(json)?;
+        let (values, states, has_states) = validate_definition(json)?;
         let (instance, changed) = {
             let mut store = self.store.borrow_mut();
             if let Some(element) = store.elements.iter_mut().find(|element| element.name == name) {
@@ -381,19 +414,17 @@ impl ScriptUiState {
                         changed = true;
                     }
                 }
-                if let Some(states) = states {
-                    if element.states != states {
+                if has_states && element.states != states {
                         element.states = states;
                         if let Some(handler) = &element.handlers[event_index(UiEventKind::StateUpdate)] {
                             self.state_updates.borrow_mut().push(handler.registration);
                         }
-                    }
                 }
                 (element.instance, changed)
             } else {
                 let instance = Uuid::new_v4();
                 store.elements.push(UiElement {
-                    name: name.to_owned(), instance, values, states: states.unwrap_or_default(), events_version: 1,
+                    name: name.to_owned(), instance, values, states, events_version: 1,
                     handlers: [None, None, None, None],
                 });
                 (instance, true)
@@ -418,9 +449,9 @@ impl ScriptUiState {
 
     pub(super) fn set_field(&self, name: &str, instance: Uuid, field: &str, json: &str) -> Result<bool, String> {
         self.check_live()?;
-        let value: JsonValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
+        let encoded: EncodedValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
         if field == "states" {
-            let states = validate_field(field, &value)?.as_object().unwrap().clone();
+            let states = split_states(&encoded.value, &encoded.big_nums, false)?;
             let changed = {
                 let mut store = self.store.borrow_mut();
                 let index = Self::element_index(&store, name, Some(instance))?;
@@ -435,7 +466,10 @@ impl ScriptUiState {
             };
             return Ok(changed);
         }
-        let value = validate_field(field, &value)?;
+        if !encoded.big_nums.is_empty() {
+            return Err("Native BigNum values are not valid UI attributes".to_owned());
+        }
+        let value = validate_field(field, &encoded.value)?;
         let changed = {
             let mut store = self.store.borrow_mut();
             let index = Self::element_index(&store, name, Some(instance))?;
@@ -492,7 +526,7 @@ impl ScriptUiState {
 
     pub(super) fn set_state(&self, name: &str, instance: Uuid, key: &str, json: &str) -> Result<bool, String> {
         self.check_live()?;
-        let value: JsonValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
+        let value: EncodedValue = serde_json::from_str(json).map_err(|error| error.to_string())?;
         let mut store = self.store.borrow_mut();
         let index = Self::element_index(&store, name, Some(instance))?;
         let element = &mut store.elements[index];
@@ -580,6 +614,7 @@ impl Drop for ScriptUiState {
 impl ScriptUiBindings {
     pub(super) fn new<'js>(
         ctx: &Ctx<'js>,
+        codec: Object<'js>,
         state: Rc<ScriptUiState>,
         connection: WsConnection,
         session: SessionControl,
@@ -727,7 +762,7 @@ impl ScriptUiBindings {
             Ok::<(), rquickjs::Error>(())
         })?)?;
         let factory: Function = ctx.eval(include_str!("ui.js"))?;
-        let api: Object = factory.call((host,))?;
+        let api: Object = factory.call((host, codec))?;
         Ok(Self { state, api: Persistent::save(ctx, api) })
     }
 
@@ -747,22 +782,26 @@ impl ScriptUiBindings {
 mod tests {
     use super::*;
 
+    fn envelope(json: &str) -> String {
+        format!(r#"{{"value":{json}}}"#)
+    }
+
     #[test]
     fn two_runtime_ui_shared_store_and_states() {
         let publisher = ScriptUiPublisher::default();
         let snapshots = publisher.subscribe();
         let state = ScriptUiState::new(publisher, SessionControl::standalone());
-        let main_instance = state.define("from_main", r#"{"text":"main","states":{"count":1,"settings":{"enabled":false}}}"#).unwrap();
-        let background_instance = state.define("from_background", r#"{"text":"background","states":{"count":2}}"#).unwrap();
+        let main_instance = state.define("from_main", &envelope(r#"{"text":"main","states":{"count":1,"settings":{"enabled":false}}}"#)).unwrap();
+        let background_instance = state.define("from_background", &envelope(r#"{"text":"background","states":{"count":2}}"#)).unwrap();
         assert_eq!(snapshots.borrow().elements.iter().map(|element| element.id.as_str()).collect::<Vec<_>>(), ["from_main", "from_background"]);
         let revision_before_state = snapshots.borrow().revision;
-        state.set_field("from_background", background_instance, "text", r#""written""#).unwrap();
-        state.set_state("from_main", main_instance, "count", "10").unwrap();
+        state.set_field("from_background", background_instance, "text", &envelope(r#""written""#)).unwrap();
+        state.set_state("from_main", main_instance, "count", &envelope("10")).unwrap();
         assert_eq!(snapshots.borrow().elements[1].text, "written");
         assert_eq!(snapshots.borrow().revision, revision_before_state + 1);
-        assert_eq!(state.state_json("from_main", main_instance, "settings").unwrap(), Some(r#"{"enabled":false}"#.to_owned()));
-        state.set_state("from_main", main_instance, "settings", r#"{"enabled":true}"#).unwrap();
-        assert_eq!(state.state_json("from_main", main_instance, "settings").unwrap(), Some(r#"{"enabled":true}"#.to_owned()));
+        assert_eq!(state.state_json("from_main", main_instance, "settings").unwrap(), Some(envelope(r#"{"enabled":false}"#)));
+        state.set_state("from_main", main_instance, "settings", &envelope(r#"{"enabled":true}"#)).unwrap();
+        assert_eq!(state.state_json("from_main", main_instance, "settings").unwrap(), Some(envelope(r#"{"enabled":true}"#)));
         assert_eq!(snapshots.borrow().revision, revision_before_state + 1);
     }
 
@@ -771,8 +810,8 @@ mod tests {
         let publisher = ScriptUiPublisher::default();
         let snapshots = publisher.subscribe();
         let state = ScriptUiState::new(publisher, SessionControl::standalone());
-        let original = state.define("same", r#"{"text":"before"}"#).unwrap();
-        assert!(state.define("same", r#"{"unknown":1}"#).is_err());
+        let original = state.define("same", &envelope(r#"{"text":"before"}"#)).unwrap();
+        assert!(state.define("same", &envelope(r#"{"unknown":1}"#)).is_err());
         assert_eq!(state.lookup("same"), Some(original));
         let event = ScriptUiEvent {
             session_id: state.session_id(), element_id: "same".to_owned(), instance_id: original,
@@ -786,7 +825,7 @@ mod tests {
         assert!(state.complete_handler_install("same", original, UiEventKind::Pointer(ScriptUiEventKind::Click), registration, true));
         let active = ScriptUiEvent { events_version: snapshots.borrow().elements[0].events_version, ..event.clone() };
         assert_eq!(state.installed_handler_registration(&active), Some(registration));
-        assert_eq!(state.define("same", r#"{"text":"after"}"#).unwrap(), original);
+        assert_eq!(state.define("same", &envelope(r#"{"text":"after"}"#)).unwrap(), original);
         assert_eq!(state.installed_handler_registration(&active), Some(registration));
         assert!(state.record_json("same", original).unwrap().contains("after"));
     }
@@ -796,12 +835,12 @@ mod tests {
         let publisher = ScriptUiPublisher::default();
         let snapshots = publisher.subscribe();
         let state = ScriptUiState::new(publisher, SessionControl::standalone());
-        let first = state.define("a", "{}").unwrap();
+        let first = state.define("a", &envelope("{}")).unwrap();
         assert!(!snapshots.borrow().elements[0].hidden);
-        state.set_field("a", first, "hidden", "true").unwrap();
+        state.set_field("a", first, "hidden", &envelope("true")).unwrap();
         assert!(snapshots.borrow().elements[0].hidden);
-        let second = state.define("b", "{}").unwrap();
-        assert_eq!(state.define("a", r#"{"text":"updated"}"#).unwrap(), first);
+        let second = state.define("b", &envelope("{}")).unwrap();
+        assert_eq!(state.define("a", &envelope(r#"{"text":"updated"}"#)).unwrap(), first);
         assert!(snapshots.borrow().elements[0].hidden);
         assert_eq!(snapshots.borrow().elements.iter().map(|element| element.id.as_str()).collect::<Vec<_>>(), ["a", "b"]);
         assert_eq!(snapshots.borrow().elements[1].instance_id, second);
@@ -822,8 +861,10 @@ mod tests {
         let main_transfer = main_context.with(|ctx| Rc::new(FunctionTransfer::new(&ctx).unwrap()));
         let background_transfer = background_context.with(|ctx| Rc::new(FunctionTransfer::new(&ctx).unwrap()));
         let main_bindings = main_context.with(|ctx| {
+            let codec = super::super::value::codec(&ctx).unwrap();
             ScriptUiBindings::new(
                 &ctx,
+                codec,
                 state.clone(),
                 WsConnection::disconnected_for_test(),
                 session.clone(),
@@ -832,8 +873,10 @@ mod tests {
             ).unwrap()
         });
         let background_bindings = background_context.with(|ctx| {
+            let codec = super::super::value::codec(&ctx).unwrap();
             ScriptUiBindings::new(
                 &ctx,
+                codec,
                 state.clone(),
                 WsConnection::disconnected_for_test(),
                 session.clone(),
@@ -860,8 +903,8 @@ mod tests {
                 if (ui.background !== backgroundProxy) throw new Error("background proxy identity changed");
             "#).unwrap();
         });
-        assert_eq!(state.state_json("main", state.lookup("main").unwrap(), "nested"), Ok(Some(r#"{"enabled":true}"#.to_owned())));
-        assert_eq!(state.state_json("main", state.lookup("main").unwrap(), "count"), Ok(Some("10".to_owned())));
+        assert_eq!(state.state_json("main", state.lookup("main").unwrap(), "nested"), Ok(Some(envelope(r#"{"enabled":true}"#))));
+        assert_eq!(state.state_json("main", state.lookup("main").unwrap(), "count"), Ok(Some(envelope("10"))));
         assert_eq!(state.names(), vec!["main", "background"]);
 
         background_context.with(|ctx| {
@@ -906,7 +949,7 @@ mod tests {
         let publisher = ScriptUiPublisher::default();
         let snapshots = publisher.subscribe();
         let state = ScriptUiState::new(publisher, SessionControl::standalone());
-        let instance = state.define("button", "{}").unwrap();
+        let instance = state.define("button", &envelope("{}")).unwrap();
         let first = Uuid::new_v4();
         state.begin_handler_install("button", instance, UiEventKind::Pointer(ScriptUiEventKind::Click), first).unwrap();
         let pending_version = snapshots.borrow().elements[0].events_version;
@@ -923,7 +966,7 @@ mod tests {
         let active = ScriptUiEvent { events_version: snapshots.borrow().elements[0].events_version, ..event.clone() };
         assert_eq!(state.installed_handler_registration(&active), Some(second));
         state.remove("button").unwrap();
-        let replacement = state.define("button", "{}").unwrap();
+        let replacement = state.define("button", &envelope("{}")).unwrap();
         assert!(!state.complete_handler_install("button", instance, UiEventKind::Pointer(ScriptUiEventKind::Click), second, true));
         assert_eq!(state.installed_handler_registration(&active), None);
         let third = Uuid::new_v4();
@@ -952,21 +995,21 @@ mod tests {
                     stopped: () => false,
                     lookup: name => records.has(name) ? records.get(name).instance : undefined,
                     names: () => [...records.keys()],
-                    record: (name, instance) => JSON.stringify(records.get(name).instance === instance ? records.get(name) : (() => {{ throw new Error('stale'); }})()),
-                    define: (name, json) => {{ const instance = 'instance-' + name; const definition = JSON.parse(json); records.set(name, {{ instance, values: definition, states: {{}}, eventsVersion: 1 }}); return instance; }},
+                    record: (name, instance) => JSON.stringify({{ value: records.get(name).instance === instance ? records.get(name) : (() => {{ throw new Error('stale'); }})() }}),
+                    define: (name, json) => {{ const instance = 'instance-' + name; const definition = JSON.parse(json).value; records.set(name, {{ instance, values: definition, states: {{}}, eventsVersion: 1 }}); return instance; }},
                     remove: name => records.delete(name),
-                    setField: (name, instance, field, json) => {{ const record = records.get(name); if (record.instance !== instance) throw new Error('stale'); if (field === 'states') record.states = JSON.parse(json); else record.values[field] = JSON.parse(json); }},
+                    setField: (name, instance, field, json) => {{ const record = records.get(name); if (record.instance !== instance) throw new Error('stale'); if (field === 'states') record.states = JSON.parse(json).value; else record.values[field] = JSON.parse(json).value; }},
                     deleteField: (name, instance, field) => {{ const record = records.get(name); if (field === 'states') record.states = {{}}; else delete record.values[field]; }},
                     stateKeys: (name, instance) => Object.keys(records.get(name).states),
-                    stateGet: (name, instance, key) => records.get(name).states[key] === undefined ? undefined : JSON.stringify(records.get(name).states[key]),
-                    stateSet: (name, instance, key, json) => records.get(name).states[key] = JSON.parse(json),
+                    stateGet: (name, instance, key) => records.get(name).states[key] === undefined ? undefined : JSON.stringify({{ value: records.get(name).states[key] }}),
+                    stateSet: (name, instance, key, json) => records.get(name).states[key] = JSON.parse(json).value,
                     stateDelete: (name, instance, key) => delete records.get(name).states[key],
                     measure: async () => 0,
                     handlerRegister: (name, instance, event, callback) => {{ const registration = 'registration-' + (++nextRegistration); registrations.push(registration); statuses.set(registration, 'pending'); return registration; }},
                     handlerStatus: registration => statuses.get(registration),
                     handlerClear: () => {{}},
                 }};
-                const ui = ({}) (host).registry;
+                const ui = ({}) (host, {{ isBigNum: () => false, encode: value => JSON.stringify({{ value }}), decode: json => JSON.parse(json).value }}).registry;
                 ui('button', {{}});
                 const callback = function() {{}};
                 if (ui.button.setOnClick(callback) !== ui.button) throw new Error('setter did not return the element');

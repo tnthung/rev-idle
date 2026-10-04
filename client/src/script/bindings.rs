@@ -270,7 +270,7 @@ pub(super) fn create_rev<'js>(
     ctx: Ctx<'js>,
     connection: WsConnection,
     controls: HostControls,
-    parse: Function<'js>,
+    codec: Object<'js>,
     freeze: Function<'js>,
     session: SessionControl,
     screen_ownership: Rc<super::ownership::ScreenOwnershipState>,
@@ -473,33 +473,32 @@ pub(super) fn create_rev<'js>(
         }),
     )?;
     let state_wrapper: Function = ctx.eval(
-        "(raw, parse, freeze) => async (...keys) => {
-            const result = freeze(parse(await raw(...keys)));
+        "(raw, decode, freeze) => async (...keys) => {
+            const result = freeze(decode(await raw(...keys)));
             return keys.length === 1 ? result[keys[0]] : result;
         }",
     )?;
-    let state: Function = state_wrapper.call((state_raw, parse.clone(), freeze.clone()))?;
+    let state: Function = state_wrapper.call((state_raw, codec.get::<_, Function>("decode")?, freeze.clone()))?;
     rev.set("state", state)?;
     let slot_connection = connection.clone();
     let slot_session = session.clone();
-    rev.set(
-        "slot",
-        Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, path: String| {
-            let connection = slot_connection.clone();
-            let session = slot_session.clone();
-            async move {
-                if path.trim().is_empty() {
-                    return Err(host_error("slot path must not be empty".to_owned()));
-                }
-                reject_if_stopped(&ctx, &session)?;
-                let response = connection.request(crate::bridge::SlotReq { path })
-                    .await
-                    .map_err(|error| bridge_error(&ctx, error.to_string()))?;
-                reject_if_stopped(&ctx, &session)?;
-                ctx.json_parse(response.value.to_string())
+    let slot_raw = Function::new(ctx.clone(), Async(move |ctx: Ctx<'js>, path: String| {
+        let connection = slot_connection.clone();
+        let session = slot_session.clone();
+        async move {
+            if path.trim().is_empty() {
+                return Err(host_error("slot path must not be empty".to_owned()));
             }
-        }))?,
-    )?;
+            reject_if_stopped(&ctx, &session)?;
+            let response = connection.request(crate::bridge::SlotReq { path })
+                .await
+                .map_err(|error| bridge_error(&ctx, error.to_string()))?;
+            reject_if_stopped(&ctx, &session)?;
+            serde_json::to_string(&response).map_err(|error| host_error(error.to_string()))
+        }
+    }))?;
+    let slot_wrapper: Function = ctx.eval("(raw, decode) => async path => decode(await raw(path))")?;
+    rev.set("slot", slot_wrapper.call::<_, Function>((slot_raw, codec.get::<_, Function>("decode")?))?)?;
     let invoke_connection = connection.clone();
     let invoke_session = session.clone();
     rev.set(
@@ -604,15 +603,15 @@ pub(super) fn create_rev<'js>(
     })?;
     let global_keys_raw = Function::new(ctx.clone(), || GlobalState.keys())?;
     let global_wrapper: Function = ctx.eval(
-        "(get, set, del, keys, parse) => new Proxy({}, {
+        "(get, set, del, keys, decode, encode) => new Proxy({}, {
             get: (_target, key) => {
                 if (typeof key !== 'string') return undefined;
                 const raw = get(key);
-                return raw === undefined ? undefined : parse(raw);
+                return raw === undefined ? undefined : decode(raw);
             },
             set: (_target, key, value) => {
                 if (typeof key !== 'string') return false;
-                set(key, JSON.stringify(value === undefined ? null : value));
+                set(key, encode(value));
                 return true;
             },
             has: (_target, key) => typeof key === 'string' && keys().includes(key),
@@ -629,7 +628,8 @@ pub(super) fn create_rev<'js>(
         global_set_raw,
         global_delete_raw,
         global_keys_raw,
-        parse,
+        codec.get::<_, Function>("decode")?,
+        codec.get::<_, Function>("encode")?,
     ))?;
     rev.set("global", global)?;
 

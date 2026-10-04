@@ -593,6 +593,7 @@ async fn rev_state_parses_mixed_json_and_freezes_only_top_level() {
             if (state.score !== 42 || state.items[1].ok !== true || state.items[2] !== null) {
                 throw new Error("mixed state was not preserved");
             }
+            if (!(state.items[3] instanceof BigNum) || !state.items[3].eq(1000) || state.items[4] !== "1e3") throw new Error("nested BigNum metadata lost");
             if (Object.keys(state).length !== 2) throw new Error("selected keys were lost");
             if (Object.isFrozen(state.items) || Object.isFrozen(state.items[1])) throw new Error("nested state was frozen");
         })"#,
@@ -624,7 +625,7 @@ async fn rev_state_parses_mixed_json_and_freezes_only_top_level() {
         json!({
             "uuid": request["uuid"],
             "type": "StateRes",
-            "payload": { "value": { "score": 42, "items": [1, { "ok": true }, null] } },
+            "payload": { "value": { "score": 42, "items": [1, { "ok": true }, null, "1e3", "1e3"] }, "bigNums": [["items", "3"]] },
         })
         .to_string()
         .into(),
@@ -828,6 +829,7 @@ async fn rev_slot_returns_arbitrary_data_null_and_remote_errors() {
 
     for (response_type, payload, expected) in [
         ("SlotRes", json!({ "value": { "level": 12, "effects": ["speed", null] } }), json!({ "level": 12, "effects": ["speed", null] })),
+        ("SlotRes", json!({ "value": { "amount": "1e3", "text": "1e3" }, "bigNums": [["amount"]] }), json!({ "amount": "1e3", "text": "1e3" })),
         ("SlotRes", json!({ "value": null }), Value::Null),
         ("RemoteError", json!({ "message": "slot target not found" }), Value::Null),
     ] {
@@ -841,6 +843,7 @@ async fn rev_slot_returns_arbitrary_data_null_and_remote_errors() {
         let session = ScriptSession::new_with_connection(
             &format!(r#"export default async () => {{
                 const value = await rev.slot("scene:1/Canvas[0]/Slot[3]");
+                if (value?.amount !== undefined && (!(value.amount instanceof BigNum) || !value.amount.eq(1000) || typeof value.text !== "string")) throw new Error("slot BigNum lost");
                 if (JSON.stringify(value) !== JSON.stringify({expected})) throw new Error("unexpected slot value");
             }}"#),
             "slot-test.js",
@@ -1017,7 +1020,7 @@ async fn rev_state_unwraps_single_key_request() {
     let session = ScriptSession::new_with_connection(
         r#"export default (async () => {
             const state = await rev.state("EP");
-            if (state !== "0e0") throw new Error("single-key state was not unwrapped: " + JSON.stringify(state));
+            if (!(state instanceof BigNum) || !state.isZero) throw new Error("single-key BigNum was not unwrapped: " + JSON.stringify(state));
         })"#,
         "state-single-key-test.js",
         connection.clone(),
@@ -1044,7 +1047,7 @@ async fn rev_state_unwraps_single_key_request() {
         json!({
             "uuid": request["uuid"],
             "type": "StateRes",
-            "payload": { "value": { "EP": "0e0" } },
+            "payload": { "value": { "EP": "0e0" }, "bigNums": [["EP"]] },
         })
         .to_string()
         .into(),

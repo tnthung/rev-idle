@@ -92,7 +92,7 @@ pub(super) struct ScriptSession {
     on_disconnect: Option<Persistent<Function<'static>>>,
     before_pause: Option<Persistent<Function<'static>>>,
     after_resume: Option<Persistent<Function<'static>>>,
-    parse: Persistent<Function<'static>>,
+    codec: Persistent<Object<'static>>,
     freeze: Persistent<Function<'static>>,
     transfer: Option<Rc<FunctionTransfer>>,
     ui_bindings: Option<Rc<ScriptUiBindings>>,
@@ -167,7 +167,7 @@ impl ScriptSession {
         let context_ui = ui.clone();
         let context_background = background_registry.clone();
         let context_modules = modules.clone();
-        let (script, after_load, on_connect, on_disconnect, before_pause, after_resume, parse, freeze, transfer, ui_bindings) = context
+        let (script, after_load, on_connect, on_disconnect, before_pause, after_resume, codec, freeze, transfer, ui_bindings) = context
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<_> = async {
                     context_modules.install_stack_trace(&ctx)?;
@@ -196,8 +196,9 @@ impl ScriptSession {
                         })?,
                     )?;
                     ctx.globals().set("console", console)?;
+                    super::bignum::install(&ctx)?;
 
-                    let parse: Function = ctx.eval("JSON.parse")?;
+                    let codec = super::value::codec(&ctx)?;
                     let freeze: Function = ctx.eval("Object.freeze")?;
                     let ownership_prototype = Class::<super::ownership::ScreenOwnership>::prototype(&ctx)?.unwrap();
                     ownership_prototype.set(
@@ -213,6 +214,7 @@ impl ScriptSession {
                     let transfer = Rc::new(FunctionTransfer::new(&ctx)?);
                     let ui_bindings = Rc::new(ScriptUiBindings::new(
                         &ctx,
+                        codec.clone(),
                         context_ui,
                         context_connection,
                         context_session_control.clone(),
@@ -253,7 +255,7 @@ impl ScriptSession {
                         on_disconnect.map(|hook| Persistent::save(&ctx, hook)),
                         before_pause.map(|hook| Persistent::save(&ctx, hook)),
                         after_resume.map(|hook| Persistent::save(&ctx, hook)),
-                        Persistent::save(&ctx, parse),
+                        Persistent::save(&ctx, codec),
                         Persistent::save(&ctx, freeze),
                         transfer,
                         ui_bindings,
@@ -283,7 +285,7 @@ impl ScriptSession {
             on_disconnect,
             before_pause,
             after_resume,
-            parse,
+            codec,
             freeze,
             transfer: Some(transfer),
             ui_bindings: Some(ui_bindings),
@@ -308,7 +310,7 @@ impl ScriptSession {
         let Some(hook) = hook else { return Ok(()) };
         let hook = hook.clone();
         let connection = self.connection.clone();
-        let parse = self.parse.clone();
+        let codec = self.codec.clone();
         let freeze = self.freeze.clone();
         let session_control = self.session_control.clone();
         let ui = self.ui_bindings.as_ref().expect("script UI bindings must exist").clone();
@@ -320,13 +322,13 @@ impl ScriptSession {
         self.context
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<()> = async {
-                    let parse: Function = parse.restore(&ctx)?;
+                    let codec: Object = codec.restore(&ctx)?;
                     let freeze: Function = freeze.restore(&ctx)?;
                     let rev = super::bindings::create_rev(
                         ctx.clone(),
                         connection,
                         controls,
-                        parse,
+                        codec,
                         freeze,
                         session_control,
                         screen_ownership,
@@ -426,7 +428,7 @@ impl ScriptSession {
     ) -> Result<bool, ScriptInvocationError> {
         let controls = controls.into();
         let script = self.script.clone();
-        let parse = self.parse.clone();
+        let codec = self.codec.clone();
         let freeze = self.freeze.clone();
         let session_control = self.session_control.clone();
         let ui = self.ui_bindings.as_ref().expect("script UI bindings must exist").clone();
@@ -440,14 +442,14 @@ impl ScriptSession {
             .async_with(async move |ctx| {
                 let result: rquickjs::Result<()> = async {
                     let script: Function = script.restore(&ctx)?;
-                    let parse: Function = parse.restore(&ctx)?;
+                    let codec: Object = codec.restore(&ctx)?;
                     let freeze: Function = freeze.restore(&ctx)?;
 
                     let rev = super::bindings::create_rev(
                         ctx.clone(),
                         connection,
                         controls.clone(),
-                        parse.clone(),
+                        codec.clone(),
                         freeze.clone(),
                         session_control,
                         screen_ownership,

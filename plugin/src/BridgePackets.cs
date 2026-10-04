@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace RevIdle.ScoreTelemetry;
 
 internal sealed record StateReq(IReadOnlyList<string> Keys) : IRequest<StateRes>;
-internal sealed record StateRes(JsonElement Value);
+internal sealed record StateRes(JsonElement Value, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string[]>? BigNums = null);
 internal sealed record UiPathReq(int X, int Y, int Width, int Height, bool IncludeRectTransform = false) : IRequest<UiPathRes>;
 internal sealed record UiPathRes(string? Type, string? Path, string? RectTransformPath = null);
 internal sealed record InvokeReq(string Path) : IRequest<InvokeRes>;
@@ -16,7 +16,7 @@ internal sealed record InputRes;
 internal sealed record TransferReq(string Source, string Destination) : IRequest<TransferRes>;
 internal sealed record TransferRes;
 internal sealed record SlotReq(string Path) : IRequest<SlotRes>;
-internal sealed record SlotRes(JsonElement Value);
+internal sealed record SlotRes(JsonElement Value, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<string[]>? BigNums = null);
 internal sealed record ClickCommand(int X, int Y, int Width, int Height);
 internal sealed record ScrollCommand(int X, int Y, int Length, uint Axis, int Width, int Height);
 internal sealed record DragCommand(int StartX, int StartY, int EndX, int EndY, int Width, int Height);

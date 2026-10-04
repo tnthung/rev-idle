@@ -338,6 +338,37 @@ async fn ui_update_triggers_callbacks_without_state_changes() {
 }
 
 #[tokio::test]
+async fn ui_native_numbers_preserve_callback_types_and_value_equality() {
+    use crate::{bridge::{ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+    let controls: HostControls = (Rc::new(RefCell::new(CallbackMouse(Rc::new(RefCell::new(Vec::new()))))) as SharedMouse).into();
+    let session = ScriptSession::new_with_connection_and_control(r#"
+        export async function afterLoad() {
+            rev.global.__nativeUiUpdates = 0;
+            const element = rev.ui('native', { states: { amount: { a: '1e3', b: BigNum.ONE } } });
+            element.setOnStateUpdate(function() {
+                if (!(this.states.amount.a instanceof BigNum) || !this.states.amount.a.eq(1000)) throw Error('native callback state lost');
+                rev.global.__nativeUiUpdates++;
+            });
+            element.states.amount = { a: new BigNum(1000), b: BigNum.ONE };
+            element.states.amount = { b: BigNum.ONE, a: new BigNum(1000) };
+            element.states = { amount: { a: new BigNum(1000), b: BigNum.ONE } };
+            while (rev.global.__nativeUiUpdates < 1) await rev.sleep(1);
+            await rev.sleep(20);
+            if (rev.global.__nativeUiUpdates !== 1) throw Error('native equality changed');
+            delete rev.global.__nativeUiUpdates;
+        }
+        export default function() {}
+    "#, "native_ui_state.js", WsConnection::disconnected_for_test(), SessionControl::standalone(), ScriptUiPublisher::default()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::select! {
+            _ = session.drive_background(controls.clone()) => panic!("background service stopped during native state update"),
+            result = session.run_after_load(controls) => result.unwrap(),
+        }
+    }).await.unwrap();
+}
+
+#[tokio::test]
 async fn ui_state_update_discards_cleared_replaced_and_removed_handlers() {
     use crate::{bridge::{ScriptUiPublisher, WsConnection}, script::{bindings::{HostControls, SharedMouse}, control::SessionControl, session::ScriptSession}};
     use std::{cell::RefCell, rc::Rc, time::Duration};
@@ -448,8 +479,10 @@ fn ui_registry_native_roots_drop_before_runtime() {
     let background = std::rc::Rc::new(crate::script::background::BackgroundRegistry::new(session.clone()));
     context.with(|ctx| {
         let transfer = std::rc::Rc::new(crate::script::transfer::FunctionTransfer::new(&ctx).unwrap());
+        let codec = crate::script::value::codec(&ctx).unwrap();
         let ui = super::ScriptUiBindings::new(
             &ctx,
+            codec,
             state.clone(),
             crate::bridge::WsConnection::disconnected_for_test(),
             session.clone(),
@@ -553,10 +586,13 @@ fn check(source: &str) {
     let state = std::rc::Rc::new(super::ScriptUiState::new(publisher, session.clone()));
     let background = std::rc::Rc::new(crate::script::background::BackgroundRegistry::new(session.clone()));
     context.with(|ctx| {
+        crate::script::bignum::install(&ctx).unwrap();
         let transfer = std::rc::Rc::new(crate::script::transfer::FunctionTransfer::new(&ctx).unwrap());
+        let codec = crate::script::value::codec(&ctx).unwrap();
         let keep_transfer = transfer.clone();
         let ui = super::ScriptUiBindings::new(
             &ctx,
+            codec,
             state,
             crate::bridge::WsConnection::disconnected_for_test(),
             session,
@@ -1020,6 +1056,26 @@ fn ui_registry_same_value_assignment_is_noop() {
         ui.a.setOnClick(() => {}); assert(snapshots.at(-1)[0].eventsVersion > first.eventsVersion);
         const old = ui.a, revision = snapshots.length;
         assert(ui('a', { text: 'y' }) === old && snapshots.length === revision);
+    "#);
+}
+
+#[test]
+fn ui_registry_native_bignum_state_reads_replacements_and_callback_surface() {
+    check(r#"
+        const first = new BigNum('1.5');
+        const element = ui('a', { states: { value: first } });
+        assert(element.states.value instanceof BigNum && element.states.value.eq(first));
+        assert(Object.getOwnPropertyDescriptor(element.states, 'value').value.eq(first));
+        element.setOnStateUpdate(() => {});
+        element.states.value = new BigNum('2.5');
+        assert(element.states.value.eq(new BigNum('2.5')));
+        ui('a', { states: { value: new BigNum('3.5') } });
+        assert(element.states.value.eq(new BigNum('3.5')));
+        const collision = ui('collision', { states: { states: new BigNum('4.5') } });
+        collision.states.states = new BigNum('5.5');
+        assert(collision.states.states.eq(new BigNum('5.5')));
+        collision.states = { states: new BigNum('6.5') };
+        assert(collision.states.states.eq(new BigNum('6.5')));
     "#);
 }
 

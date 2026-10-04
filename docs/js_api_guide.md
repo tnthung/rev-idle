@@ -113,7 +113,7 @@ Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before 
 
 | Signature | Result | Contract |
 | --- | --- | --- |
-| `rev.state(...keys: string[])` | `Promise<JSON value>` | Requests fresh game state. One key unwraps that value; multiple keys return a flat object. No keys are rejected by the plugin. |
+| `rev.state(...keys: string[])` | `Promise<RevValue>` | Requests fresh game state. One key unwraps that value; multiple keys return a flat object. No keys are rejected by the plugin. |
 | `rev.invoke(path: string)` | `Promise<void>` | Invokes a button or checkbox at an exact Unity hierarchy path. |
 | `rev.input(path: string, text: string)` | `Promise<void>` | Sets an editable Unity input field's text and fires its end-edit callback. |
 | `rev.scrollIntoView(path: string)` | `Promise<void>` | Scrolls containing Unity scroll views until an exact hierarchy path is visible. |
@@ -141,7 +141,7 @@ Read `rev.paused` for the current state. Add `await rev.ensureRunning()` before 
 | `rev.stop()` | `void` | Terminates the entire session and interrupts JavaScript. |
 | `rev.daemon(name: string, fn: RevDaemon \| null)` | `void` | Registers or replaces a background daemon; `null` retires it. Use `name in rev.daemon` for presence checks. |
 | `rev.ui` | callable element registry | `rev.ui(name, attrs)` creates or patches session-owned UI; `rev.ui(name, null)` removes it. Named entries are read-only; element fields remain assignable. |
-| `rev.global` | property proxy | Stores process-local JSON values shared by all script sessions. |
+| `rev.global` | property proxy | Stores process-local values, including BigNum, shared by all script sessions. |
 
 ### Custom UI
 
@@ -216,7 +216,7 @@ Load [two_runtime_demo.ts](../scripts/two_runtime_demo.ts) for a focused runtime
 
 `rev.daemon("name", fn)` registers or replaces a background function. A daemon runs once after installation and does not restart automatically when it returns or rejects. `rev.daemon("name", null)` retires the name; a running invocation may finish, and a replacement waits for its returned promise. Removing an absent name is a no-op. Assignment and deletion of daemon properties throw. Use `"name" in rev.daemon` for presence checks or `Object.keys(rev.daemon)` to list names; reading a daemon property throws. Daemons have `this === undefined`, so use `rev.global` or element `states` for communication. A daemon failure is reported with its name and does not stop the session.
 
-Element definitions may include JSON-only `states`. Live elements always expose a state map, and callback `this` is the element with that map. State values are copied through the host; nested objects need reassignment after mutation. Patching an existing name preserves its state map unless `states` is supplied, in which case the map is replaced as a whole. Deleting an element and creating it again produces a new element and state map. Use `rev.global` for other JSON communication; functions, promises, class instances, and original lexical closures do not cross runtimes.
+Element definitions may include `states` containing JSON values and native `BigNum` instances. Live elements always expose a state map, and callback `this` is the element with that map. State values are copied through the host; nested objects need reassignment after mutation. Patching an existing name preserves its state map unless `states` is supplied, in which case the map is replaced as a whole. Deleting an element and creating it again produces a new element and state map. Use `rev.global` for other shared values. Native `BigNum` instances are reconstructed in the receiving runtime; functions, promises, other class prototypes, and original lexical closures do not cross runtimes.
 
 `setOnStateUpdate(fn)` queues one background callback for each changed direct state assignment or deletion, including replacing or clearing the whole map and patching `states` through `rev.ui(name, attrs)`. Structurally equal writes and deleting absent keys do nothing. Call `element.update()` to queue one callback regardless of state changes; it returns the same element for chaining and does nothing when no state update handler is registered. Creating an element or registering the callback does not invoke it. Changes from either runtime are queued even while the handler is installing. Each invocation reads the current state through `this.states`; rapid changes can therefore produce several calls that see the same latest values. Callbacks may overlap after an `await`, and writing a changed state inside the callback queues another call. Clearing or replacing the handler, or removing the element, discards its queued calls; invocations already running may finish. Errors are reported without stopping the session.
 
@@ -244,16 +244,18 @@ One key returns the selected scalar, object, array, or `null` directly. Two or m
 
 Nested values use [earlier-layer reference filtering](../plugin/STATE_KEYS.md#nested-object-references). For example, a dilation tree response exposes `center.level` directly, and branch upgrades omit `prev` references to that center. Explicit request paths and aliases remain valid; the state manual describes which references are omitted from broader responses.
 
-The returned JSON represents game values as follows:
+Returned snapshots represent game values as follows:
 
 | Game value | JavaScript value |
 | --- | --- |
-| BigDouble | Scientific-notation string, such as `"1.25e300"`. |
+| BigDouble | Native `BigNum` instance, including inside objects and collections. |
 | Integer outside JavaScript's safe range | Decimal string. |
 | Safe integer or finite floating-point value | Number. |
 | Non-finite floating-point value | `"NaN"`, `"Infinity"`, or `"-Infinity"`. |
 | Boolean, string, or null | Matching JSON primitive. |
 | Collection or gameplay object | Array or object. |
+
+BigDouble values with a non-finite mantissa or a non-finite/non-integer exponent reject serialization. Ordinary numeric-looking strings remain strings.
 
 The outer response object is shallow-frozen before one-key unwrapping. Nested objects and a one-key object value are not recursively frozen. A response is only a snapshot; mutating it never changes the game.
 
@@ -336,7 +338,7 @@ console.log(rev.global.runs, Object.keys(rev.global));
 delete rev.global.runs;
 ```
 
-Reads return a newly parsed JSON value. Missing keys return `undefined`. Writes serialize as JSON; assigning `undefined` stores `null`. Cycles and `BigInt` cannot be stored, and prototypes or methods are not preserved. The `in` operator, `Object.keys`, and `delete` work. Assign a nested object back after editing it.
+Reads return a fresh value, with native `BigNum` instances reconstructed at any depth. Missing keys return `undefined`. Writes preserve JSON values and native `BigNum` instances; assigning `undefined` stores `null`. Cycles and `BigInt` cannot be stored, and other prototypes or methods are not preserved. The `in` operator, `Object.keys`, and `delete` work. Assign a nested object back after editing it.
 
 ## `console`
 
@@ -409,7 +411,7 @@ import {
 } from "./lib/states.js";
 ```
 
-`states.js` exports `States`, six data classes, and eight enum objects. It does not export `BigNum`; import that class from `utils.js`.
+`states.js` exports `States`, six data classes, and eight enum objects. `BigNum` is supplied globally by the host and requires no import.
 
 ### `States`
 
@@ -455,7 +457,7 @@ All constructors are public exports and accept one raw object argument.
 | `AttackLevel` | `currentHP`, `goldGain`, numeric `level`, `maxHP`, `unlocked`. |
 | `AttackRelic` | `ReqLevel`, `amount`, `baseCost`, `buyAmount`, `costInc`, `effect`, `effect_next`, numeric `num`, `regainedLevelsEst`, `sacriEffect`, `sacriLevel`, `totalCost`, `unlocked`. |
 
-Scientific-number fields are converted to `BigNum`. Enum-backed fields are converted through the corresponding enum object. `UnityZodiac.planet` remains the raw supplied value; the constructor does not create a `UnityPlanet`.
+BigDouble fields in Data types use `BigNum` and arrive as native instances from the host. Enum-backed fields are converted through the corresponding enum object. `UnityZodiac.planet` remains the raw supplied value; the constructor does not create a `UnityPlanet`.
 
 ### Enum exports
 
@@ -525,7 +527,6 @@ import {
   wait_for_exponent,
   print_state,
   isStringNumeric,
-  BigNum,
 } from "./lib/utils.js";
 ```
 
@@ -545,12 +546,13 @@ import {
 
 ### `BigNum`
 
-`BigNum` stores a normalized fixed-point mantissa as a private `bigint`, scaled by `10^15`, and a private `bigint` scientific exponent. The constructor accepts another `BigNum`, a number, a scientific/plain numeric string, or a bigint. Unsupported types and invalid strings throw. Values retain one integer mantissa digit and up to 15 fractional digits; excess digits are truncated toward zero.
+`BigNum` is a Rust-backed QuickJS class available globally before module evaluation in both runtimes. It stores a normalized integer mantissa scaled by `10^15` and an arbitrary-size integer scientific exponent in Rust. The constructor accepts another `BigNum`, a number, a scientific/plain numeric string, or a bigint. Unsupported types and invalid strings throw. Values retain one integer mantissa digit and up to 15 fractional digits; excess digits are truncated toward zero.
 
 | Member | Contract |
 | --- | --- |
 | `BigNum.ZERO` | Shared zero instance. Treat it as read-only. |
 | `BigNum.ONE` | Shared one instance. Treat it as read-only. |
+| `BigNum.NEGLIGIBLE_THRESHOLD` | Exponent gap above which addition/subtraction discard the smaller term; defaults to 15 per runtime. |
 | `mantissa` | Numeric mantissa getter. |
 | `exponent` | `BigInt` exponent getter. |
 | `sign()` | Returns `-1`, `0`, or `1`. |
@@ -564,6 +566,7 @@ import {
 | `min(other)`, `max(other)` | Return a copy of the smaller or larger value. |
 | `BigNum.min(...values)`, `BigNum.max(...values)`, `BigNum.sum(...values)` | Select the minimum/maximum or sum `BigNum` values. Require at least one value. |
 | `toString(manLen?)` | Returns the normalized scientific string, optionally truncating or padding the mantissa to the specified character count. |
+| `toJSON()` | Returns the scientific string for ordinary JSON serialization. Host state/global/UI transport preserves the native type separately. |
 | `toNumber()` | Converts the complete scientific string to a JavaScript number; large values can overflow to infinity. |
 | `toInt()` | Floors the stored decimal value before converting to a JavaScript number. |
 | `toBigInt()` | Floors the stored decimal value directly to a bigint. |

@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
-test('Copy struct exports a type alias with JSON types and nested collections', async () => {
+test('Copy struct exports native BigNum and nested collection types', async () => {
   const elements = new Map();
   let click;
   let copied;
@@ -49,14 +49,14 @@ test('Copy struct exports a type alias with JSON types and nested collections', 
   expect(click).toBeTypeOf('function');
   await click({ target: { closest() { return null; } } });
   expect(copied).toBe(`export type Example = {
-  amount: string; // BigDouble
+  amount: BigNum;
   child: Child;
   count: number;
   enabled: boolean;
   kind: keyof typeof Kind | null;
   name: string;
   slots: Partial<Record<keyof typeof Kind, Array<number | null>>>;
-  values: Array<string>; // BigDouble
+  values: Array<BigNum>;
 };
 `);
 });

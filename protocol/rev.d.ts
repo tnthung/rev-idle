@@ -1,7 +1,48 @@
 
 
-type RevJsonValue = null | boolean | number | string | RevJsonValue[] | { [key: string]: RevJsonValue };
+type RevValue = null | boolean | number | string | BigNum | RevValue[] | { [key: string]: RevValue };
 type RevDaemon = (this: void) => void | Promise<void>;
+
+/** Host-provided scientific decimal with 16 significant digits, truncated toward zero. */
+interface BigNum {
+  readonly mantissa: number;
+  readonly exponent: bigint;
+  readonly isZero: boolean;
+  readonly isNeg: boolean;
+  readonly isPos: boolean;
+  cmp(other: BigNum | number | bigint): -1 | 0 | 1;
+  lt(other: BigNum | number | bigint): boolean;
+  lte(other: BigNum | number | bigint): boolean;
+  gt(other: BigNum | number | bigint): boolean;
+  gte(other: BigNum | number | bigint): boolean;
+  eq(other: BigNum | number | bigint): boolean;
+  neq(other: BigNum | number | bigint): boolean;
+  min(other: BigNum | number | bigint): BigNum;
+  max(other: BigNum | number | bigint): BigNum;
+  sign(): -1 | 0 | 1;
+  neg(): BigNum;
+  abs(): BigNum;
+  add(other: BigNum | number | bigint): BigNum;
+  sub(other: BigNum | number | bigint): BigNum;
+  mul(other: BigNum | number | bigint): BigNum;
+  div(other: BigNum | number | bigint): BigNum;
+  toString(manLen?: number): string;
+  toJSON(): string;
+  toNumber(): number;
+  toInt(): number;
+  toBigInt(): bigint;
+}
+
+interface BigNumConstructor {
+  new(value: number | string | bigint | BigNum): BigNum;
+  NEGLIGIBLE_THRESHOLD: number;
+  readonly ZERO: BigNum;
+  readonly ONE: BigNum;
+  min(...values: BigNum[]): BigNum;
+  max(...values: BigNum[]): BigNum;
+  sum(...values: BigNum[]): BigNum;
+}
+declare var BigNum: BigNumConstructor;
 
 type RevUiColor = readonly [number, number, number] | readonly [number, number, number, number];
 type RevUiLength = number | Readonly<{ min?: number; max?: number }>;
@@ -21,7 +62,7 @@ type RevUiPadding = Readonly<{
   left?: number;
 }>;
 
-type RevUiBaseStates = Record<string, RevJsonValue>;
+type RevUiBaseStates = Record<string, RevValue>;
 
 type RevUiElementAttr<S extends RevUiBaseStates | undefined> = {
   /** Hides this element without removing it; omitted defaults to false. */
@@ -96,12 +137,12 @@ interface Rev {
   } & Readonly<Record<string, RevUiElement | undefined>>;
   /** Session-wide background functions. Call with a function to register or replace, or null to retire. */
   daemon(name: string, fn: RevDaemon | null): void;
-  /** Reads one state path and unwraps its value. T describes the expected JSON snapshot. */
-  state<T = RevJsonValue>(key: string): Promise<T>;
+  /** Reads one state path and unwraps its value. Game BigDouble values become native BigNum instances. */
+  state<T = RevValue>(key: string): Promise<T>;
   /** Reads multiple paths into a shallow-frozen object keyed by those exact paths. */
-  state<K extends string>(first: K, second: K, ...keys: K[]): Promise<Readonly<Record<K, RevJsonValue>>>;
+  state<K extends string>(first: K, second: K, ...keys: K[]): Promise<Readonly<Record<K, RevValue>>>;
   /** Supports a dynamic list of paths. The plugin rejects an empty list. */
-  state(...keys: string[]): Promise<RevJsonValue>;
+  state(...keys: string[]): Promise<RevValue>;
 
   /** Invokes a button or checkbox at an exact Unity hierarchy path. */
   invoke(path: string): Promise<void>;
@@ -145,8 +186,8 @@ interface Rev {
   sleep(milliseconds: number): Promise<void>;
   /** Terminates this session, interrupts JavaScript, and skips beforeStop. */
   stop(): void;
-  /** Process-wide JSON storage. Missing keys read as undefined; assigning undefined stores null. */
-  global: Record<string, RevJsonValue | undefined>;
+  /** Process-wide value storage, preserving BigNum instances. Missing keys read as undefined; assigning undefined stores null. */
+  global: Record<string, RevValue | undefined>;
 }
 
 interface ScreenOwnership extends Disposable {

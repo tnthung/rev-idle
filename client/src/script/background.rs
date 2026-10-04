@@ -95,7 +95,7 @@ pub(super) struct ScriptBackground {
     installed: RefCell<HashMap<Uuid, Persistent<Function<'static>>>>,
     invocations: RefCell<HashMap<Uuid, BackgroundInvocation>>,
     active_daemons: RefCell<HashMap<String, Uuid>>,
-    parse: Persistent<Function<'static>>,
+    codec: Persistent<Object<'static>>,
     freeze: Persistent<Function<'static>>,
     transfer: Rc<super::transfer::FunctionTransfer>,
     bindings: Rc<ScriptUiBindings>,
@@ -233,7 +233,7 @@ impl ScriptBackground {
         let bindings_registry = registry.clone();
         let bindings_ui = ui.clone();
         let context_modules = modules.clone();
-        let (parse, freeze, transfer, bindings) = context.async_with(async move |ctx| {
+        let (codec, freeze, transfer, bindings) = context.async_with(async move |ctx| {
             let result: rquickjs::Result<_> = (|| {
                 context_modules.install_stack_trace(&ctx)?;
                 let console = Object::new(ctx.clone())?;
@@ -261,7 +261,8 @@ impl ScriptBackground {
                     })?,
                 )?;
                 ctx.globals().set("console", console)?;
-                let parse: Function = ctx.eval("JSON.parse")?;
+                super::bignum::install(&ctx)?;
+                let codec = super::value::codec(&ctx)?;
                 let freeze: Function = ctx.eval("Object.freeze")?;
                 let ownership_prototype = Class::<super::ownership::ScreenOwnership>::prototype(&ctx)?.unwrap();
                 ownership_prototype.set(
@@ -276,6 +277,7 @@ impl ScriptBackground {
                 let transfer = Rc::new(super::transfer::FunctionTransfer::new(&ctx)?);
                 let bindings = Rc::new(ScriptUiBindings::new(
                     &ctx,
+                    codec.clone(),
                     bindings_ui,
                     bindings_connection,
                     bindings_session,
@@ -283,7 +285,7 @@ impl ScriptBackground {
                     bindings_registry,
                 )?);
                 Ok((
-                    Persistent::save(&ctx, parse),
+                    Persistent::save(&ctx, codec),
                     Persistent::save(&ctx, freeze),
                     transfer,
                     bindings,
@@ -298,7 +300,7 @@ impl ScriptBackground {
             installed: RefCell::new(HashMap::new()),
             invocations: RefCell::new(HashMap::new()),
             active_daemons: RefCell::new(HashMap::new()),
-            parse,
+            codec,
             freeze,
             transfer,
             bindings,
@@ -316,7 +318,7 @@ impl ScriptBackground {
 
     pub(super) async fn run(&self, controls: HostControls) {
         let Some(mut requests) = self.registry.take_receiver() else { return };
-        let parse = self.parse.clone();
+        let codec = self.codec.clone();
         let freeze = self.freeze.clone();
         let connection = self.connection.clone();
         let session = self.session.clone();
@@ -328,13 +330,13 @@ impl ScriptBackground {
         let registry = self.registry.clone();
         let initialized = self.context.async_with(async move |ctx| {
             let result: rquickjs::Result<Persistent<Object<'static>>> = (|| {
-                let parse: Function = parse.restore(&ctx)?;
+                let codec: Object = codec.restore(&ctx)?;
                 let freeze: Function = freeze.restore(&ctx)?;
                 let rev = create_rev(
                     ctx.clone(),
                     connection,
                     controls,
-                    parse,
+                    codec,
                     freeze,
                     session,
                     ownership,
@@ -735,14 +737,14 @@ mod tests {
             actions_paused: crate::app::ActionGate::default(),
         };
         session.invoke((), controls).await.unwrap();
-        assert_eq!(GlobalState.get("__background_deadline_created"), Some(serde_json::json!(true)));
+        assert_eq!(GlobalState.get("__background_deadline_created").map(|value| value["value"].clone()), Some(serde_json::json!(true)));
 
         tokio::time::sleep(Duration::from_millis(150)).await;
         let drive = session.drive();
         tokio::pin!(drive);
         tokio::time::timeout(Duration::from_millis(50), async {
             loop {
-                if GlobalState.get("__background_deadline_done") == Some(serde_json::json!(true)) {
+                if GlobalState.get("__background_deadline_done").map(|value| value["value"].clone()) == Some(serde_json::json!(true)) {
                     break;
                 }
                 tokio::select! {
@@ -751,7 +753,7 @@ mod tests {
                 }
             }
         }).await.unwrap();
-        assert_eq!(GlobalState.get("__background_deadline_done"), Some(serde_json::json!(true)));
+        assert_eq!(GlobalState.get("__background_deadline_done").map(|value| value["value"].clone()), Some(serde_json::json!(true)));
         GlobalState.delete("__background_deadline_created");
         GlobalState.delete("__background_deadline_done");
     }
@@ -816,7 +818,7 @@ mod tests {
         session.run_after_load(controls).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                if GlobalState.get("__background_daemon_runs") == Some(serde_json::json!(1)) {
+                if GlobalState.get("__background_daemon_runs").map(|value| value["value"].clone()) == Some(serde_json::json!(1)) {
                     break;
                 }
                 tokio::select! {
@@ -825,16 +827,58 @@ mod tests {
                 }
             }
         }).await.unwrap();
-        assert_eq!(GlobalState.get("__background_daemon_receiver"), Some(serde_json::json!(true)));
+        assert_eq!(GlobalState.get("__background_daemon_receiver").map(|value| value["value"].clone()), Some(serde_json::json!(true)));
         tokio::select! {
             _ = &mut background => panic!("background service stopped unexpectedly"),
             _ = tokio::time::sleep(Duration::from_millis(20)) => {}
         }
-        assert_eq!(GlobalState.get("__background_daemon_runs"), Some(serde_json::json!(1)));
+        assert_eq!(GlobalState.get("__background_daemon_runs").map(|value| value["value"].clone()), Some(serde_json::json!(1)));
         session.terminate();
         tokio::time::timeout(Duration::from_secs(1), background).await.unwrap();
         GlobalState.delete("__background_daemon_runs");
         GlobalState.delete("__background_daemon_receiver");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn native_bignum_survives_main_background_global_exchange() {
+        let session = ScriptSession::new(r#"
+            const initial = new BigNum('1e300');
+            export function afterLoad() {
+                rev.global.__native_bignum_exchange = { amount: initial, text: '1e300' };
+                rev.daemon('nativeBigNum', function() {
+                    const value = rev.global.__native_bignum_exchange;
+                    if (!(value.amount instanceof BigNum) || value.text !== '1e300') throw Error('background value');
+                    rev.global.__native_bignum_exchange = { amount: value.amount.mul(2), text: value.text };
+                    rev.global.__native_bignum_done = true;
+                });
+            }
+            export default function() {
+                const value = rev.global.__native_bignum_exchange;
+                if (!(value.amount instanceof BigNum) || !value.amount.eq(new BigNum('2e300'))) throw Error('main value');
+                if (value.text !== '1e300') throw Error('string changed');
+                delete rev.global.__native_bignum_exchange;
+                delete rev.global.__native_bignum_done;
+            }
+        "#).await.unwrap();
+        let controls = HostControls {
+            mouse: Rc::new(RefCell::new(NoopMouse)),
+            window: Rc::new(NoopWindow),
+            actions_paused: crate::app::ActionGate::default(),
+        };
+        let mut background = Box::pin(session.drive_background(controls.clone()));
+        session.run_after_load(controls.clone()).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if GlobalState.get("__native_bignum_done").is_some() { break; }
+                tokio::select! {
+                    _ = &mut background => panic!("background service stopped unexpectedly"),
+                    _ = tokio::time::sleep(Duration::from_millis(1)) => {}
+                }
+            }
+        }).await.unwrap();
+        session.invoke((), controls).await.unwrap();
+        session.terminate();
+        tokio::time::timeout(Duration::from_secs(1), background).await.unwrap();
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -870,7 +914,7 @@ mod tests {
         session.run_after_load(controls.clone()).await.unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                if GlobalState.get("__background_imported_value") == Some(serde_json::json!(42)) {
+                if GlobalState.get("__background_imported_value").map(|value| value["value"].clone()) == Some(serde_json::json!(42)) {
                     break;
                 }
                 tokio::select! {
@@ -975,7 +1019,7 @@ mod tests {
         session.run_after_load(controls.clone()).await.unwrap();
         for phase in 0..5 {
             if phase != 0 {
-                GlobalState.set("__daemon_retirement_phase".to_owned(), serde_json::json!(phase));
+                GlobalState.set("__daemon_retirement_phase".to_owned(), serde_json::json!({ "value": phase }));
                 session.invoke((), controls.clone()).await.unwrap();
             }
             let expected = match phase {
@@ -987,9 +1031,9 @@ mod tests {
             tokio::time::timeout(Duration::from_secs(2), async {
                 loop {
                     if if phase == 1 {
-                        GlobalState.get("__daemon_retirement_probe") == Some(serde_json::json!(5))
+                        GlobalState.get("__daemon_retirement_probe").map(|value| value["value"].clone()) == Some(serde_json::json!(5))
                     } else {
-                        GlobalState.get("__daemon_retirement_order").is_some_and(|order| {
+                        GlobalState.get("__daemon_retirement_order").map(|value| value["value"].clone()).is_some_and(|order| {
                             order.as_array().unwrap().last() == expected.as_array().unwrap().last()
                         })
                     } { break; }
@@ -999,7 +1043,7 @@ mod tests {
                     }
                 }
             }).await.unwrap();
-            assert_eq!(GlobalState.get("__daemon_retirement_order"), Some(expected));
+            assert_eq!(GlobalState.get("__daemon_retirement_order").map(|value| value["value"].clone()), Some(expected));
         }
         session.terminate();
         tokio::time::timeout(Duration::from_secs(1), background).await.unwrap();

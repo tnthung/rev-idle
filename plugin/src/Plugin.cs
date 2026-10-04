@@ -127,7 +127,8 @@ public sealed class Plugin : BasePlugin
             if (data is null)
                 throw new InvalidOperationException("State data is unavailable.");
 
-            StatePayloadStatus status = StatePayload.Encode(data, packet.Keys, out byte[] payload, out string? failedPath);
+            List<string[]> bigNums = new();
+            StatePayloadStatus status = StatePayload.Encode(data, packet.Keys, out byte[] payload, out string? failedPath, bigNums);
             if (status == StatePayloadStatus.InvalidPath)
                 throw new InvalidOperationException("State path is invalid.");
             if (status == StatePayloadStatus.SerializationFailure)
@@ -135,7 +136,7 @@ public sealed class Plugin : BasePlugin
 
             using JsonDocument document = JsonDocument.Parse(payload);
             JsonElement value = document.RootElement.Clone();
-            await context.Send(new StateRes(value));
+            await context.Send(new StateRes(value, bigNums.Count == 0 ? null : bigNums));
         });
         connection.Handler<UiPathReq>(async (context, packet) =>
         {
@@ -190,7 +191,9 @@ public sealed class Plugin : BasePlugin
             }))(packet.Path);
             if (!success)
                 throw new InvalidOperationException(error);
-            await context.Send(new SlotRes(StatePayload.EncodeValue(value)));
+            List<string[]> bigNums = new();
+            JsonElement encoded = StatePayload.EncodeValue(value, bigNums);
+            await context.Send(new SlotRes(encoded, bigNums.Count == 0 ? null : bigNums));
         });
         connection.Handler<ClickCommand>((context, packet) =>
         {

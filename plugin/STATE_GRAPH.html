@@ -2687,7 +2687,8 @@
             }
             switch (type.split(/[./]/).pop()) {
               case 'Boolean': case 'ObscuredBool': return 'boolean';
-              case 'String': case 'Char': case 'ObscuredString': case 'BigDouble': case 'DateTime': case 'DateTimeOffset': return 'string';
+              case 'BigDouble': return 'BigNum';
+              case 'String': case 'Char': case 'ObscuredString': case 'DateTime': case 'DateTimeOffset': return 'string';
               case 'Byte': case 'SByte': case 'Int16': case 'UInt16': case 'Int32': case 'UInt32': case 'ObscuredInt': return 'number';
               case 'Int64': case 'UInt64': return 'number | string';
               case 'Single': case 'Double': case 'ObscuredDouble': return 'number | "NaN" | "Infinity" | "-Infinity"';
@@ -2697,7 +2698,7 @@
             return nodeTypes.has(type.replace(/\//g, '.')) ? type.split(/[./]/).pop() : 'unknown';
           }
           return copyToClipboard('export type ' + nodeId.split(/[./]/).pop() + ' = {\n' + fields.map(e =>
-            '  ' + (/^[A-Za-z_$][\w$]*$/.test(e.property) ? e.property : JSON.stringify(e.property)) + ': ' + typeScriptType(e.valueType) + ';' + (/\bBigDouble\b/.test(e.valueType) ? ' // BigDouble' : '')
+            '  ' + (/^[A-Za-z_$][\w$]*$/.test(e.property) ? e.property : JSON.stringify(e.property)) + ': ' + typeScriptType(e.valueType) + ';'
           ).join('\n') + '\n};\n', el);
         }
         copyToClipboard(el.getAttribute('data-copy'), el);

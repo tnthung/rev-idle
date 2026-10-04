@@ -1,10 +1,9 @@
-(function (host) {
+(function (host, codec) {
     // Capture host machinery before the user module can change this realm.
     const { create, keys, hasOwn, freeze, setPrototypeOf } = Object;
     const { ownKeys } = Reflect;
     const { isFinite, isInteger } = Number;
     const { isArray } = Array;
-    const { stringify, parse } = JSON;
     const NativeProxy = Proxy, NativeError = Error, NativeTypeError = TypeError, NativeWeakSet = WeakSet, string = String;
     const elements = new Map();
     const states = new Map();
@@ -19,6 +18,7 @@
     const legacyHandlers = { __proto__: null, onClick: true, onHover: true, onLeave: true, onStateUpdate: true };
 
     function readonly(value, seen = new NativeWeakSet()) {
+        if (codec.isBigNum(value)) return value;
         if (value === null || typeof value !== 'object') return value;
         if (seen.has(value)) throw new NativeTypeError('UI value is not JSON serializable');
         seen.add(value);
@@ -41,11 +41,7 @@
         if (host.stopped()) throw new NativeError('script session stopped');
     }
 
-    function encode(value) {
-        const json = stringify(value === undefined ? null : value);
-        if (json === undefined) throw new NativeTypeError('UI value is not JSON serializable');
-        return json;
-    }
+    const encode = codec.encode;
 
     function checkObject(value, field, allowed) {
         if (value === null || typeof value !== 'object' || isArray(value)) throw new NativeTypeError(`Invalid ${field}`);
@@ -132,7 +128,7 @@
     }
 
     function record(name, instance) {
-        return parse(host.record(name, instance));
+        return codec.decode(host.record(name, instance));
     }
 
     function stateProxy(name, instance) {
@@ -141,14 +137,14 @@
             get(_, field) {
                 if (typeof field !== 'string') return undefined;
                 const value = host.stateGet(name, instance, field);
-                return value === undefined ? undefined : parse(value);
+                return value === undefined ? undefined : codec.decode(value);
             },
             has(_, field) { return typeof field === 'string' && host.stateGet(name, instance, field) !== undefined; },
             ownKeys() { return host.stateKeys(name, instance); },
             getOwnPropertyDescriptor(_, field) {
                 if (typeof field !== 'string') return undefined;
                 const value = host.stateGet(name, instance, field);
-                return value === undefined ? undefined : { configurable: true, enumerable: true, writable: true, value: parse(value) };
+                return value === undefined ? undefined : { configurable: true, enumerable: true, writable: true, value: codec.decode(value) };
             },
             set(_, field, value) {
                 ensureLive();

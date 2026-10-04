@@ -23,7 +23,7 @@ internal static class StatePayload
 
     public static bool TryEncode(GameData data, IReadOnlyList<string> keys, out byte[] payload) => Encode(data, keys, out payload, out _) == StatePayloadStatus.Success;
 
-    internal static StatePayloadStatus Encode(object data, IReadOnlyList<string> paths, out byte[] payload, out string? failedPath)
+    internal static StatePayloadStatus Encode(object data, IReadOnlyList<string> paths, out byte[] payload, out string? failedPath, List<string[]>? bigNums = null)
     {
         failedPath = null;
         // There is no implicit or default root: every path must name one of
@@ -60,7 +60,7 @@ internal static class StatePayload
                 {
                     failedPath = path;
                     writer.WritePropertyName(path);
-                    WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0, ancestors: ancestors);
+                    WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0, ancestors: ancestors, bigNums: bigNums, valuePath: bigNums is null ? null : new() { path });
                 }
                 writer.WriteEndObject();
             }
@@ -75,11 +75,11 @@ internal static class StatePayload
         }
     }
 
-    internal static JsonElement EncodeValue(object? value)
+    internal static JsonElement EncodeValue(object? value, List<string[]>? bigNums = null)
     {
         using MemoryStream stream = new();
         using (var writer = new Utf8JsonWriter(stream))
-            WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0);
+            WriteValue(writer, value, new HashSet<object>(ReferenceEqualityComparer.Instance), new HashSet<nint>(), false, 0, bigNums: bigNums, valuePath: bigNums is null ? null : new());
         using JsonDocument document = JsonDocument.Parse(stream.ToArray());
         return document.RootElement.Clone();
     }
@@ -290,7 +290,7 @@ internal static class StatePayload
         _ => path
     };
 
-    private static void WriteValue(Utf8JsonWriter writer, object? value, HashSet<object> references, HashSet<nint> pointers, bool collectionElement, int depth, ReferenceLayer? layer = null, IReadOnlyList<(object Value, string Segment, object? Child)>? ancestors = null)
+    private static void WriteValue(Utf8JsonWriter writer, object? value, HashSet<object> references, HashSet<nint> pointers, bool collectionElement, int depth, ReferenceLayer? layer = null, IReadOnlyList<(object Value, string Segment, object? Child)>? ancestors = null, List<string[]>? bigNums = null, List<string>? valuePath = null)
     {
         if (depth > MaxTraversalDepth)
             throw new InvalidOperationException("State traversal exceeded the maximum depth.");
@@ -312,12 +312,17 @@ internal static class StatePayload
         }
         if (type.FullName == "BigDouble" && type.Assembly.GetName().Name == "Assembly-CSharp")
         {
-            writer.WriteStringValue(Format((double)type.GetProperty("Mantissa")!.GetValue(value)!, (double)type.GetProperty("Exponent")!.GetValue(value)!));
+            double mantissa = (double)type.GetProperty("Mantissa")!.GetValue(value)!;
+            double exponent = (double)type.GetProperty("Exponent")!.GetValue(value)!;
+            if (!double.IsFinite(mantissa) || !double.IsFinite(exponent) || Math.Truncate(exponent) != exponent)
+                throw new InvalidOperationException("BigNum requires a finite mantissa and an integer exponent.");
+            writer.WriteStringValue(string.Concat(mantissa.ToString("R", CultureInfo.InvariantCulture), "e", new System.Numerics.BigInteger(exponent).ToString(CultureInfo.InvariantCulture)));
+            bigNums?.Add(valuePath!.ToArray());
             return;
         }
         if (type.Assembly.GetName().Name == "ACTk.Runtime" && type.Namespace == "CodeStage.AntiCheat.ObscuredTypes")
         {
-            WriteValue(writer, type.GetMethod("GetDecrypted", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null)!.Invoke(value, null), references, pointers, collectionElement, depth + 1, layer, ancestors);
+            WriteValue(writer, type.GetMethod("GetDecrypted", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null)!.Invoke(value, null), references, pointers, collectionElement, depth + 1, layer, ancestors, bigNums, valuePath);
             return;
         }
         if (type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName == "Il2CppSystem.Object")
@@ -351,7 +356,7 @@ internal static class StatePayload
                 ("UnityEngine", "Color") => wrapper.Unbox<UnityEngine.Color>(),
                 _ => throw new InvalidOperationException($"Unsupported IL2CPP object value {objectNamespace}.{objectName}.")
             };
-            WriteValue(writer, unboxed, references, pointers, collectionElement, depth + 1, layer, ancestors);
+            WriteValue(writer, unboxed, references, pointers, collectionElement, depth + 1, layer, ancestors, bigNums, valuePath);
             return;
         }
         if (type.Assembly.GetName().Name == "UnityEngine.CoreModule" && type.FullName == "UnityEngine.Color")
@@ -383,7 +388,7 @@ internal static class StatePayload
         if (type.Assembly.GetName().Name == "Il2Cppmscorlib" && type.FullName?.StartsWith("Il2CppSystem.Nullable`1", StringComparison.Ordinal) == true)
         {
             if ((bool)type.GetProperty("HasValue")!.GetValue(value)!)
-                WriteValue(writer, type.GetProperty("Value")!.GetValue(value), references, pointers, collectionElement, depth + 1, layer, ancestors);
+                WriteValue(writer, type.GetProperty("Value")!.GetValue(value), references, pointers, collectionElement, depth + 1, layer, ancestors, bigNums, valuePath);
             else
                 writer.WriteNullValue();
             return;
@@ -443,6 +448,7 @@ internal static class StatePayload
             writer.WriteStartArray();
         else
             writer.WriteStartObject();
+        int memberIndex = 0;
         foreach ((string? name, object? member) in members)
         {
             bool omitted = member is not null && (IsExcludedType(member.GetType())
@@ -455,7 +461,12 @@ internal static class StatePayload
             if (omitted)
                 writer.WriteNullValue();
             else
-                WriteValue(writer, member, references, pointers, array || dictionary, depth + 1, children);
+            {
+                valuePath?.Add(array ? memberIndex.ToString(CultureInfo.InvariantCulture) : name!);
+                WriteValue(writer, member, references, pointers, array || dictionary, depth + 1, children, bigNums: bigNums, valuePath: valuePath);
+                if (valuePath is not null) valuePath.RemoveAt(valuePath.Count - 1);
+            }
+            memberIndex++;
         }
         if (array)
             writer.WriteEndArray();

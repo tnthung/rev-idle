@@ -1,4 +1,4 @@
-use super::{connection::WsConnection, StateReq, StateRes};
+use super::{connection::WsConnection, StateReq};
 
 #[cfg(test)]
 mod tests {
@@ -61,7 +61,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            serde_json::from_str::<Value>(&request.await.unwrap().unwrap()).unwrap(),
+            serde_json::from_str::<Value>(&request.await.unwrap().unwrap()).unwrap()["value"],
             json!({
                 "score": "1e3",
                 "enabled": true,
@@ -166,12 +166,12 @@ pub(crate) async fn request_state(
     connection: &WsConnection,
     keys: &[String],
 ) -> Result<String, String> {
-    let StateRes { value } = connection
+    let response = connection
         .request(StateReq { keys: keys.to_vec() })
         .await
         .map_err(|error| error.to_string())?;
-    if !value.is_object() {
+    if !response.value.is_object() {
         return Err("state response must be a JSON object".to_owned());
     }
-    serde_json::to_string(&value).map_err(|error| error.to_string())
+    serde_json::to_string(&response).map_err(|error| error.to_string())
 }

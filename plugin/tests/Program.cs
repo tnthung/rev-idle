@@ -592,7 +592,7 @@ static void BridgePacketPayloadsMatchSharedFixture()
     (string Name, object Packet)[] packets = new[]
     {
         ("StateReq", (object)new StateReq(new[] { "score", "eternity.dtpSpent" })),
-        ("StateRes", new StateRes(JsonSerializer.Deserialize<JsonElement>("{\"score\":\"1e3\",\"enabled\":true,\"nested\":{\"value\":null},\"items\":[1,\"two\",false]}"))),
+        ("StateRes", new StateRes(JsonSerializer.Deserialize<JsonElement>("{\"score\":\"1e3\",\"enabled\":true,\"nested\":{\"value\":null},\"items\":[1,\"two\",false]}"), new[] { new[] { "score" } })),
         ("UiPathReq", new UiPathReq(123, -45, 1920, 1080)),
         ("UiPathRes", new UiPathRes("slot", "scene:1/Canvas[0]/Inventory/3")),
         ("InvokeReq", new InvokeReq("scene:1/Canvas[0]/Buy DTP & More[0]")),
@@ -3023,15 +3023,15 @@ static void StatePayloadPreservesCollectionIndexesAcrossCycles()
 
 static void StatePayloadSerializesGameSpecificScalars()
 {
-    static object CreateBigDouble()
+    static object CreateBigDouble(double mantissaValue = 2.5, double exponentValue = 42)
     {
         TypeBuilder type = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName("Assembly-CSharp"), AssemblyBuilderAccess.Run).DefineDynamicModule("main").DefineType("BigDouble", TypeAttributes.Public | TypeAttributes.Class);
         MethodBuilder mantissa = type.DefineMethod("get_Mantissa", MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig, typeof(double), Type.EmptyTypes);
-        mantissa.GetILGenerator().Emit(OpCodes.Ldc_R8, 2.5);
+        mantissa.GetILGenerator().Emit(OpCodes.Ldc_R8, mantissaValue);
         mantissa.GetILGenerator().Emit(OpCodes.Ret);
         type.DefineProperty("Mantissa", PropertyAttributes.None, typeof(double), null).SetGetMethod(mantissa);
         MethodBuilder exponent = type.DefineMethod("get_Exponent", MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.HideBySig, typeof(double), Type.EmptyTypes);
-        exponent.GetILGenerator().Emit(OpCodes.Ldc_R8, 42d);
+        exponent.GetILGenerator().Emit(OpCodes.Ldc_R8, exponentValue);
         exponent.GetILGenerator().Emit(OpCodes.Ret);
         type.DefineProperty("Exponent", PropertyAttributes.None, typeof(double), null).SetGetMethod(exponent);
         return Activator.CreateInstance(type.CreateType())!;
@@ -3054,6 +3054,19 @@ static void StatePayloadSerializesGameSpecificScalars()
     };
 
     StatePayloadStatus status = StatePayload.Encode(data, new[] { "gameData" }, out byte[] payload, out _);
+
+    List<string[]> bigNums = new();
+    Equal(StatePayloadStatus.Success, StatePayload.Encode(data, new[] { "gameData", "gameData.Big" }, out _, out _, bigNums), nameof(StatePayloadSerializesGameSpecificScalars));
+    Equal("[[\"gameData\",\"Big\"],[\"gameData.Big\"]]", JsonSerializer.Serialize(bigNums), nameof(StatePayloadSerializesGameSpecificScalars));
+    bigNums.Clear();
+    Equal("\"2.5e42\"", StatePayload.EncodeValue(data.Big, bigNums).GetRawText(), nameof(StatePayloadSerializesGameSpecificScalars));
+    Equal("[[]]", JsonSerializer.Serialize(bigNums), nameof(StatePayloadSerializesGameSpecificScalars));
+    bigNums.Clear();
+    StatePayload.EncodeValue(new object[] { "2.5e42", data.Big, new Dictionary<string, object> { ["amount"] = data.Big } }, bigNums);
+    Equal("[[\"1\"],[\"2\",\"amount\"]]", JsonSerializer.Serialize(bigNums), nameof(StatePayloadSerializesGameSpecificScalars));
+    Equal("\"2.5e100000000000000000000\"", StatePayload.EncodeValue(CreateBigDouble(exponentValue: 1e20)).GetRawText(), nameof(StatePayloadSerializesGameSpecificScalars));
+    foreach (var (mantissaValue, exponentValue) in new[] { (double.NaN, 0d), (double.PositiveInfinity, 0d), (1d, double.NegativeInfinity), (1d, 1.5) })
+        Equal(StatePayloadStatus.SerializationFailure, StatePayload.Encode(new GameScalarFixture { Big = CreateBigDouble(mantissaValue, exponentValue) }, new[] { "gameData.Big" }, out _, out _), nameof(StatePayloadSerializesGameSpecificScalars));
 
     Equal(StatePayloadStatus.Success, status, nameof(StatePayloadSerializesGameSpecificScalars));
     Equal("{\"gameData\":{\"Big\":\"2.5e42\",\"Date\":\"2026-09-03T01:02:03.0000000Z\",\"Obscured\":17}}", Encoding.UTF8.GetString(payload), nameof(StatePayloadSerializesGameSpecificScalars));
